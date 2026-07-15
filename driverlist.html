@@ -20,21 +20,31 @@
     <div class="toolbar" style="padding-left:0;padding-right:0;border-bottom:none;">
       <div class="toolbar-left">
         <h1 style="margin-top:0;">Driver List</h1>
-        <div class="subtext">Every driver on file. Newly added drivers stay highlighted for 30 minutes.</div>
+        <div class="subtext">Every driver on file, live from Supabase. Newly added drivers stay highlighted for 30 minutes.</div>
       </div>
       <div class="toolbar-actions">
         <button class="btn" id="btn-add-driver">+ Add Driver</button>
       </div>
     </div>
-    <table class="driverlist">
-      <thead>
-        <tr>
-          <th>Name</th><th>Phone</th><th>MC #</th><th>Dispatcher</th><th>Dispatcher Phone</th>
-          <th>Email</th><th>Rating</th><th>Trailer Interchange Agmt</th><th>Trailer Interchange Ins.</th><th>Notes</th>
-        </tr>
-      </thead>
-      <tbody id="driverlist-table-body"></tbody>
-    </table>
+    <div id="driver-sync-status" class="hidden"></div>
+    <div class="driverlist-scroll">
+      <table class="driverlist">
+        <thead>
+          <tr>
+            <th class="sortable" data-sort="name">Name<span class="sort-arrow"></span></th>
+            <th>Phone</th>
+            <th class="sortable" data-sort="mc">MC #<span class="sort-arrow"></span></th>
+            <th>Dispatcher Phone</th>
+            <th>Email</th><th>2nd Email</th>
+            <th class="sortable" data-sort="rating">Rating<span class="sort-arrow"></span></th>
+            <th class="sortable" data-sort="carrier">Carrier<span class="sort-arrow"></span></th>
+            <th>Rate/Booking Contact</th>
+            <th>Interchange Agmt</th><th>Interchange Coverage</th><th>Notes</th>
+          </tr>
+        </thead>
+        <tbody id="driverlist-table-body"></tbody>
+      </table>
+    </div>
   </div>
 
   <!-- ================= Add Driver modal ================= -->
@@ -51,31 +61,39 @@
           <div class="field-error">Required.</div>
         </div>
         <div class="field">
-          <label for="ad-phone">Driver number</label>
+          <label for="ad-phone">Driver cell</label>
           <input type="tel" id="ad-phone">
           <div class="field-error">Required.</div>
         </div>
         <div class="field">
           <label for="ad-mc">MC number</label>
-          <input type="text" id="ad-mc">
-          <div class="field-error">Required.</div>
+          <input type="text" id="ad-mc" inputmode="numeric" placeholder="Digits only">
+          <div class="field-error">Required, digits only.</div>
         </div>
         <div class="field">
-          <label for="ad-dispatcher-name">Dispatcher name (optional)</label>
-          <input type="text" id="ad-dispatcher-name">
-        </div>
-        <div class="field">
-          <label for="ad-dispatcher-phone">Dispatcher number</label>
+          <label for="ad-dispatcher-phone">Dispatcher phone number</label>
           <input type="tel" id="ad-dispatcher-phone">
         </div>
         <div class="field">
-          <label for="ad-email">Contact email</label>
+          <label for="ad-email">Email</label>
           <input type="email" id="ad-email">
           <div class="field-error">Required.</div>
         </div>
         <div class="field">
+          <label for="ad-email2">2nd email (optional)</label>
+          <input type="email" id="ad-email2">
+        </div>
+        <div class="field">
           <label for="ad-rating">Driver rating (leave blank if unknown)</label>
           <input type="text" id="ad-rating" placeholder="e.g. A1">
+        </div>
+        <div class="field">
+          <label for="ad-carrier">Carrier</label>
+          <input type="text" id="ad-carrier">
+        </div>
+        <div class="field">
+          <label for="ad-rate-booking">Rate/booking contact</label>
+          <input type="text" id="ad-rate-booking" placeholder="Rate and/or who to contact to book">
         </div>
         <div class="field">
           <label for="ad-notes">Notes</label>
@@ -89,15 +107,8 @@
           </div>
         </div>
         <div class="field">
-          <label>Trailer interchange insurance</label>
-          <div class="radio-row">
-            <label><input type="radio" name="ad-tii" value="yes"> Yes</label>
-            <label><input type="radio" name="ad-tii" value="no" checked> No</label>
-          </div>
-        </div>
-        <div class="field hidden" id="ad-tii-amount-wrap">
-          <label for="ad-tii-amount">Insurance amount ($)</label>
-          <input type="number" id="ad-tii-amount" min="0" step="1">
+          <label for="ad-tii-amount">Interchange coverage ($ &mdash; leave blank if none)</label>
+          <input type="number" id="ad-tii-amount" min="0" step="0.01">
         </div>
       </div>
       <div class="modal-footer">
@@ -107,6 +118,7 @@
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="loadboard.js" defer></script>
 </body>
 </html>

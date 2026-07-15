@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Historics</title>
+  <title>Houston Spreadsheet</title>
   <link rel="stylesheet" href="loadboard.css">
 </head>
 <body>
@@ -16,11 +16,145 @@
     <div class="tabs" id="tabs"></div>
   </div>
 
-  <div class="placeholder">
-    <h2>Historics</h2>
-    <p>Anything older than 3 months will live here. The daily board only keeps a rolling 90-day window.</p>
+  <div id="board-view">
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <h1 id="sheet-title">Houston Spreadsheet</h1>
+        <div class="subtext" id="sheet-subtext"></div>
+      </div>
+      <div class="date-nav">
+        <button id="date-prev" title="Previous day">&lsaquo;</button>
+        <input type="date" id="date-input">
+        <button id="date-next" title="Next day">&rsaquo;</button>
+        <button id="date-today" class="today-pill">Today</button>
+      </div>
+      <div class="toolbar-actions">
+        <button class="btn btn-ghost" id="btn-columns">Columns</button>
+        <div id="columns-panel" class="columns-panel hidden"></div>
+        <button class="btn btn-ghost" id="btn-add-driver">+ Add Driver</button>
+        <button class="btn" id="btn-add-load">+ Add Load</button>
+      </div>
+    </div>
+
+    <div id="driver-sync-status" class="hidden"></div>
+
+    <div class="calc-note">
+      &#9888; Last Stop Depart, Return to DC, ETA for Next Dispatch, HOS Left, and Trip Call Time are placeholder calculations
+      (45&nbsp;mph average, standard buffers) so the board works end-to-end today &mdash; send over your exact Excel formulas
+      and I'll swap in the real math. Loads/TONU rows aren't saved to a database yet either &mdash; drivers are, loads are next.
+    </div>
+
+    <div class="grid-scroll">
+      <table class="board" id="board-table"></table>
+    </div>
+    <div id="board-empty-state" class="board-empty hidden">No loads yet for this day. Use &ldquo;+ Add Load&rdquo; to start filling in the sheet.</div>
   </div>
 
+  <!-- ================= Add Driver modal ================= -->
+  <div class="overlay hidden" id="modal-add-driver">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="ad-modal-title">Add Driver</h3>
+        <button class="modal-close" id="ad-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <label for="ad-name">Driver name</label>
+          <input type="text" id="ad-name">
+          <div class="field-error">Required.</div>
+        </div>
+        <div class="field">
+          <label for="ad-phone">Driver cell</label>
+          <input type="tel" id="ad-phone">
+          <div class="field-error">Required.</div>
+        </div>
+        <div class="field">
+          <label for="ad-mc">MC number</label>
+          <input type="text" id="ad-mc" inputmode="numeric" placeholder="Digits only">
+          <div class="field-error">Required, digits only.</div>
+        </div>
+        <div class="field">
+          <label for="ad-dispatcher-phone">Dispatcher phone number</label>
+          <input type="tel" id="ad-dispatcher-phone">
+        </div>
+        <div class="field">
+          <label for="ad-email">Email</label>
+          <input type="email" id="ad-email">
+          <div class="field-error">Required.</div>
+        </div>
+        <div class="field">
+          <label for="ad-email2">2nd email (optional)</label>
+          <input type="email" id="ad-email2">
+        </div>
+        <div class="field">
+          <label for="ad-rating">Driver rating (leave blank if unknown)</label>
+          <input type="text" id="ad-rating" placeholder="e.g. A1">
+        </div>
+        <div class="field">
+          <label for="ad-carrier">Carrier</label>
+          <input type="text" id="ad-carrier">
+        </div>
+        <div class="field">
+          <label for="ad-rate-booking">Rate/booking contact</label>
+          <input type="text" id="ad-rate-booking" placeholder="Rate and/or who to contact to book">
+        </div>
+        <div class="field">
+          <label for="ad-notes">Notes</label>
+          <textarea id="ad-notes"></textarea>
+        </div>
+        <div class="field">
+          <label>Trailer interchange agreement</label>
+          <div class="radio-row">
+            <label><input type="radio" name="ad-tia" value="yes"> Yes</label>
+            <label><input type="radio" name="ad-tia" value="no" checked> No</label>
+          </div>
+        </div>
+        <div class="field">
+          <label for="ad-tii-amount">Interchange coverage ($ &mdash; leave blank if none)</label>
+          <input type="number" id="ad-tii-amount" min="0" step="0.01">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="ad-cancel">Cancel</button>
+        <button class="btn" id="ad-submit">Add</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= Add Load modal ================= -->
+  <div class="overlay hidden" id="modal-add-load">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Add Load</h3>
+        <button class="modal-close" id="al-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <label for="al-driver-input">Driver name</label>
+          <div class="driver-name-wrap">
+            <input type="text" id="al-driver-input" autocomplete="off" placeholder="Start typing a driver name&hellip;">
+            <div class="autocomplete-list hidden" id="al-driver-dropdown"></div>
+          </div>
+          <div class="field-error">Enter a driver name.</div>
+          <button class="inline-add-driver" id="al-add-new-driver-link">+ Add new driver</button>
+        </div>
+        <div class="field">
+          <label for="al-pro">PRO# (optional &mdash; can fill in later)</label>
+          <input type="text" id="al-pro" placeholder="Unique load/shift ID">
+        </div>
+        <div class="field">
+          <label for="al-shift-start">Shift start (optional &mdash; can fill in later)</label>
+          <input type="text" id="al-shift-start" placeholder="--:--">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="al-cancel">Cancel</button>
+        <button class="btn" id="al-submit">Add Load</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="loadboard.js" defer></script>
 </body>
 </html>

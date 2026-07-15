@@ -178,7 +178,7 @@ button {
   color: var(--slate-700);
 }
 
-.toolbar-actions { display: flex; gap: 8px; }
+.toolbar-actions { display: flex; gap: 8px; position: relative; }
 
 .btn {
   border: 1px solid var(--slate-700);
@@ -206,11 +206,68 @@ button {
 }
 .btn-danger-outline:hover { background: var(--red-bg); }
 
+/* Columns visibility panel */
+.columns-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: 0 10px 28px rgba(10,20,40,0.18);
+  width: 240px;
+  max-height: 420px;
+  overflow-y: auto;
+  z-index: 40;
+  padding: 10px 0;
+}
+.columns-panel-group-label {
+  padding: 6px 14px 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--slate-500);
+}
+.columns-panel label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 14px;
+  font-size: 12.5px;
+  color: var(--navy-950);
+  cursor: pointer;
+}
+.columns-panel label:hover { background: var(--slate-100); }
+.columns-panel input[type="checkbox"] { width: 14px; height: 14px; }
+.columns-panel-footer {
+  padding: 8px 14px 2px;
+  border-top: 1px solid var(--line);
+  margin-top: 6px;
+}
+.columns-panel-footer button {
+  border: none;
+  background: none;
+  color: var(--focus);
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 0;
+}
+.columns-panel-footer button:hover { text-decoration: underline; }
+
 /* ---------------- Grid ---------------- */
 
 .grid-scroll {
   overflow: auto;
   max-height: calc(100vh - 145px);
+  border-top: 1px solid var(--line);
+}
+
+.board-empty {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--slate-500);
+  font-size: 13px;
   border-top: 1px solid var(--line);
 }
 
@@ -240,6 +297,12 @@ table.board thead th {
 table.board thead th.group-trip {
   background: var(--navy-800);
 }
+table.board thead th.group-trip.group-trip-alt {
+  background: var(--slate-700);
+}
+table.board thead th.trip-tint-b {
+  background: var(--slate-700);
+}
 
 table.board td {
   border-right: 1px solid var(--line);
@@ -251,6 +314,7 @@ table.board td {
 }
 
 table.board tbody tr:nth-child(even) td { background: #fbfcfe; }
+table.board tbody tr.is-row-pinned td { background: rgba(234, 179, 8, 0.14); }
 table.board tbody tr:hover td { background: #f0f5ff; }
 
 /* pinned/sticky left columns */
@@ -259,9 +323,12 @@ table.board tbody tr:hover td { background: #f0f5ff; }
   z-index: 3;
   background: #fff;
 }
-.pin-tonu { left: 0; width: 62px; min-width: 62px; }
-.pin-driver { left: 62px; width: 160px; min-width: 160px; }
+.pin-mark { left: 0; width: 30px; min-width: 30px; }
+.pin-tonu { left: 30px; width: 62px; min-width: 62px; }
+.pin-pro { left: 92px; width: 92px; min-width: 92px; }
+.pin-driver { left: 184px; width: 160px; min-width: 160px; }
 table.board tbody tr:nth-child(even) td.pin { background: #fbfcfe; }
+table.board tbody tr.is-row-pinned td.pin { background: rgba(234, 179, 8, 0.22); }
 table.board tbody tr:hover td.pin { background: #eaf1ff; }
 table.board thead th.pin { z-index: 6; }
 
@@ -289,7 +356,17 @@ table.board thead th.pin { z-index: 6; }
 }
 .cell-input.small { text-align: center; width: 46px; }
 
-td.trip-block-start { border-left: 2px solid var(--slate-700); }
+td.trip-block-start {
+  border-left: 3px solid var(--slate-700);
+  padding-left: 10px;
+}
+
+/* Alternating trip-block tint in the body — box-shadow instead of background-color
+   so it layers cleanly on top of zebra striping, row hover, TONU, and the
+   30-min highlight instead of fighting them for specificity. */
+td.trip-tint-b {
+  box-shadow: inset 0 0 0 1000px rgba(51, 65, 92, 0.045);
+}
 
 .chk { width: 16px; height: 16px; cursor: pointer; }
 
@@ -327,6 +404,28 @@ td.trip-block-start { border-left: 2px solid var(--slate-700); }
 .tonu-btn.is-active {
   background: var(--red-600);
   color: #fff;
+}
+
+/* Row pin/highlight toggle — separate from TONU (red) and the 30-min new-row
+   highlight (also red), so it uses amber/gold to stay visually distinct. */
+.row-pin-btn {
+  border: 1px solid var(--amber-line);
+  background: #fff;
+  color: #8a6d1a;
+  font-size: 13px;
+  line-height: 1;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.row-pin-btn:hover { background: var(--amber-bg); }
+.row-pin-btn.is-active {
+  background: #e8cf7e;
+  border-color: #c9a227;
+  color: #5c4a10;
 }
 
 tr.is-tonu td:not(.pin-tonu) .cell-input,
@@ -367,9 +466,74 @@ tr.is-new td.pin { background-color: rgba(192,54,44,0.22) !important; }
   color: #6b5510;
 }
 
+#driver-sync-status {
+  padding: 6px 20px;
+  font-size: 11.5px;
+  background: var(--blue-bg);
+  border-bottom: 1px solid var(--blue-line);
+  color: #1c3f6e;
+}
+#driver-sync-status.sync-error {
+  background: var(--red-bg);
+  border-bottom: 1px solid var(--red-600);
+  color: var(--red-600);
+  font-weight: 600;
+}
+
+/* ---------------- Column visibility ----------------
+   Each rule hides every cell for that column — header cells in both
+   header rows, and body cells in all 5 trip blocks where relevant —
+   in one shot, driven by a class toggled on <table class="board">. */
+table.board.hide-col-cell .col-cell,
+table.board.hide-col-dispatcherPhone .col-dispatcherPhone,
+table.board.hide-col-email .col-email,
+table.board.hide-col-mc .col-mc,
+table.board.hide-col-rating .col-rating,
+table.board.hide-col-shiftStart .col-shiftStart,
+table.board.hide-col-routeId .col-routeId,
+table.board.hide-col-tripId .col-tripId,
+table.board.hide-col-trailerOut .col-trailerOut,
+table.board.hide-col-routeMiles .col-routeMiles,
+table.board.hide-col-stopCount .col-stopCount,
+table.board.hide-col-dispatchTime .col-dispatchTime,
+table.board.hide-col-salvage .col-salvage,
+table.board.hide-col-backhaul .col-backhaul,
+table.board.hide-col-lastStopDepart .col-lastStopDepart,
+table.board.hide-col-returnToDC .col-returnToDC,
+table.board.hide-col-etaNextDispatch .col-etaNextDispatch,
+table.board.hide-col-hosLeft .col-hosLeft,
+table.board.hide-col-tripCallTime .col-tripCallTime {
+  display: none;
+}
+
 /* ---------------- Driver list tab ---------------- */
 
 .panel { padding: 20px; }
+
+/* Driver List toolbar stays on screen while the list scrolls — unlike the
+   board pages, this page has no internal scroll container of its own, so
+   the whole page scrolls and the toolbar needs position:sticky to stay put. */
+#driverlist-view .toolbar {
+  position: sticky;
+  top: 52px; /* height of .topbar */
+  z-index: 40;
+  margin: -20px -20px 0;
+  padding-left: 20px !important;
+  padding-right: 20px !important;
+}
+
+.edit-driver-btn {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--navy-950);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+}
+.edit-driver-btn:hover { background: var(--slate-100); border-color: var(--slate-500); }
+
+.driverlist-scroll { overflow-x: auto; }
 table.driverlist { width: 100%; border-collapse: collapse; background: #fff; }
 table.driverlist th {
   text-align: left;
@@ -379,6 +543,17 @@ table.driverlist th {
   color: var(--slate-500);
   border-bottom: 2px solid var(--line);
   padding: 8px;
+}
+table.driverlist th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+table.driverlist th.sortable:hover {
+  color: var(--navy-950);
+}
+table.driverlist th .sort-arrow {
+  font-size: 9px;
+  letter-spacing: 0;
 }
 table.driverlist td {
   padding: 8px;

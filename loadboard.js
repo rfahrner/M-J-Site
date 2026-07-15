@@ -1,17 +1,17 @@
 /* ============================================================
    Load Board — application logic (multi-page version)
-   Each tab is its own real HTML file now, not a JS-toggled
-   section. This file is loaded on every page; it looks at what
-   elements actually exist on the current page and only wires
-   those up — nothing assumes the other pages' markup is present.
+   Each tab is its own real HTML file; this file is loaded on
+   every page and only wires up what actually exists on the
+   current page — nothing assumes other pages' markup is present.
 
-   IMPORTANT CURRENT LIMITATION: state (drivers, loads) lives in
-   memory only and resets on every page load. That was fine for a
-   single-page demo; now that navigating tabs means a real page
-   load, it means a driver added on Home won't show up yet on
-   Houston or Driver List after you click over. Fixing that for
-   real needs the Supabase backend — that's next. For now every
-   page seeds the same demo drivers so autofill/testing still work.
+   DATA STATUS:
+   - Drivers are real, backed by Supabase (table: atlanta_drivers).
+     Adding a driver anywhere writes to the database, and every
+     page fetches the current list on load — so drivers now show
+     up consistently across pages and survive a refresh.
+   - Loads/TONU rows are still in-memory only and reset on every
+     page load / navigation. That still needs its own Supabase
+     table — not built yet.
    ============================================================ */
 
 (function () {
@@ -20,7 +20,7 @@
   /* ---------------- page map (single source of truth for nav) ---------------- */
 
   const PAGE_MAP = {
-    "index.html":      { type: "board",       key: "atlanta",   label: "Home",       title: "Atlanta Spreadsheet"    },
+    "index.html":      { type: "board",       key: "atlanta",   label: "Atlanta",    title: "Atlanta Spreadsheet"    },
     "dalaware.html":   { type: "board",       key: "delaware",  label: "Delaware",   title: "Delaware Spreadsheet"   },
     "buildingc.html":  { type: "board",       key: "buildingc", label: "Building C", title: "Building C Spreadsheet" },
     "houston.html":    { type: "board",       key: "houston",   label: "Houston",    title: "Houston Spreadsheet"    },
@@ -59,6 +59,51 @@
     { key: "hosLeft",         label: "HOS Left",           type: "calc" },
     { key: "tripCallTime",    label: "Trip Call Time",     type: "calc" },
   ];
+
+  /* ---------------- Supabase (drivers only, for now — loads aren't backed by a table yet) ---------------- */
+
+  const SUPABASE_URL = "https://ygsapysqzwrpcimgvaqx.supabase.co";
+  const SUPABASE_KEY = "sb_publishable_8b8bSIiYm5TzLTw0WG1pAw_5ZWW5ZPL"; // publishable key — safe to be public
+  const DRIVERS_TABLE = "atlanta_drivers";
+
+  const supabaseClient = (typeof window !== "undefined" && window.supabase)
+    ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY)
+    : null;
+
+  function driverToDbRow(d) {
+    return {
+      "Driver Name": d.name,
+      "Driver Cell": d.phone,
+      "MC": d.mc === "" || d.mc == null ? null : Number(d.mc),
+      "Dispatcher phone number": d.dispatcherPhone || null,
+      "E mail": d.email,
+      "2nd email": d.email2 || null,
+      "Driver Rating": d.rating || null,
+      "Notes": d.notes || null,
+      "Interchange agreement": !!d.tia,
+      "Interchange Coverage $": d.tiiAmount != null ? d.tiiAmount : null,
+      "Carrier": d.carrier || null,
+      "Rate/booking contact": d.rateBooking || null,
+    };
+  }
+  function driverFromDbRow(row) {
+    return {
+      id: row.id,
+      name: row["Driver Name"] || "",
+      phone: row["Driver Cell"] || "",
+      mc: row["MC"] != null ? String(row["MC"]) : "",
+      dispatcherPhone: row["Dispatcher phone number"] || "",
+      email: row["E mail"] || "",
+      email2: row["2nd email"] || "",
+      rating: row["Driver Rating"] || null,
+      notes: row["Notes"] || "",
+      tia: !!row["Interchange agreement"],
+      tiiAmount: row["Interchange Coverage $"] != null ? Number(row["Interchange Coverage $"]) : null,
+      carrier: row["Carrier"] || "",
+      rateBooking: row["Rate/booking contact"] || "",
+      addedAt: null,
+    };
+  }
 
   /* ---------------- tiny helpers ---------------- */
 
@@ -107,7 +152,40 @@
     maxDate: dateKey(todayDate()),
     pendingAddLoadDriverId: null,
     addDriverNestedFromLoad: false,
+    driverSort: { key: null, dir: "asc" },
+    hiddenCols: new Set(),
+    editingDriverId: null,
   };
+
+  const DRIVER_INFO_COLS = [
+    { key: "cell", label: "Cell" },
+    { key: "dispatcherPhone", label: "Dispatcher Phone" },
+    { key: "email", label: "Email" },
+    { key: "mc", label: "MC #" },
+    { key: "rating", label: "Rating" },
+    { key: "shiftStart", label: "Shift Start" },
+  ];
+  // TRIP_SUBCOLS (defined above) doubles as the trip-column toggle list —
+  // toggling one hides that column across all 5 trip blocks at once.
+
+  function compareForSort(a, b, key, dir) {
+    const av = a[key], bv = b[key];
+    const aEmpty = av === null || av === undefined || av === "";
+    const bEmpty = bv === null || bv === undefined || bv === "";
+    if (aEmpty && bEmpty) return 0;
+    if (aEmpty) return 1;  // blanks always sort last, regardless of direction
+    if (bEmpty) return -1;
+    const cmp = key === "mc"
+      ? Number(av) - Number(bv)
+      : String(av).localeCompare(String(bv), undefined, { sensitivity: "base", numeric: true });
+    return dir === "desc" ? -cmp : cmp;
+  }
+
+  function getSortedDrivers() {
+    const { key, dir } = state.driverSort;
+    if (!key) return state.drivers;
+    return [...state.drivers].sort((a, b) => compareForSort(a, b, key, dir));
+  }
 
   function blankTrip() {
     return { id: uid("trip"), routeId: "", tripId: "", trailerOut: "", routeMiles: "", stopCount: "", dispatchTime: "", salvage: false, backhaul: false };
@@ -115,17 +193,17 @@
   function blankRow(driverId, driverNameText) {
     return {
       id: uid("row"), driverId: driverId || null, driverNameText: driverNameText || "",
-      tonu: false, shiftStart: "", addedAt: null,
+      proNumber: "", tonu: false, highlighted: false, shiftStart: "", addedAt: null,
       trips: [blankTrip(), blankTrip(), blankTrip(), blankTrip(), blankTrip()],
     };
   }
   function sheetKey(locationKey, dKey) { return `${locationKey}__${dKey}`; }
   function getSheet(locationKey, dKey) {
     const k = sheetKey(locationKey, dKey);
-    if (!state.sheets[k]) state.sheets[k] = [];
+    if (!state.sheets[k]) state.sheets[k] = Array.from({ length: 5 }, () => blankRow());
     return state.sheets[k];
   }
-  function findDriver(id) { return state.drivers.find((d) => d.id === id) || null; }
+  function findDriver(id) { return state.drivers.find((d) => String(d.id) === String(id)) || null; }
   function findRowAnywhere(rowId) {
     for (const k in state.sheets) {
       const r = state.sheets[k].find((x) => x.id === rowId);
@@ -134,37 +212,35 @@
     return null;
   }
 
-  /* ---------------- seed sample data ---------------- */
-  // Runs on every page load (no shared backend yet), so the driver list and
-  // Atlanta's demo rows look the same no matter which page you land on.
+  /* ---------------- driver sync status banner ---------------- */
 
-  function seed() {
-    const d = (o) => state.drivers.push({ id: uid("drv"), addedAt: null, ...o });
-    d({ name: "Jeffrey Wilkinson", phone: "404-723-9942", mc: "1389818", dispatcherName: "", dispatcherPhone: "404-791-9001", email: "service@sjtransporting.com", rating: "A1", notes: "Long haul preferred.", tia: true, tii: true, tiiAmount: 2500 });
-    d({ name: "Santino Rosedurr",  phone: "312-358-7502", mc: "1034972", dispatcherName: "", dispatcherPhone: "470-755-6049", email: "BTR.Trucking2@gmail.com", rating: "R", notes: "", tia: false, tii: false, tiiAmount: null });
-    d({ name: "Rodney Reid",       phone: "678-313-2546", mc: "991321",  dispatcherName: "Reid's Trans - c", dispatcherPhone: "678-477-6597", email: "reidstransportationservice@gmail.com", rating: "A2", notes: "1800 lb lift gate.", tia: true, tii: true, tiiAmount: 5000 });
-    d({ name: "James Terrell",     phone: "678-362-5982", mc: "1108556", dispatcherName: "", dispatcherPhone: "470-240-6863", email: "jt.terrell75@gmail.com", rating: "A2", notes: "", tia: true, tii: false, tiiAmount: null });
-    d({ name: "Marcus Webb",       phone: "404-555-0134", mc: "1245001", dispatcherName: "", dispatcherPhone: "404-555-0199", email: "mwebb.freight@gmail.com", rating: "A1", notes: "", tia: false, tii: false, tiiAmount: null });
+  function setDriverSyncStatus(message, kind) {
+    $all('#driver-sync-status').forEach((el) => {
+      el.textContent = message || "";
+      el.classList.toggle("sync-error", kind === "error");
+      el.classList.toggle("hidden", !message);
+    });
+  }
 
-    const byName = (n) => state.drivers.find((x) => x.name === n);
-    const rows = getSheet("atlanta", state.activeDate);
+  /* ---------------- load real drivers from Supabase ---------------- */
 
-    const r1 = blankRow(byName("Jeffrey Wilkinson").id); r1.tonu = true; rows.push(r1);
-    const r2 = blankRow(byName("Santino Rosedurr").id);  r2.tonu = true; rows.push(r2);
-
-    const r3 = blankRow(byName("Rodney Reid").id);
-    r3.shiftStart = "11:00";
-    Object.assign(r3.trips[0], { routeId: "FRTG", tripId: "1254384", trailerOut: "326011", routeMiles: "93.8", stopCount: "1", dispatchTime: "11:03" });
-    rows.push(r3);
-
-    const r4 = blankRow(byName("James Terrell").id);
-    r4.shiftStart = "11:00";
-    Object.assign(r4.trips[0], { routeId: "P40055", tripId: "1254216", trailerOut: "326776", routeMiles: "55.2", stopCount: "2", dispatchTime: "11:19" });
-    rows.push(r4);
-
-    const r5 = blankRow(byName("Marcus Webb").id);
-    r5.shiftStart = "11:30";
-    rows.push(r5);
+  async function loadDriversFromSupabase() {
+    if (!supabaseClient) {
+      setDriverSyncStatus("Supabase didn't load on this page — check the script tag and your connection.", "error");
+      return;
+    }
+    setDriverSyncStatus("Loading drivers…", "loading");
+    const { data, error } = await supabaseClient.from(DRIVERS_TABLE).select("*");
+    if (error) {
+      console.error("Failed to load drivers from Supabase:", error);
+      setDriverSyncStatus(`Couldn't load drivers (${error.message}). If your table is empty rather than erroring, double check Row Level Security has a "select" policy.`, "error");
+      return;
+    }
+    state.drivers = data.map(driverFromDbRow);
+    setDriverSyncStatus("");
+    refreshDriverDatalist();
+    if (currentFile() === "driverlist.html") renderDriverList();
+    else if (state.activeLocation) renderBoard();
   }
 
   /* ---------------- calculations (PLACEHOLDER FORMULAS) ---------------- */
@@ -209,13 +285,19 @@
 
   /* ---------------- rendering: board ---------------- */
 
-  function tripBlockHeaderHtml(n) { return `<th class="group-trip" colspan="${TRIP_SUBCOLS.length}">Trip #${n}</th>`; }
-  function tripSubheaderHtml() { return TRIP_SUBCOLS.map((c, i) => `<th class="${i === 0 ? "trip-block-start" : ""}">${c.label}</th>`).join(""); }
+  function tripBlockHeaderHtml(n) {
+    return `<th class="group-trip${n % 2 === 0 ? " group-trip-alt" : ""}" colspan="${TRIP_SUBCOLS.length}">Trip #${n}</th>`;
+  }
+  function tripSubheaderHtml(n) {
+    const altClass = n % 2 === 0 ? " trip-tint-b" : "";
+    return TRIP_SUBCOLS.map((c, i) => `<th class="${i === 0 ? "trip-block-start" : ""}${altClass} col-${c.key}">${c.label}</th>`).join("");
+  }
 
-  function tripCellsHtml(row, trip) {
+  function tripCellsHtml(row, trip, n) {
     const calc = computeCalc(trip, row);
+    const altClass = n % 2 === 0 ? " trip-tint-b" : "";
     return TRIP_SUBCOLS.map((col, i) => {
-      const cls = i === 0 ? "trip-block-start" : "";
+      const cls = (i === 0 ? "trip-block-start" : "") + altClass + ` col-${col.key}`;
       if (col.type === "checkbox") {
         const on = !!trip[col.key];
         const flagCls = col.key === "salvage" ? "flag-yes" : "flag-backhaul";
@@ -236,10 +318,16 @@
   function rowToHtml(row) {
     const drv = row.driverId ? findDriver(row.driverId) : null;
     const displayName = drv ? drv.name : row.driverNameText;
-    const tripsHtml = row.trips.map((t) => tripCellsHtml(row, t)).join("");
-    return `<tr id="${row.id}" class="${row.tonu ? "is-tonu" : ""} ${row.addedAt ? "is-new" : ""}">
+    const tripsHtml = row.trips.map((t, i) => tripCellsHtml(row, t, i + 1)).join("");
+    return `<tr id="${row.id}" class="${row.tonu ? "is-tonu" : ""} ${row.highlighted ? "is-row-pinned" : ""} ${row.addedAt ? "is-new" : ""}">
+      <td class="pin pin-mark">
+        <button class="row-pin-btn ${row.highlighted ? "is-active" : ""}" data-action="toggle-row-pin" data-row="${row.id}" title="Highlight this row">★</button>
+      </td>
       <td class="pin pin-tonu">
         <button class="tonu-btn ${row.tonu ? "is-active" : ""}" data-action="toggle-tonu" data-row="${row.id}">TONU</button>
+      </td>
+      <td class="pin pin-pro">
+        <input class="cell-input" placeholder="PRO#" data-row="${row.id}" data-field="proNumber" value="${escapeHtml(row.proNumber)}">
       </td>
       <td class="pin pin-driver">
         <div class="driver-name-wrap">
@@ -247,12 +335,12 @@
             data-row="${row.id}" data-field="driverName" value="${escapeHtml(displayName)}">
         </div>
       </td>
-      <td><span class="static-text">${escapeHtml(drv ? drv.phone : "—")}</span></td>
-      <td><span class="static-text">${escapeHtml(drv ? drv.dispatcherPhone : "—")}</span></td>
-      <td><span class="static-text">${escapeHtml(drv ? drv.email : "—")}</span></td>
-      <td><span class="static-text">${escapeHtml(drv ? drv.mc : "—")}</span></td>
-      <td><span class="static-text">${escapeHtml(drv && drv.rating ? drv.rating : "—")}</span></td>
-      <td><input class="cell-input small" style="width:60px;" placeholder="--:--" data-row="${row.id}" data-field="shiftStart" value="${escapeHtml(row.shiftStart)}"></td>
+      <td class="col-cell"><span class="static-text">${escapeHtml(drv ? drv.phone : "—")}</span></td>
+      <td class="col-dispatcherPhone"><span class="static-text">${escapeHtml(drv ? drv.dispatcherPhone : "—")}</span></td>
+      <td class="col-email"><span class="static-text">${escapeHtml(drv ? drv.email : "—")}</span></td>
+      <td class="col-mc"><span class="static-text">${escapeHtml(drv ? drv.mc : "—")}</span></td>
+      <td class="col-rating"><span class="static-text">${escapeHtml(drv && drv.rating ? drv.rating : "—")}</span></td>
+      <td class="col-shiftStart"><input class="cell-input small" style="width:60px;" placeholder="--:--" data-row="${row.id}" data-field="shiftStart" value="${escapeHtml(row.shiftStart)}"></td>
       ${tripsHtml}
     </tr>`;
   }
@@ -273,21 +361,25 @@
     const rows = getSheet(state.activeLocation, state.activeDate);
     const thead = `<thead>
       <tr>
+        <th class="pin pin-mark" rowspan="2"></th>
         <th class="pin pin-tonu" rowspan="2">TONU</th>
+        <th class="pin pin-pro" rowspan="2">PRO#</th>
         <th class="pin pin-driver" rowspan="2">Driver</th>
-        <th rowspan="2">Cell</th>
-        <th rowspan="2">Dispatcher Phone</th>
-        <th rowspan="2">Email</th>
-        <th rowspan="2">MC #</th>
-        <th rowspan="2">Rating</th>
-        <th rowspan="2">Shift Start</th>
+        <th class="col-cell" rowspan="2">Cell</th>
+        <th class="col-dispatcherPhone" rowspan="2">Dispatcher Phone</th>
+        <th class="col-email" rowspan="2">Email</th>
+        <th class="col-mc" rowspan="2">MC #</th>
+        <th class="col-rating" rowspan="2">Rating</th>
+        <th class="col-shiftStart" rowspan="2">Shift Start</th>
         ${[1, 2, 3, 4, 5].map(tripBlockHeaderHtml).join("")}
       </tr>
       <tr>${[1, 2, 3, 4, 5].map(tripSubheaderHtml).join("")}</tr>
     </thead>`;
-    const tbody = `<tbody>${rows.map(rowToHtml).join("") || `<tr><td class="pin pin-tonu" colspan="${8 + 5 * TRIP_SUBCOLS.length}" style="text-align:center;color:var(--slate-500);padding:24px;">No loads yet for this day. Use “+ Add Load” to start filling in the sheet.</td></tr>`}</tbody>`;
+    const tbody = `<tbody>${rows.map(rowToHtml).join("")}</tbody>`;
 
     $("#board-table").innerHTML = thead + tbody;
+    const emptyState = $("#board-empty-state");
+    if (emptyState) emptyState.classList.toggle("hidden", rows.length > 0);
     refreshDriverDatalist();
   }
 
@@ -324,21 +416,29 @@
   function renderDriverList() {
     const body = $("#driverlist-table-body");
     if (!body) return;
-    const tbody = state.drivers.map((d) => `
+    const tbody = getSortedDrivers().map((d) => `
       <tr id="dl-${d.id}" class="${d.addedAt ? "is-new" : ""}">
+        <td><button class="edit-driver-btn" data-action="edit-driver" data-driver-id="${d.id}">Edit</button></td>
         <td>${escapeHtml(d.name)}</td>
-        <td>${escapeHtml(d.phone)}</td>
-        <td>${escapeHtml(d.mc)}</td>
-        <td>${escapeHtml(d.dispatcherName || "—")}</td>
+        <td>${escapeHtml(d.phone || "—")}</td>
+        <td>${escapeHtml(d.mc || "—")}</td>
         <td>${escapeHtml(d.dispatcherPhone || "—")}</td>
         <td>${escapeHtml(d.email)}</td>
+        <td>${escapeHtml(d.email2 || "—")}</td>
         <td>${escapeHtml(d.rating || "—")}</td>
+        <td>${escapeHtml(d.carrier || "—")}</td>
+        <td>${escapeHtml(d.rateBooking || "—")}</td>
         <td><span class="badge ${d.tia ? "badge-yes" : "badge-no"}">${d.tia ? "Yes" : "No"}</span></td>
-        <td><span class="badge ${d.tii ? "badge-yes" : "badge-no"}">${d.tii ? "Yes" : "No"}</span>${d.tii && d.tiiAmount ? ` <span class="static-text">$${Number(d.tiiAmount).toLocaleString()}</span>` : ""}</td>
+        <td>${d.tiiAmount != null ? `$${Number(d.tiiAmount).toLocaleString()}` : "—"}</td>
         <td>${escapeHtml(d.notes || "—")}</td>
       </tr>`).join("");
-    body.innerHTML = tbody || `<tr><td colspan="10" style="text-align:center;color:var(--slate-500);padding:24px;">No drivers on file yet.</td></tr>`;
+    body.innerHTML = tbody || `<tr><td colspan="13" style="text-align:center;color:var(--slate-500);padding:24px;">No drivers on file yet.</td></tr>`;
     refreshDriverDatalist();
+    $all('th[data-sort]').forEach((th) => {
+      const arrow = th.querySelector(".sort-arrow");
+      if (!arrow) return;
+      arrow.textContent = state.driverSort.key === th.dataset.sort ? (state.driverSort.dir === "asc" ? " ▲" : " ▼") : "";
+    });
   }
 
   /* ---------------- date navigation ---------------- */
@@ -360,6 +460,18 @@
       tr.classList.toggle("is-tonu", found.row.tonu);
       const btn = tr.querySelector('[data-action="toggle-tonu"]');
       if (btn) btn.classList.toggle("is-active", found.row.tonu);
+    }
+  }
+
+  function toggleRowPin(rowId) {
+    const found = findRowAnywhere(rowId);
+    if (!found) return;
+    found.row.highlighted = !found.row.highlighted;
+    const tr = document.getElementById(rowId);
+    if (tr) {
+      tr.classList.toggle("is-row-pinned", found.row.highlighted);
+      const btn = tr.querySelector('[data-action="toggle-row-pin"]');
+      if (btn) btn.classList.toggle("is-active", found.row.highlighted);
     }
   }
 
@@ -391,22 +503,76 @@
     }, HIGHLIGHT_MS);
   }
 
+  function buildColumnsPanelHtml() {
+    const item = (c) => `<label><input type="checkbox" data-col-toggle="${c.key}" ${state.hiddenCols.has(c.key) ? "" : "checked"}> ${c.label}</label>`;
+    return `
+      <div class="columns-panel-group-label">Driver info</div>
+      ${DRIVER_INFO_COLS.map(item).join("")}
+      <div class="columns-panel-group-label">Trip columns (applies to all 5 trips)</div>
+      ${TRIP_SUBCOLS.map(item).join("")}
+      <div class="columns-panel-footer"><button type="button" id="columns-show-all">Show all columns</button></div>
+    `;
+  }
+
+  function applyColumnVisibility() {
+    const table = $("#board-table");
+    if (!table) return;
+    [...DRIVER_INFO_COLS, ...TRIP_SUBCOLS].forEach((c) => {
+      table.classList.toggle("hide-col-" + c.key, state.hiddenCols.has(c.key));
+    });
+  }
+
   /* ---------------- Add Driver modal (guarded — only wired if present) ---------------- */
 
+  function setVal(id, val) { const el = $("#" + id); if (el) el.value = val; }
+  function setText(id, text) { const el = $("#" + id); if (el) el.textContent = text; }
+
   function openAddDriverModal(nestedFromLoad) {
+    const modalEl = $("#modal-add-driver");
+    if (!modalEl) { console.error('openAddDriverModal: #modal-add-driver not found on this page.'); return; }
     state.addDriverNestedFromLoad = !!nestedFromLoad;
-    ["ad-name", "ad-phone", "ad-mc", "ad-dispatcher-name", "ad-dispatcher-phone", "ad-email", "ad-rating", "ad-notes", "ad-tii-amount"]
-      .forEach((id) => { const el = $("#" + id); if (el) el.value = ""; });
+    state.editingDriverId = null;
+    modalEl.classList.remove("hidden"); // open first — a missing field below should never block this
+    ["ad-name", "ad-phone", "ad-mc", "ad-dispatcher-phone", "ad-email", "ad-email2", "ad-rating", "ad-carrier", "ad-rate-booking", "ad-notes", "ad-tii-amount"]
+      .forEach((id) => setVal(id, ""));
     $all('input[name="ad-tia"]').forEach((r) => (r.checked = r.value === "no"));
-    $all('input[name="ad-tii"]').forEach((r) => (r.checked = r.value === "no"));
-    $("#ad-tii-amount-wrap").classList.add("hidden");
-    $all(".field", $("#modal-add-driver")).forEach((f) => f.classList.remove("has-error"));
-    $("#modal-add-driver").classList.remove("hidden");
-    $("#ad-name").focus();
+    $all(".field", modalEl).forEach((f) => f.classList.remove("has-error"));
+    setText("ad-modal-title", "Add Driver");
+    setText("ad-submit", "Add");
+    const nameEl = $("#ad-name");
+    if (nameEl) nameEl.focus();
   }
+
+  function openEditDriverModal(driverId) {
+    const d = findDriver(driverId);
+    if (!d) { console.error("openEditDriverModal: no driver found for id", driverId); return; }
+    const modalEl = $("#modal-add-driver");
+    if (!modalEl) { console.error('openEditDriverModal: #modal-add-driver not found on this page.'); return; }
+    state.addDriverNestedFromLoad = false;
+    state.editingDriverId = driverId;
+    modalEl.classList.remove("hidden"); // open first — a missing field below should never block this
+    setVal("ad-name", d.name || "");
+    setVal("ad-phone", d.phone || "");
+    setVal("ad-mc", d.mc || "");
+    setVal("ad-dispatcher-phone", d.dispatcherPhone || "");
+    setVal("ad-email", d.email || "");
+    setVal("ad-email2", d.email2 || "");
+    setVal("ad-rating", d.rating || "");
+    setVal("ad-carrier", d.carrier || "");
+    setVal("ad-rate-booking", d.rateBooking || "");
+    setVal("ad-notes", d.notes || "");
+    $all('input[name="ad-tia"]').forEach((r) => (r.checked = r.value === (d.tia ? "yes" : "no")));
+    setVal("ad-tii-amount", d.tiiAmount != null ? d.tiiAmount : "");
+    $all(".field", modalEl).forEach((f) => f.classList.remove("has-error"));
+    setText("ad-modal-title", "Edit Driver");
+    setText("ad-submit", "Save");
+    const nameEl = $("#ad-name");
+    if (nameEl) nameEl.focus();
+  }
+
   function closeAddDriverModal() { $("#modal-add-driver").classList.add("hidden"); }
 
-  function submitAddDriver() {
+  async function submitDriverForm() {
     const name = $("#ad-name").value.trim();
     const phone = $("#ad-phone").value.trim();
     const mc = $("#ad-mc").value.trim();
@@ -417,21 +583,59 @@
       field.classList.toggle("has-error", !val);
       if (!val) ok = false;
     });
+    if (mc && !/^\d+$/.test(mc)) {
+      $("#ad-mc").closest(".field").classList.add("has-error");
+      ok = false;
+    }
     if (!ok) return;
 
-    const tii = $all('input[name="ad-tii"]').find((r) => r.checked).value === "yes";
-    const driver = {
-      id: uid("drv"), name, phone, mc,
-      dispatcherName: $("#ad-dispatcher-name").value.trim(),
+    const draft = {
+      name, phone, mc, email,
       dispatcherPhone: $("#ad-dispatcher-phone").value.trim(),
-      email,
+      email2: $("#ad-email2").value.trim(),
       rating: $("#ad-rating").value.trim() || null,
       notes: $("#ad-notes").value.trim(),
+      carrier: $("#ad-carrier").value.trim(),
+      rateBooking: $("#ad-rate-booking").value.trim(),
       tia: $all('input[name="ad-tia"]').find((r) => r.checked).value === "yes",
-      tii, tiiAmount: tii ? (Number($("#ad-tii-amount").value) || null) : null,
-      addedAt: null,
+      tiiAmount: $("#ad-tii-amount").value.trim() ? Number($("#ad-tii-amount").value) : null,
     };
-    state.drivers.push(driver);
+
+    if (!supabaseClient) {
+      setDriverSyncStatus("Can't save — Supabase didn't load on this page.", "error");
+      return;
+    }
+
+    const isEdit = !!state.editingDriverId;
+    const submitBtn = $("#ad-submit");
+    submitBtn.disabled = true;
+    submitBtn.textContent = isEdit ? "Saving…" : "Adding…";
+
+    const { data, error } = isEdit
+      ? await supabaseClient.from(DRIVERS_TABLE).update(driverToDbRow(draft)).eq("id", state.editingDriverId).select()
+      : await supabaseClient.from(DRIVERS_TABLE).insert(driverToDbRow(draft)).select();
+
+    submitBtn.disabled = false;
+    submitBtn.textContent = isEdit ? "Save" : "Add";
+
+    if (error) {
+      console.error(`Failed to ${isEdit ? "update" : "add"} driver:`, error);
+      setDriverSyncStatus(`Couldn't save this driver (${error.message}).${isEdit ? ' If this is a permissions error, the table needs an "update" Row Level Security policy — it likely only has select/insert so far.' : ""}`, "error");
+      return;
+    }
+    if (isEdit && (!data || data.length === 0)) {
+      // Update ran with no error but matched zero rows — almost always a missing RLS update policy.
+      setDriverSyncStatus('Save didn\u2019t take \u2014 0 rows were updated. This table needs an "update" Row Level Security policy (it likely only has select/insert so far).', "error");
+      return;
+    }
+
+    const driver = driverFromDbRow(data[0]);
+    if (isEdit) {
+      const idx = state.drivers.findIndex((x) => x.id === driver.id);
+      if (idx !== -1) state.drivers[idx] = driver; else state.drivers.push(driver);
+    } else {
+      state.drivers.push(driver);
+    }
     closeAddDriverModal();
     renderDriverList(); // no-op (guarded) unless this is the Driver List page
     refreshDriverDatalist();
@@ -446,6 +650,7 @@
   /* ---------------- Add Load modal (guarded — only wired if present) ---------------- */
 
   function openAddLoadModal() {
+    $("#al-pro").value = "";
     $("#al-shift-start").value = "";
     $("#al-driver-dropdown").innerHTML = "";
     $("#al-driver-dropdown").classList.add("hidden");
@@ -493,6 +698,7 @@
 
     const rows = getSheet(state.activeLocation, state.activeDate);
     const row = blankRow(driverId, driverId ? "" : name);
+    row.proNumber = $("#al-pro").value.trim();
     row.shiftStart = $("#al-shift-start").value.trim();
     rows.push(row);
 
@@ -519,37 +725,43 @@
 
   /* ---------------- per-page init ---------------- */
 
+  function on(id, event, handler) {
+    const el = $("#" + id);
+    if (el) el.addEventListener(event, handler);
+    else console.error(`on(): #${id} not found on this page — that control won't work until the HTML matches loadboard.js.`);
+  }
+
   function wireModals() {
     if ($("#modal-add-driver")) {
-      $("#ad-close").addEventListener("click", closeAddDriverModal);
-      $("#ad-cancel").addEventListener("click", closeAddDriverModal);
-      $("#ad-submit").addEventListener("click", submitAddDriver);
-      $all('input[name="ad-tii"]').forEach((r) => r.addEventListener("change", () => {
-        $("#ad-tii-amount-wrap").classList.toggle("hidden", $all('input[name="ad-tii"]').find((x) => x.checked).value !== "yes");
-      }));
-      $("#modal-add-driver").addEventListener("click", (e) => { if (e.target.id === "modal-add-driver") closeAddDriverModal(); });
+      on("ad-close", "click", closeAddDriverModal);
+      on("ad-cancel", "click", closeAddDriverModal);
+      on("ad-submit", "click", submitDriverForm);
+      on("modal-add-driver", "click", (e) => { if (e.target.id === "modal-add-driver") closeAddDriverModal(); });
     }
     if ($("#modal-add-load")) {
-      $("#al-close").addEventListener("click", closeAddLoadModal);
-      $("#al-cancel").addEventListener("click", closeAddLoadModal);
-      $("#al-submit").addEventListener("click", submitAddLoad);
-      $("#al-add-new-driver-link").addEventListener("click", () => openAddDriverModal(true));
-      $("#modal-add-load").addEventListener("click", (e) => { if (e.target.id === "modal-add-load") closeAddLoadModal(); });
+      on("al-close", "click", closeAddLoadModal);
+      on("al-cancel", "click", closeAddLoadModal);
+      on("al-submit", "click", submitAddLoad);
+      on("al-add-new-driver-link", "click", () => openAddDriverModal(true));
+      on("modal-add-load", "click", (e) => { if (e.target.id === "modal-add-load") closeAddLoadModal(); });
 
       const driverInput = $("#al-driver-input");
-      driverInput.addEventListener("input", () => { driverInput.dataset.driverId = ""; renderDriverDropdown(driverInput.value); });
-      driverInput.addEventListener("focus", () => renderDriverDropdown(driverInput.value));
-      document.addEventListener("click", (e) => {
-        if (!e.target.closest(".driver-name-wrap") && e.target.id !== "al-driver-input" && !e.target.closest("#al-driver-dropdown")) {
-          $("#al-driver-dropdown").classList.add("hidden");
-        }
-        const pick = e.target.closest("[data-pick-driver]");
-        if (pick) {
-          const d = findDriver(pick.dataset.pickDriver);
-          if (d) { driverInput.value = d.name; driverInput.dataset.driverId = d.id; }
-          $("#al-driver-dropdown").classList.add("hidden");
-        }
-      });
+      if (driverInput) {
+        driverInput.addEventListener("input", () => { driverInput.dataset.driverId = ""; renderDriverDropdown(driverInput.value); });
+        driverInput.addEventListener("focus", () => renderDriverDropdown(driverInput.value));
+        document.addEventListener("click", (e) => {
+          const dropdown = $("#al-driver-dropdown");
+          if (dropdown && !e.target.closest(".driver-name-wrap") && e.target.id !== "al-driver-input" && !e.target.closest("#al-driver-dropdown")) {
+            dropdown.classList.add("hidden");
+          }
+          const pick = e.target.closest("[data-pick-driver]");
+          if (pick) {
+            const d = findDriver(pick.dataset.pickDriver);
+            if (d) { driverInput.value = d.name; driverInput.dataset.driverId = d.id; }
+            if (dropdown) dropdown.classList.add("hidden");
+          }
+        });
+      }
     }
   }
 
@@ -565,18 +777,52 @@
     if ($("#btn-add-driver")) $("#btn-add-driver").addEventListener("click", () => openAddDriverModal(false));
     if ($("#btn-add-load")) $("#btn-add-load").addEventListener("click", () => openAddLoadModal());
 
+    if ($("#btn-columns") && $("#columns-panel")) {
+      $("#columns-panel").innerHTML = buildColumnsPanelHtml();
+      applyColumnVisibility();
+      $("#btn-columns").addEventListener("click", (e) => {
+        e.stopPropagation();
+        $("#columns-panel").classList.toggle("hidden");
+      });
+      $("#columns-panel").addEventListener("change", (e) => {
+        const key = e.target.dataset.colToggle;
+        if (!key) return;
+        if (e.target.checked) state.hiddenCols.delete(key); else state.hiddenCols.add(key);
+        applyColumnVisibility();
+      });
+      $("#columns-panel").addEventListener("click", (e) => {
+        if (e.target.id === "columns-show-all") {
+          state.hiddenCols.clear();
+          applyColumnVisibility();
+          $("#columns-panel").innerHTML = buildColumnsPanelHtml();
+        }
+      });
+      document.addEventListener("click", (e) => {
+        if (!e.target.closest("#columns-panel") && !e.target.closest("#btn-columns")) {
+          $("#columns-panel").classList.add("hidden");
+        }
+      });
+    }
+
     const boardTable = $("#board-table");
     boardTable.addEventListener("click", (e) => {
-      const btn = e.target.closest('[data-action="toggle-tonu"]');
-      if (btn) toggleTonu(btn.dataset.row);
+      const tonuBtn = e.target.closest('[data-action="toggle-tonu"]');
+      if (tonuBtn) toggleTonu(tonuBtn.dataset.row);
+      const pinBtn = e.target.closest('[data-action="toggle-row-pin"]');
+      if (pinBtn) toggleRowPin(pinBtn.dataset.row);
     });
     boardTable.addEventListener("input", (e) => {
       const t = e.target;
+      if (t.type === "checkbox") return; // checkboxes are handled by the 'change' listener below, via .checked not .value
       const rowId = t.dataset && t.dataset.row;
       if (!rowId) return;
       const found = findRowAnywhere(rowId);
       if (!found) return;
 
+      if (t.dataset.field === "proNumber") {
+        found.row.proNumber = t.value;
+        return;
+      }
       if (t.dataset.field === "driverName") {
         found.row.driverNameText = t.value;
         found.row.driverId = null;
@@ -615,17 +861,32 @@
   function initDriverListPage() {
     renderDriverList();
     if ($("#btn-add-driver")) $("#btn-add-driver").addEventListener("click", () => openAddDriverModal(false));
+    $("#driverlist-table-body").addEventListener("click", (e) => {
+      const btn = e.target.closest('[data-action="edit-driver"]');
+      if (btn) openEditDriverModal(btn.dataset.driverId);
+    });
+    $all('th[data-sort]').forEach((th) => {
+      th.addEventListener("click", () => {
+        const key = th.dataset.sort;
+        state.driverSort = state.driverSort.key === key
+          ? { key, dir: state.driverSort.dir === "asc" ? "desc" : "asc" }
+          : { key, dir: "asc" };
+        renderDriverList();
+      });
+    });
   }
 
   /* ---------------- init ---------------- */
 
   function init() {
-    seed();
-    renderNav();
+    try { renderNav(); } catch (e) { console.error("renderNav() failed:", e); }
     const info = PAGE_MAP[currentFile()];
-    wireModals();
-    if (info.type === "board") initBoardPage(info);
-    else if (info.type === "driverlist") initDriverListPage();
+    try { wireModals(); } catch (e) { console.error("wireModals() failed:", e); }
+    try {
+      if (info.type === "board") initBoardPage(info);
+      else if (info.type === "driverlist") initDriverListPage();
+    } catch (e) { console.error("page-specific init failed:", e); }
+    loadDriversFromSupabase().catch((e) => console.error("loadDriversFromSupabase() failed:", e));
   }
 
   document.addEventListener("DOMContentLoaded", init);
