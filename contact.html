@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <title>contact</title>
+        <link rel="stylesheet" href="forall.css">
+    </head>
+    <body>
+        <header style="display: flex; align-items: center; justify-content: flex-start; padding-bottom: 10px; padding: 10px 20px;">
+            <img src="images/taniti-logo.png" alt="Logo" style="height: 100px; margin-right: 20px; padding-left: 100px;">
+            <nav>
+                <ul style="list-style-type: none; display: flex; gap: 10px; margin: 0; padding: 0;">
+                    <button class="btn-professionalish" style="float:left;" type="button" onclick="window.location.href='index.html'">Home</button>
+                    <button class="btn-professionalish" style="float:left;" type="button" onclick="window.location.href='amenities.html'">Amenities</button>
+                    <button class="btn-professionalish" style="float:left;" type="button" onclick="window.location.href='attractions.html'">Attractions</button>
+                    <button class="btn-professionalish" style="float:left;" type="button" onclick="window.location.href='contact.html'">Contact</button>
+                </ul>
+            </nav>
+        </header>
+
+        <div id="container" style="display: flex; justify-content: center; align-items: flex-start; padding: 160px 20px; min-height: 80vh;">
+
+            <div class="tab-window">
+
+                <div class="tab-header">
+                    <button class="tab-btn active" onclick="openTab(event, 'BookNowTab')">Book Now</button>
+                    <button class="tab-btn" onclick="openTab(event, 'FAQTab')">Questions</button>
+                </div>
+
+                <div id="BookNowTab" class="tab-content" style="display: block;">
+                    <h2>A few details to connect with your representative</h2>
+                    <form class="clean-form" id="bookingForm" novalidate>
+                        <div class="form-group">
+                            <label for="fname-book">First Name:</label>
+                            <input type="text" id="fname-book" name="fname">
+                        </div>
+                        <div class="form-group">
+                            <label for="lname-book">Last Name:</label>
+                            <input type="text" id="lname-book" name="lname">
+                        </div>
+                        <div class="form-group">
+                            <label for="email-book">Email Address:</label>
+                            <input type="email" id="email-book" name="email">
+                        </div>
+                        <div class="form-group">
+                            <label for="re-email-book">Re-Enter Email Address:</label>
+                            <input type="email" id="re-email-book" name="re-email">
+                        </div>
+                        <div class="form-group">
+                            <label for="details-book">Any specific booking requests?</label>
+                            <textarea id="details-book" name="details" rows="4"></textarea>
+                        </div>
+                        <button type="submit" class="btn-professionalish">Submit Booking Request</button>
+                    </form>
+                </div>
+
+                <div id="FAQTab" class="tab-content">
+                    <h2>Frequently Asked Questions</h2>
+                    <ul class="faq-list">
+                        <li><strong>Power:</strong> Outlets are 120 volts (the same as in the United States).</li>
+                        <li><strong>Alcohol:</strong> Alcohol is not allowed to be served or sold between the hours of midnight and 9:00 a.m.</li>
+                        <li><strong>Drinking Age:</strong> The drinking age on Taniti is 18 and is not strictly enforced.</li>
+                        <li><strong>Language:</strong> Many younger Tanitians speak fluent English. Very little English is spoken in rural areas, especially by the older residents.</li>
+                        <li><strong>Healthcare:</strong> There is one hospital and several clinics. The hospital has many multilingual employees.</li>
+                        <li><strong>Safety:</strong> Violent crime is very rare on Taniti, but as tourism increases, there are more reports of pickpocketing and other petty crimes.</li>
+                        <li><strong>Holidays:</strong> Taniti enjoys a large number of national holidays, and many tourist attractions and restaurants will be closed on holidays, so visitors should plan accordingly.</li>
+                        <li><strong>Currency:</strong> Taniti uses the U.S. dollar as its currency, but many businesses will also accept euros and yen. Several banks facilitate currency exchange, and many businesses accept major credit cards.</li>
+                    </ul>
+
+                    <h2>Have Questions?</h2>
+                    <form class="clean-form" id="questionForm" novalidate style="margin-bottom: 70px; margin-top: 20px;">
+                        <div class="form-group">
+                            <label for="fname-q">First Name:</label>
+                            <input type="text" id="fname-q" name="fname">
+                        </div>
+                        <div class="form-group">
+                            <label for="lname-q">Last Name:</label>
+                            <input type="text" id="lname-q" name="lname">
+                        </div>
+                        <div class="form-group">
+                            <label for="email-q">Email Address:</label>
+                            <input type="email" id="email-q" name="email">
+                        </div>
+                        <div class="form-group">
+                            <label for="re-email-q">Re-Enter Email Address:</label>
+                            <input type="email" id="re-email-q" name="re-email">
+                        </div>
+                        <div class="form-group">
+                            <label for="questions-q">Do you have any questions for our Taniti experts?</label>
+                            <textarea id="questions-q" name="questions" rows="4"></textarea>
+                        </div>
+                        <button type="submit" class="btn-professionalish">Submit Question</button>
+                    </form>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Popups live outside the tabs on purpose: a tab that isn't active is
+             display:none, and anything nested inside it would be hidden too. -->
+        <div id="successModal" class="modal-overlay">
+            <div class="modal-box">
+                <h3>Success!</h3>
+                <p id="successMessage">Thank you! An agent will be in touch shortly!</p>
+                <button class="btn-professionalish" type="button" onclick="closeModal('successModal')">Close</button>
+            </div>
+        </div>
+
+        <div id="errorModal" class="modal-overlay">
+            <div class="modal-box">
+                <h3>Oops!</h3>
+                <p id="errorMessage">The two email addresses you entered don't match. Please re-enter and try again.</p>
+                <button class="btn-professionalish" type="button" onclick="closeModal('errorModal')">Close</button>
+            </div>
+        </div>
+
+        <script src="validate.js"></script>
+        <script src="tabs.js"></script>
+        <script src="contact-forms.js"></script>
+    </body>
+    <footer>
+        <p style="font-size: 10px;">© 2026 Taniti Tourism Board. All rights reserved.</p>
+    </footer>
+</html>

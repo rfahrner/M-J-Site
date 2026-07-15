@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <title>amenities</title>
+        <link rel="stylesheet" href="forall.css">
+    </head>
+    <body>
+        <header style="display: flex; align-items: center; justify-content: flex-start; padding-bottom: 10px; padding: 10px 20px;">
+            <img src="images/taniti-logo.png" alt="Logo" style="height: 100px; margin-right: 20px; padding-left: 100px;">
+            <nav>
+                <ul style="list-style-type: none; display: flex; gap: 10px; margin: 0; padding: 0;">
+                    <button class="btn-professionalish" style="float:left;" type="button" onclick="window.location.href='index.html'">Home</button>
+                    <button class="btn-professionalish" style="float:left;" type="button" onclick="window.location.href='amenities.html'">Amenities</button>
+                    <button class="btn-professionalish" style="float:left;" type="button" onclick="window.location.href='attractions.html'">Attractions</button>
+                    <button class="btn-professionalish" style="float:left;" type="button" onclick="window.location.href='contact.html'">Contact</button>
+                </ul>
+            </nav>
+        </header>
+
+        <div id="container" style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 40px; padding: 20px 40px 40px; padding-top: 160px;">
+
+            <main class="content-panel" style="flex: 1; display: flex; flex-direction: column; align-items: flex-start; padding-left: 0;">
+
+                <div class="accordion-container" style="width: 100%; margin-left: 35px; margin-right: 35px; width: calc(100% - 70px);">
+                    <button class="accordion">Restaurants</button>
+                    <div class="panel">
+                        <p>Taniti currently has 10 restaurants: five serve mostly local fish and rice, three serve American-style meals, and two serve Pan-Asian cuisine.</p>
+                        <p><em>(Placeholder for popular restaurant links, images, and category breakdowns: local cuisine, american food, italian, formal vs. casual dining.)</em></p>
+                    </div>
+
+                    <button class="accordion">Grocery Stores</button>
+                    <div class="panel">
+                        <p>Taniti has two supermarkets, two smaller grocery stores, and one convenience store that is open 24 hours a day.</p>
+                        <p><em>(Placeholder for specific supermarket links and images.)</em></p>
+                    </div>
+
+                    <button class="accordion">Lodging</button>
+                    <div class="panel">
+                        <p>Taniti has a wide variety of lodging that ranges from an inexpensive hostel to one large, four-star resort. There are many small, family-owned hotels and a growing number of bed and breakfasts. All types of lodging are strictly regulated and regularly inspected by the Tanitian government.</p>
+                        <p><em>(Placeholder for further lodging details and images.)</em></p>
+                    </div>
+
+                    <button class="accordion">Transportation</button>
+                    <div class="panel">
+                        <p>Almost all visitors arrive to Taniti by air, though some arrive on a small cruise ship that docks in Yellow Leaf Bay for one night per week. Taniti is served by a small airport that can accommodate small jets and propeller planes. Taniti is in the process of expanding the airport so larger jets will be able to land on the island within the next few years.</p>
+                    </div>
+
+                    <button class="accordion">Ground Transportation</button>
+                    <div class="panel">
+                        <p>Public buses serve Taniti City and run from 5 a.m. to 11 p.m. every day. Private buses serve the rest of the island. Taxis are available in Taniti City, and rental cars can be rented from a local rental agency near the airport. Bikes and helmets are available to rent from several vendors (helmets are required by law). Taniti City is fairly flat and very walkable. Many tourists stay in the area surrounding Merriton Landing: this area is easy to explore on foot.</p>
+                    </div>
+                </div>
+
+                <button class="btn-professionalish" type="button" style="margin-top: 20px; margin-bottom: 40px; margin-left: 35px;" onclick="window.location.href='contact.html'">Plan my stay!</button>
+
+            </main>
+
+            <div style="flex: 1; display: flex; justify-content: flex-end; padding-top: 60px; padding-right: 40px;">
+                <img src="https://images.unsplash.com/photo-1728042743603-e84b7f033050?q=80&w=1075&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D" style="width: 100%; max-width: 600px; height: auto; border-radius: 20px; object-fit: cover;" alt="Aerial beach view">
+            </div>
+
+        </div>
+
+        <script src="validate.js"></script>
+        <script src="accordian.js"></script>
+    </body>
+    <footer>
+        <p style="font-size: 10px;">© 2026 Taniti Tourism Board. All rights reserved.</p>
+    </footer>
+</html>
