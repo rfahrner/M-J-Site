@@ -1,46 +1,149 @@
 <!DOCTYPE html>
 <html lang="en">
-    <head>
-        <title>homepage</title>
-        <link rel="stylesheet" href="forall.css">
-    </head>
-    <body>
-        <header style="display: flex; align-items: center; justify-content: flex-start; padding-bottom: 10px; padding: 10px 20px;">
-            <img src="images/taniti-logo.png" alt="Logo" style="height: 100px; margin-right: 20px; padding-left: 100px;">
-            <nav>
-                <ul style="list-style-type: none; display: flex; gap: 10px; margin: 0; padding: 0;">
-                    <button class="btn-professionalish" style="float:left;" type="button" onclick="window.location.href='index.html'">Home</button>
-                    <button class="btn-professionalish" style="float:left;" type="button" onclick="window.location.href='amenities.html'">Amenities</button>
-                    <button class="btn-professionalish" style="float:left;" type="button" onclick="window.location.href='attractions.html'">Attractions</button>
-                    <button class="btn-professionalish" style="float:left;" type="button" onclick="window.location.href='contact.html'">Contact</button>
-                </ul>
-            </nav>
-        </header>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Atlanta Spreadsheet</title>
+  <link rel="stylesheet" href="loadboard.css">
+</head>
+<body>
 
-        <div class="hero-image" style="height: 400px; margin-top: 140px; background-size: cover; background-position: center; padding-top: 150px; padding-bottom: 150px;">
-            <div class="hero-text" style="color: #EFEBD4; text-align: center; padding-top: 150px; padding-bottom: 150px; background-color: rgba(0, 0, 0, 0.5);">
-                <h1>Welcome to Taniti!</h1>
-                <p>Your tropical paradise awaits.</p>
-            </div>
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <span>Dispatch</span>
+    </div>
+    <div class="tabs" id="tabs"></div>
+  </div>
+
+  <div id="board-view">
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <h1 id="sheet-title">Atlanta Spreadsheet</h1>
+        <div class="subtext" id="sheet-subtext"></div>
+      </div>
+      <div class="date-nav">
+        <button id="date-prev" title="Previous day">&lsaquo;</button>
+        <input type="date" id="date-input">
+        <button id="date-next" title="Next day">&rsaquo;</button>
+        <button id="date-today" class="today-pill">Today</button>
+      </div>
+      <div class="toolbar-actions">
+        <button class="btn btn-ghost" id="btn-add-driver">+ Add Driver</button>
+        <button class="btn" id="btn-add-load">+ Add Load</button>
+      </div>
+    </div>
+
+    <div class="calc-note">
+      &#9888; Last Stop Depart, Return to DC, ETA for Next Dispatch, HOS Left, and Trip Call Time are placeholder calculations
+      (45&nbsp;mph average, standard buffers) so the board works end-to-end today &mdash; send over your exact Excel formulas
+      and I'll swap in the real math.
+    </div>
+
+    <div class="grid-scroll">
+      <table class="board" id="board-table"></table>
+    </div>
+  </div>
+
+  <!-- ================= Add Driver modal ================= -->
+  <div class="overlay hidden" id="modal-add-driver">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Add Driver</h3>
+        <button class="modal-close" id="ad-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <label for="ad-name">Driver name</label>
+          <input type="text" id="ad-name">
+          <div class="field-error">Required.</div>
         </div>
-
-        <div id="container" style="padding-top: 40px; padding-bottom: 40px; flex-wrap: wrap;">
-            <main class="content-panel">
-                <h2>About Taniti!</h2>
-                <p>Taniti is a small, tropical island in the Pacific. While the island has an area of less than 500 square miles,</p>
-                <p>the terrain is varied and includes both sandy and rocky beaches, a small but safe harbor, lush tropical rainforests,</p>
-                <p>a mountainous interior that includes a small, active volcano. Taniti has an indigenous population of about 20,000. </p>
-                <p>a recent increase in tourism, most the Tanitian economy was dominated by fishing or agriculture.</p>
-
-                <button class="btn-professionalish" type="button" style="margin-bottom: 40px; margin-left: 35px;" onclick="window.location.href='contact.html'">Plan my stay!</button>
-            </main>
-
-            <img src="https://www.sandypointresorts.com/coco-beach-resort/wp-content/uploads/sites/5/2025/01/Beach-Coco.webp" style="height: 500px; max-width: 100%; border-radius: 20px;" alt="Image of Resort">
+        <div class="field">
+          <label for="ad-phone">Driver number</label>
+          <input type="tel" id="ad-phone">
+          <div class="field-error">Required.</div>
         </div>
+        <div class="field">
+          <label for="ad-mc">MC number</label>
+          <input type="text" id="ad-mc">
+          <div class="field-error">Required.</div>
+        </div>
+        <div class="field">
+          <label for="ad-dispatcher-name">Dispatcher name (optional)</label>
+          <input type="text" id="ad-dispatcher-name">
+        </div>
+        <div class="field">
+          <label for="ad-dispatcher-phone">Dispatcher number</label>
+          <input type="tel" id="ad-dispatcher-phone">
+        </div>
+        <div class="field">
+          <label for="ad-email">Contact email</label>
+          <input type="email" id="ad-email">
+          <div class="field-error">Required.</div>
+        </div>
+        <div class="field">
+          <label for="ad-rating">Driver rating (leave blank if unknown)</label>
+          <input type="text" id="ad-rating" placeholder="e.g. A1">
+        </div>
+        <div class="field">
+          <label for="ad-notes">Notes</label>
+          <textarea id="ad-notes"></textarea>
+        </div>
+        <div class="field">
+          <label>Trailer interchange agreement</label>
+          <div class="radio-row">
+            <label><input type="radio" name="ad-tia" value="yes"> Yes</label>
+            <label><input type="radio" name="ad-tia" value="no" checked> No</label>
+          </div>
+        </div>
+        <div class="field">
+          <label>Trailer interchange insurance</label>
+          <div class="radio-row">
+            <label><input type="radio" name="ad-tii" value="yes"> Yes</label>
+            <label><input type="radio" name="ad-tii" value="no" checked> No</label>
+          </div>
+        </div>
+        <div class="field hidden" id="ad-tii-amount-wrap">
+          <label for="ad-tii-amount">Insurance amount ($)</label>
+          <input type="number" id="ad-tii-amount" min="0" step="1">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="ad-cancel">Cancel</button>
+        <button class="btn" id="ad-submit">Add</button>
+      </div>
+    </div>
+  </div>
 
-        <script src="validate.js" defer></script>
-    </body>
-    <footer>
-        <p style="font-size: 10px;">© 2026 Taniti Tourism Board. All rights reserved.</p>
-    </footer>
+  <!-- ================= Add Load modal ================= -->
+  <div class="overlay hidden" id="modal-add-load">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Add Load</h3>
+        <button class="modal-close" id="al-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <label for="al-driver-input">Driver name</label>
+          <div class="driver-name-wrap">
+            <input type="text" id="al-driver-input" autocomplete="off" placeholder="Start typing a driver name&hellip;">
+            <div class="autocomplete-list hidden" id="al-driver-dropdown"></div>
+          </div>
+          <div class="field-error">Enter a driver name.</div>
+          <button class="inline-add-driver" id="al-add-new-driver-link">+ Add new driver</button>
+        </div>
+        <div class="field">
+          <label for="al-shift-start">Shift start (optional &mdash; can fill in later)</label>
+          <input type="text" id="al-shift-start" placeholder="--:--">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="al-cancel">Cancel</button>
+        <button class="btn" id="al-submit">Add Load</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="loadboard.js" defer></script>
+</body>
 </html>
