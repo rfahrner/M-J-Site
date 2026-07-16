@@ -41,7 +41,7 @@
   /* ---------------- constants ---------------- */
 
   const HIGHLIGHT_MS = 30 * 60 * 1000; // 30 minutes, per spec
-  const HISTORY_DAYS = 90;              // ~3 months visible on the board
+  const HISTORY_DAYS = 21;              // 3 weeks live on the board; older goes to Historics
   const AVG_MPH = 45;                   // placeholder speed for calc columns
 
   const TRIP_SUBCOLS = [
@@ -65,6 +65,8 @@
   const SUPABASE_URL = "https://ygsapysqzwrpcimgvaqx.supabase.co";
   const SUPABASE_KEY = "sb_publishable_8b8bSIiYm5TzLTw0WG1pAw_5ZWW5ZPL"; // publishable key — safe to be public
   const DRIVERS_TABLE = "atlanta_drivers";
+  const SHIFTS_TABLE = "loads_shifts";
+  const TRIPS_TABLE = "loads_trips";
 
   const supabaseClient = (typeof window !== "undefined" && window.supabase)
     ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -102,6 +104,61 @@
       carrier: row["Carrier"] || "",
       rateBooking: row["Rate/booking contact"] || "",
       addedAt: null,
+    };
+  }
+
+  function shiftToDbRow(row, locationKey, dKey) {
+    return {
+      location: locationKey,
+      shift_date: dKey,
+      pro_number: row.proNumber || null,
+      driver_id: row.driverId ? Number(row.driverId) : null,
+      driver_name_text: row.driverNameText || null,
+      tonu: !!row.tonu,
+      highlighted: !!row.highlighted,
+      shift_start: row.shiftStart || null,
+    };
+  }
+  function shiftFromDbRow(dbRow) {
+    return {
+      id: uid("row"),
+      dbId: dbRow.id,
+      driverId: dbRow.driver_id != null ? String(dbRow.driver_id) : null,
+      driverNameText: dbRow.driver_name_text || "",
+      proNumber: dbRow.pro_number || "",
+      tonu: !!dbRow.tonu,
+      highlighted: !!dbRow.highlighted,
+      shiftStart: dbRow.shift_start || "",
+      addedAt: null,
+      trips: [blankTrip(), blankTrip(), blankTrip(), blankTrip(), blankTrip()],
+    };
+  }
+  function tripToDbRow(trip, shiftDbId, tripNumber) {
+    return {
+      shift_id: shiftDbId,
+      trip_number: tripNumber,
+      route_id: trip.routeId || null,
+      trip_id: trip.tripId || null,
+      trailer_out: trip.trailerOut || null,
+      route_miles: trip.routeMiles !== "" && trip.routeMiles != null ? Number(trip.routeMiles) : null,
+      stop_count: trip.stopCount !== "" && trip.stopCount != null ? Number(trip.stopCount) : null,
+      dispatch_time: trip.dispatchTime || null,
+      salvage: !!trip.salvage,
+      backhaul: !!trip.backhaul,
+    };
+  }
+  function tripFromDbRow(dbRow) {
+    return {
+      id: uid("trip"),
+      dbId: dbRow.id,
+      routeId: dbRow.route_id || "",
+      tripId: dbRow.trip_id || "",
+      trailerOut: dbRow.trailer_out || "",
+      routeMiles: dbRow.route_miles != null ? String(dbRow.route_miles) : "",
+      stopCount: dbRow.stop_count != null ? String(dbRow.stop_count) : "",
+      dispatchTime: dbRow.dispatch_time || "",
+      salvage: !!dbRow.salvage,
+      backhaul: !!dbRow.backhaul,
     };
   }
 
@@ -188,20 +245,63 @@
   }
 
   function blankTrip() {
-    return { id: uid("trip"), routeId: "", tripId: "", trailerOut: "", routeMiles: "", stopCount: "", dispatchTime: "", salvage: false, backhaul: false };
+    return { id: uid("trip"), dbId: null, routeId: "", tripId: "", trailerOut: "", routeMiles: "", stopCount: "", dispatchTime: "", salvage: false, backhaul: false };
   }
   function blankRow(driverId, driverNameText) {
     return {
-      id: uid("row"), driverId: driverId || null, driverNameText: driverNameText || "",
+      id: uid("row"), dbId: null, driverId: driverId || null, driverNameText: driverNameText || "",
       proNumber: "", tonu: false, highlighted: false, shiftStart: "", addedAt: null,
       trips: [blankTrip(), blankTrip(), blankTrip(), blankTrip(), blankTrip()],
     };
   }
   function sheetKey(locationKey, dKey) { return `${locationKey}__${dKey}`; }
+
+  // Sync cache reader — always safe to call, returns [] if not loaded yet.
   function getSheet(locationKey, dKey) {
     const k = sheetKey(locationKey, dKey);
-    if (!state.sheets[k]) state.sheets[k] = Array.from({ length: 5 }, () => blankRow());
+    if (!state.sheets[k]) state.sheets[k] = [];
     return state.sheets[k];
+  }
+
+  // Fetches real shifts + their trips from Supabase for a location+date the
+  // first time it's visited this session, then pads up to 5 rows so there's
+  // always something ready to fill in. Cached after that — doesn't re-fetch
+  // on every render, only the first time a given day is opened.
+  async function ensureSheetLoaded(locationKey, dKey) {
+    const k = sheetKey(locationKey, dKey);
+    if (state.sheets[k]) return;
+    if (!supabaseClient) {
+      state.sheets[k] = Array.from({ length: 5 }, () => blankRow());
+      setDriverSyncStatus("Supabase didn't load on this page — loads won't be saved until this is fixed.", "error");
+      return;
+    }
+    const { data: shiftRows, error: shiftErr } = await supabaseClient
+      .from(SHIFTS_TABLE).select("*").eq("location", locationKey).eq("shift_date", dKey);
+    if (shiftErr) {
+      console.error("Failed to load shifts:", shiftErr);
+      setDriverSyncStatus(`Couldn't load loads for this day (${shiftErr.message}).`, "error");
+      state.sheets[k] = Array.from({ length: 5 }, () => blankRow());
+      return;
+    }
+    const rows = (shiftRows || []).map(shiftFromDbRow);
+    if (shiftRows && shiftRows.length) {
+      const ids = shiftRows.map((r) => r.id);
+      const { data: tripRows, error: tripErr } = await supabaseClient.from(TRIPS_TABLE).select("*").in("shift_id", ids);
+      if (tripErr) {
+        console.error("Failed to load trip details:", tripErr);
+        setDriverSyncStatus(`Loaded rows, but couldn't load their trip details (${tripErr.message}).`, "error");
+      } else if (tripRows) {
+        rows.forEach((row, i) => {
+          const dbId = shiftRows[i].id;
+          const mine = tripRows.filter((t) => t.shift_id === dbId);
+          const byNumber = {};
+          mine.forEach((t) => { byNumber[t.trip_number] = tripFromDbRow(t); });
+          row.trips = [1, 2, 3, 4, 5].map((n) => byNumber[n] || blankTrip());
+        });
+      }
+    }
+    while (rows.length < 5) rows.push(blankRow());
+    state.sheets[k] = rows;
   }
   function findDriver(id) { return state.drivers.find((d) => String(d.id) === String(id)) || null; }
   function findRowAnywhere(rowId) {
@@ -240,10 +340,67 @@
     setDriverSyncStatus("");
     refreshDriverDatalist();
     if (currentFile() === "driverlist.html") renderDriverList();
-    else if (state.activeLocation) renderBoard();
+    else if (state.activeLocation && state.sheets[sheetKey(state.activeLocation, state.activeDate)]) renderBoardTable();
   }
 
-  /* ---------------- calculations (PLACEHOLDER FORMULAS) ---------------- */
+  /* ---------------- saving loads to Supabase ---------------- */
+
+  const SAVE_DEBOUNCE_MS = 700;
+  const shiftSaveTimers = new Map();
+  const tripSaveTimers = new Map();
+
+  // Handles both create (row.dbId is null) and update (row.dbId is set)
+  // transparently — callers never need to branch on which one applies.
+  async function saveShiftNow(row) {
+    if (!supabaseClient) return null;
+    try {
+      const payload = shiftToDbRow(row, state.activeLocation, state.activeDate);
+      if (row.dbId) {
+        const { error } = await supabaseClient.from(SHIFTS_TABLE).update(payload).eq("id", row.dbId);
+        if (error) { console.error("Failed to save row:", error); setDriverSyncStatus(`Couldn't save changes to this row (${error.message}).`, "error"); return null; }
+        return row.dbId;
+      }
+      const { data, error } = await supabaseClient.from(SHIFTS_TABLE).insert(payload).select();
+      if (error) { console.error("Failed to create row:", error); setDriverSyncStatus(`Couldn't save this row (${error.message}).`, "error"); return null; }
+      row.dbId = data[0].id;
+      return row.dbId;
+    } catch (e) {
+      console.error("saveShiftNow threw:", e);
+      setDriverSyncStatus(`Couldn't save this row (${e.message}).`, "error");
+      return null;
+    }
+  }
+
+  async function saveTripNow(row, trip, tripNumber) {
+    if (!supabaseClient) return null;
+    try {
+      const shiftDbId = row.dbId || (await saveShiftNow(row)); // a trip can't exist without its parent shift
+      if (!shiftDbId) return null;
+      const payload = tripToDbRow(trip, shiftDbId, tripNumber);
+      if (trip.dbId) {
+        const { error } = await supabaseClient.from(TRIPS_TABLE).update(payload).eq("id", trip.dbId);
+        if (error) { console.error("Failed to save load:", error); setDriverSyncStatus(`Couldn't save this load (${error.message}).`, "error"); return null; }
+        return trip.dbId;
+      }
+      const { data, error } = await supabaseClient.from(TRIPS_TABLE).insert(payload).select();
+      if (error) { console.error("Failed to create load:", error); setDriverSyncStatus(`Couldn't save this load (${error.message}).`, "error"); return null; }
+      trip.dbId = data[0].id;
+      return trip.dbId;
+    } catch (e) {
+      console.error("saveTripNow threw:", e);
+      setDriverSyncStatus(`Couldn't save this load (${e.message}).`, "error");
+      return null;
+    }
+  }
+
+  function scheduleShiftSave(row) {
+    clearTimeout(shiftSaveTimers.get(row.id));
+    shiftSaveTimers.set(row.id, setTimeout(() => saveShiftNow(row), SAVE_DEBOUNCE_MS));
+  }
+  function scheduleTripSave(row, trip, tripNumber) {
+    clearTimeout(tripSaveTimers.get(trip.id));
+    tripSaveTimers.set(trip.id, setTimeout(() => saveTripNow(row, trip, tripNumber), SAVE_DEBOUNCE_MS));
+  }
 
   function computeCalc(trip, row) {
     const dispatch = parseHHMM(trip.dispatchTime);
@@ -345,7 +502,7 @@
     </tr>`;
   }
 
-  function renderBoard() {
+  function renderBoardChrome() {
     const loc = LOCATIONS.find((l) => l.key === state.activeLocation);
     if (!loc) return;
     $("#sheet-title").textContent = loc.title;
@@ -357,7 +514,12 @@
     $("#date-input").max = state.maxDate;
     $("#date-next").disabled = state.activeDate >= state.maxDate;
     $("#date-prev").disabled = state.activeDate <= state.minDate;
+  }
 
+  // Sync — draws whatever's currently cached in state.sheets. Safe to call
+  // any time data already loaded needs a full redraw (e.g. after Add Load,
+  // or once the driver list arrives and driver-linked cells need refreshing).
+  function renderBoardTable() {
     const rows = getSheet(state.activeLocation, state.activeDate);
     const thead = `<thead>
       <tr>
@@ -381,6 +543,20 @@
     const emptyState = $("#board-empty-state");
     if (emptyState) emptyState.classList.toggle("hidden", rows.length > 0);
     refreshDriverDatalist();
+  }
+
+  // Async — the actual "switch to this day" entry point. Fetches from
+  // Supabase the first time a given location+date is opened this session.
+  // Token guard: if the user clicks prev/next again before this finishes,
+  // the stale fetch's result gets discarded instead of overwriting the
+  // newer one the user is now looking at.
+  let boardRenderToken = 0;
+  async function loadAndRenderBoard() {
+    renderBoardChrome();
+    const myToken = ++boardRenderToken;
+    await ensureSheetLoaded(state.activeLocation, state.activeDate);
+    if (myToken !== boardRenderToken) return; // superseded by a newer navigation
+    renderBoardTable();
   }
 
   function recalcRowCalcCellsInPlace(rowId) {
@@ -446,7 +622,7 @@
   function setActiveDate(newKey) {
     if (newKey < state.minDate || newKey > state.maxDate) return;
     state.activeDate = newKey;
-    renderBoard();
+    loadAndRenderBoard();
   }
 
   /* ---------------- TONU ---------------- */
@@ -461,6 +637,7 @@
       const btn = tr.querySelector('[data-action="toggle-tonu"]');
       if (btn) btn.classList.toggle("is-active", found.row.tonu);
     }
+    saveShiftNow(found.row);
   }
 
   function toggleRowPin(rowId) {
@@ -473,6 +650,7 @@
       const btn = tr.querySelector('[data-action="toggle-row-pin"]');
       if (btn) btn.classList.toggle("is-active", found.row.highlighted);
     }
+    saveShiftNow(found.row);
   }
 
   /* ---------------- highlighting ---------------- */
@@ -683,7 +861,7 @@
     box.classList.remove("hidden");
   }
 
-  function submitAddLoad() {
+  async function submitAddLoad() {
     const nameField = $("#al-driver-input");
     const name = nameField.value.trim();
     const field = nameField.closest(".field");
@@ -696,14 +874,19 @@
       driverId = match ? match.id : null;
     }
 
-    const rows = getSheet(state.activeLocation, state.activeDate);
-    const row = blankRow(driverId, driverId ? "" : name);
+    const row = blankRow(driverId, name);
     row.proNumber = $("#al-pro").value.trim();
     row.shiftStart = $("#al-shift-start").value.trim();
-    rows.push(row);
+
+    const submitBtn = $("#al-submit");
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Adding…"; }
+    await saveShiftNow(row);
+    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = "Add Load"; }
+
+    getSheet(state.activeLocation, state.activeDate).push(row);
 
     closeAddLoadModal();
-    renderBoard();
+    renderBoardTable();
     highlightRow(row.id);
     requestAnimationFrame(() => {
       const el = document.getElementById(row.id);
@@ -767,7 +950,7 @@
 
   function initBoardPage(info) {
     state.activeLocation = info.key;
-    renderBoard();
+    loadAndRenderBoard();
 
     $("#date-prev").addEventListener("click", () => setActiveDate(dateKey(addDays(keyToDate(state.activeDate), -1))));
     $("#date-next").addEventListener("click", () => setActiveDate(dateKey(addDays(keyToDate(state.activeDate), 1))));
@@ -821,6 +1004,7 @@
 
       if (t.dataset.field === "proNumber") {
         found.row.proNumber = t.value;
+        scheduleShiftSave(found.row);
         return;
       }
       if (t.dataset.field === "driverName") {
@@ -829,16 +1013,22 @@
         const match = state.drivers.find((d) => d.name.toLowerCase() === t.value.trim().toLowerCase());
         if (match) found.row.driverId = match.id;
         recalcRowCalcCellsInPlace(rowId);
+        scheduleShiftSave(found.row);
         return;
       }
       if (t.dataset.field === "shiftStart") {
         found.row.shiftStart = t.value;
         recalcRowCalcCellsInPlace(rowId);
+        scheduleShiftSave(found.row);
         return;
       }
       if (t.dataset.trip && t.dataset.field) {
         const trip = found.row.trips.find((tr) => tr.id === t.dataset.trip);
-        if (trip) { trip[t.dataset.field] = t.value; recalcRowCalcCellsInPlace(rowId); }
+        if (trip) {
+          trip[t.dataset.field] = t.value;
+          recalcRowCalcCellsInPlace(rowId);
+          scheduleTripSave(found.row, trip, found.row.trips.indexOf(trip) + 1);
+        }
       }
     });
     boardTable.addEventListener("change", (e) => {
@@ -851,6 +1041,7 @@
           trip[t.dataset.field] = t.checked;
           const td = t.closest("td");
           td.classList.toggle(t.dataset.field === "salvage" ? "flag-yes" : "flag-backhaul", t.checked);
+          saveTripNow(found.row, trip, found.row.trips.indexOf(trip) + 1);
         }
       }
     });

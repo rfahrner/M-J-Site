@@ -39,14 +39,10 @@ HEADER_ROW_INDEX = 4  # 0-indexed — row 5 in Excel's own numbering
 # Tabs whose names don't fit the standard pattern, confirmed by hand.
 # Add more here as they come up — checked before the regex parser runs.
 MANUAL_TAB_OVERRIDES = {
-    # name: (location, date, structure)
-    # structure = which column layout to read this tab with. Normally same
-    # as location, but 06-28 (Bill Schneider) has Delaware-style columns
-    # (Customer rate/Carrier rate at 8/9) even though the shift itself
-    # belongs under Atlanta — confirmed from the header-mismatch dry run.
-    "06-28 (Bill Schneider)": ("atlanta", "2026-06-28", "delaware"),
-    "5-31 C & Hostler": ("buildingc", "2026-05-31", "buildingc"),
-    "Fathers Day (Sun)": ("atlanta", "2026-06-21", "atlanta"),
+    # name: (location, date)
+    "06-28 (Bill Schneider)": ("atlanta", "2026-06-28"),
+    "5-31 C & Hostler": ("buildingc", "2026-05-31"),
+    "Fathers Day (Sun)": ("atlanta", "2026-06-21"),
 }
 
 # These tabs span multiple days in one sheet — same column layout as every
@@ -78,7 +74,7 @@ def parse_row_date(row, idx=6):
 # ---------------- tab name -> (location, date) ----------------
 
 def parse_tab_name(name, default_location="atlanta"):
-    """Returns (location_key, 'YYYY-MM-DD', structure_key) or None if unrecognized."""
+    """Returns (location_key, 'YYYY-MM-DD') or None if unrecognized."""
     n = name.strip()
     if n in MANUAL_TAB_OVERRIDES:
         return MANUAL_TAB_OVERRIDES[n]
@@ -96,7 +92,7 @@ def parse_tab_name(name, default_location="atlanta"):
     m = re.match(r'^(\d{1,2})-(\d{1,2})$', date_part)
     if m:
         try:
-            return location, date(2026, int(m.group(1)), int(m.group(2))).isoformat(), location
+            return location, date(2026, int(m.group(1)), int(m.group(2))).isoformat()
         except ValueError:
             return None
 
@@ -104,7 +100,7 @@ def parse_tab_name(name, default_location="atlanta"):
     m = re.match(r'^(\d{1,2})\.(\d{1,2})\.(\d{2})$', date_part)
     if m:
         try:
-            return location, date(2000 + int(m.group(3)), int(m.group(1)), int(m.group(2))).isoformat(), location
+            return location, date(2000 + int(m.group(3)), int(m.group(1)), int(m.group(2))).isoformat()
         except ValueError:
             return None
 
@@ -112,69 +108,130 @@ def parse_tab_name(name, default_location="atlanta"):
 
 
 # ---------------- header discovery for one tab ----------------
+# Every field is located by its ACTUAL header text on the tab being read,
+# not by an assumed fixed position. A tab missing a column, or with one
+# inserted, just leaves that one field blank — nothing gets misaligned,
+# and no tab needs to be skipped over one shifted column.
 
 def norm(h):
     if h is None:
         return ""
     return re.sub(r'\s+', ' ', str(h)).strip()
 
-# Column index map verified against the actual uploaded sample tabs
-# (Atlanta 07-09, Building C 06-29 C, Delaware 7-1 DEL). Validated
-# against each tab's own header row before use — see validate_headers().
-SHIFT_COLS = {
-    "interchange_ins_snapshot": 0, "interchange_agreement_snapshot": 1,
-    "email_snapshot": 3, "dispatcher_phone_snapshot": 4, "aljex_load_number": 5,
-    "sheet_date_cell": 6, "mc_snapshot": 7,
-    "col8": 8, "col9": 9,  # meaning of 8/9 depends on location — see below
-    "driver_name": 10, "driver_cell_snapshot": 11, "shift_start": 12,
-    "pre_shift_text_sent": 13, "eta_for_shift_report": 14, "actual_shift_report": 15,
-    "eta_for_next_dispatch": 16, "hos_time_left": 17, "comments": 18,
-    "eta_disp_decimal": 19, "waynes_window": 20, "current_route_status": 21,
-    "current_route_backhaul_status": 22, "trip1_call_time": 23,
-    "hos_decimal": 24, "rev_level": 25, "next_call_time": 26,
+# Header text (normalized) -> internal field name, for the "preamble" zone
+# before Trip #1 starts. Multiple keys can map to the same field (e.g.
+# Delaware's differently-worded rate columns).
+SHIFT_FIELD_BY_HEADER = {
+    "Inter Change Ins": "interchange_ins_snapshot",
+    "IChange Agrment": "interchange_agreement_snapshot",
+    "Email": "email_snapshot",
+    "Dispatcher Phone": "dispatcher_phone_snapshot",
+    "Aljex Load Number": "aljex_load_number",
+    "Date": "sheet_date_cell",
+    "MC Number": "mc_snapshot",
+    "Driver Rating": "driver_rating_snapshot",
+    "Customer rate": "customer_rate",
+    "Long": "long_haul_flag",
+    "Carrier rate": "carrier_rate",
+    "Driver": "driver_name",
+    "Driver Cell": "driver_cell_snapshot",
+    "Shift . Start": "shift_start",
+    "Pre shift text sent": "pre_shift_text_sent",
+    "ETA for Shift Report": "eta_for_shift_report",
+    "Actual Shift Report": "actual_shift_report",
+    "ETA for Next Dispatch": "eta_for_next_dispatch",
+    "HOS Time Left": "hos_time_left",
+    "Comments": "comments",
+    "ETA Disp decimal": "eta_disp_decimal",
+    "Waynes . Window": "waynes_window",
+    "Current Route Status": "current_route_status",
+    "Current Route Backhaul Status": "current_route_backhaul_status",
+    "HOS Decimal": "hos_decimal",
+    "Rev Level": "rev_level",
+    "Next Call Time": "next_call_time",
 }
-TRIP1_COLS = {
-    "route_id": 27, "trip_id": 28, "trailer_out": 29, "route_miles": 30,
-    "stop_count": 31, "dispatch_time": 32, "last_stop_depart": 33, "return_to_dc": 34,
-    "salvage": 35, "backhaul": 36, "backhaul_location": 38,
-    "salvage_bhaul_refused_by": 39, "backhaul_trailer_number": 40, "return_eta_to_dc": 41,
-    "return_drop_location": 42, "ppwk_received": 43, "time_sheet_start": 44,
-    "time_sheet_end": 45, "drop_location_text": 46, "return_to_dc_text": 47,
-    "backhaul_type": 48, "check_in_45min": 49, "text_not_answered_remind": 50,
-    "pre_shift_call": 51, "route_est_hours": 52, "time_to_final_stop": 53,
-    "eta_to_final_stop": 54, "est_route_complete": 55,
+
+# Header text (normalized) -> internal field name, within a single trip
+# block's column span. Trip 1 has extra fields (time sheet, pre-shift
+# call) that trips 2-5 don't — handled naturally since we only find what's
+# actually present in each block's own span.
+TRIP_FIELD_BY_HEADER = {
+    "Route ID": "route_id", "Trip ID": "trip_id", "Trailer Out": "trailer_out",
+    "Route Miles": "route_miles", "Route Stop Count": "stop_count",
+    "Dispatch/ Ready Time": "dispatch_time", "Last Stop Depart": "last_stop_depart",
+    "Return to DC": "return_to_dc", "Salvage": "salvage", "Backhaul": "backhaul",
+    "Backhaul Location": "backhaul_location",
+    "Salvage / Bhaul Refused By": "salvage_bhaul_refused_by",
+    "Backhaul Trailer Number": "backhaul_trailer_number",
+    "Return ETA to DC": "return_eta_to_dc", "Return Drop Location": "return_drop_location",
+    "Ppwk Rec'd": "ppwk_received",
+    "Time Sheet START Time": "time_sheet_start", "Time Sheet Start Time": "time_sheet_start",
+    "Time Sheet Rec'd END Time": "time_sheet_end", "Time Sheet Rec'd": "time_sheet_end",
+    "Drop Location text": "drop_location_text", "Return to DC text": "return_to_dc_text",
+    "Backhaul Type": "backhaul_type", "45 mins after check in": "check_in_45min",
+    "text not answered remind": "text_not_answered_remind", "Pre Shift Call": "pre_shift_call",
+    "Route Est Hours": "route_est_hours", "Time to final stop": "time_to_final_stop",
+    "ETA to final stop": "eta_to_final_stop", "Est route complete": "est_route_complete",
 }
-# Trips 2-5 share a reduced field set (no time-sheet/pre-shift-call tracking).
-TRIP_N_TEMPLATE = {
-    "route_id": 0, "trip_id": 1, "trailer_out": 2, "route_miles": 3, "stop_count": 4,
-    "dispatch_time": 5, "last_stop_depart": 6, "return_to_dc": 7, "salvage": 8,
-    "backhaul": 9, "backhaul_location": 11, "salvage_bhaul_refused_by": 12,
-    "backhaul_trailer_number": 13, "return_eta_to_dc": 14, "return_drop_location": 15,
-    "ppwk_received": 16, "route_est_hours": 18, "time_to_final_stop": 19,
-    "eta_to_final_stop": 20, "est_route_complete": 21,
-}
-TRIP_N_BASE = {2: 57, 3: 80, 4: 103, 5: 126}
-TRIP_N_CALL_TIME = {2: 56, 3: 79, 4: 102, 5: 125}
+
+CALL_TIME_RE = re.compile(r'Trip\s*#?\s*(\d)\s*Call\s*[Tt]ime', re.IGNORECASE)
 
 
-def validate_headers(header_row, structure):
-    """Anchor checks — if these don't hold, don't trust positional
-    extraction for this tab. Returns list of problems (empty = OK)."""
+def discover_columns(header_row):
+    """Scans ONE tab's own header row and returns:
+       shift_map:  {field_name: col_index}
+       trip_maps:  {trip_number: {field_name: col_index}}
+       problems:   list of strings — empty means usable, non-empty means
+                   this doesn't look like a real data tab at all (e.g. no
+                   Driver column, no Route ID anywhere) and should still
+                   be skipped rather than silently importing garbage.
+    """
     h = [norm(x) for x in header_row]
+
+    route_id_positions = [i for i, v in enumerate(h) if v == "Route ID"]
+    driver_positions = [i for i, v in enumerate(h) if v == "Driver"]
+
     problems = []
-    def check(idx, expect_substr, label):
-        if idx >= len(h) or expect_substr.lower() not in h[idx].lower():
-            problems.append(f"col{idx} ({label}): expected to contain {expect_substr!r}, got {h[idx] if idx < len(h) else '<missing>'!r}")
-    check(10, "Driver", "driver name column")
-    check(27, "Route", "trip 1 Route ID")
-    check(29, "Trailer", "trip 1 Trailer Out")
-    check(57, "Route", "trip 2 Route ID")
-    if structure == "delaware":
-        check(8, "rate", "Delaware customer rate")
-        check(9, "rate", "Delaware carrier rate")
-    else:
-        check(8, "Rating", "driver rating")
-    return problems
+    if not driver_positions:
+        problems.append("no 'Driver' column found anywhere in this tab's header row")
+    if not route_id_positions:
+        problems.append("no 'Route ID' column found anywhere — doesn't look like a load sheet")
+    if problems:
+        return {}, {}, problems
+
+    driver_col = driver_positions[0]
+    preamble_end = route_id_positions[0]
+
+    shift_map = {}
+    for i in range(0, preamble_end):
+        field = SHIFT_FIELD_BY_HEADER.get(h[i])
+        if field:
+            shift_map[field] = i
+    shift_map["driver_name"] = driver_col  # guaranteed present, set explicitly
+
+    # Call Time fields, found by their explicit trip number in the text,
+    # regardless of where they physically sit in the row.
+    call_times = {}
+    for i, v in enumerate(h):
+        m = CALL_TIME_RE.search(v)
+        if m:
+            call_times[int(m.group(1))] = i
+
+    block_starts = route_id_positions[:5]
+    trip_maps = {}
+    for block_idx, start in enumerate(block_starts):
+        trip_number = block_idx + 1
+        end = block_starts[block_idx + 1] if block_idx + 1 < len(block_starts) else len(h)
+        field_map = {}
+        for i in range(start, end):
+            field = TRIP_FIELD_BY_HEADER.get(h[i])
+            if field and field not in field_map:  # first match wins within the block
+                field_map[field] = i
+        if trip_number in call_times:
+            field_map["call_time"] = call_times[trip_number]
+        trip_maps[trip_number] = field_map
+
+    return shift_map, trip_maps, []
 
 
 # ---------------- per-row extraction ----------------
@@ -190,64 +247,41 @@ def cellval(row, idx):
     return v
 
 
-def extract_shift(row, location, shift_date, structure=None):
-    if structure is None:
-        structure = location
-    driver_name = cellval(row, SHIFT_COLS["driver_name"])
+def extract_shift(row, location, shift_date, shift_map):
+    driver_name = cellval(row, shift_map.get("driver_name"))
     if not driver_name or not str(driver_name).strip():
         return None  # blank row — nothing to import
+    field_names = [
+        "shift_start", "aljex_load_number", "driver_cell_snapshot", "email_snapshot",
+        "dispatcher_phone_snapshot", "mc_snapshot", "interchange_ins_snapshot",
+        "interchange_agreement_snapshot", "pre_shift_text_sent", "eta_for_shift_report",
+        "actual_shift_report", "eta_for_next_dispatch", "hos_time_left", "comments",
+        "eta_disp_decimal", "waynes_window", "current_route_status",
+        "current_route_backhaul_status", "hos_decimal", "rev_level", "next_call_time",
+        "driver_rating_snapshot", "long_haul_flag", "customer_rate", "carrier_rate",
+    ]
     rec = {
         "location": location,
         "shift_date": shift_date,
         "driver_name_text": str(driver_name).strip(),
-        "shift_start": cellval(row, SHIFT_COLS["shift_start"]),
-        "aljex_load_number": cellval(row, SHIFT_COLS["aljex_load_number"]),
-        "driver_cell_snapshot": cellval(row, SHIFT_COLS["driver_cell_snapshot"]),
-        "email_snapshot": cellval(row, SHIFT_COLS["email_snapshot"]),
-        "dispatcher_phone_snapshot": cellval(row, SHIFT_COLS["dispatcher_phone_snapshot"]),
-        "mc_snapshot": cellval(row, SHIFT_COLS["mc_snapshot"]),
-        "interchange_ins_snapshot": cellval(row, SHIFT_COLS["interchange_ins_snapshot"]),
-        "interchange_agreement_snapshot": cellval(row, SHIFT_COLS["interchange_agreement_snapshot"]),
-        "pre_shift_text_sent": cellval(row, SHIFT_COLS["pre_shift_text_sent"]),
-        "eta_for_shift_report": cellval(row, SHIFT_COLS["eta_for_shift_report"]),
-        "actual_shift_report": cellval(row, SHIFT_COLS["actual_shift_report"]),
-        "eta_for_next_dispatch": cellval(row, SHIFT_COLS["eta_for_next_dispatch"]),
-        "hos_time_left": cellval(row, SHIFT_COLS["hos_time_left"]),
-        "comments": cellval(row, SHIFT_COLS["comments"]),
-        "eta_disp_decimal": cellval(row, SHIFT_COLS["eta_disp_decimal"]),
-        "waynes_window": cellval(row, SHIFT_COLS["waynes_window"]),
-        "current_route_status": cellval(row, SHIFT_COLS["current_route_status"]),
-        "current_route_backhaul_status": cellval(row, SHIFT_COLS["current_route_backhaul_status"]),
-        "hos_decimal": cellval(row, SHIFT_COLS["hos_decimal"]),
-        "rev_level": cellval(row, SHIFT_COLS["rev_level"]),
-        "next_call_time": cellval(row, SHIFT_COLS["next_call_time"]),
     }
-    if structure == "delaware":
-        rec["customer_rate"] = cellval(row, SHIFT_COLS["col8"])
-        rec["carrier_rate"] = cellval(row, SHIFT_COLS["col9"])
-    else:
-        rec["driver_rating_snapshot"] = cellval(row, SHIFT_COLS["col8"])
-        rec["long_haul_flag"] = cellval(row, SHIFT_COLS["col9"])
+    for f in field_names:
+        rec[f] = cellval(row, shift_map.get(f))  # None if this tab doesn't have that column
     return rec
 
 
-def extract_trips(row):
+def extract_trips(row, trip_maps):
     """Returns list of (trip_number, dict) for whichever of the 5 slots
     actually have a Route ID filled in — blank slots are skipped, not
-    inserted as empty trip rows."""
+    inserted as empty trip rows. Any field this tab's header didn't have
+    just comes through as None."""
+    field_names = list(TRIP_FIELD_BY_HEADER.values()) + ["call_time"]
     trips = []
-    if cellval(row, TRIP1_COLS["route_id"]) is not None:
-        rec = {name: cellval(row, idx) for name, idx in TRIP1_COLS.items()}
-        rec["call_time"] = cellval(row, SHIFT_COLS["trip1_call_time"])
-        trips.append((1, rec))
-    for n in (2, 3, 4, 5):
-        base = TRIP_N_BASE[n]
-        route_idx = base + TRIP_N_TEMPLATE["route_id"]
-        if cellval(row, route_idx) is None:
+    for trip_number, field_map in trip_maps.items():
+        if cellval(row, field_map.get("route_id")) is None:
             continue
-        rec = {name: cellval(row, base + off) for name, off in TRIP_N_TEMPLATE.items()}
-        rec["call_time"] = cellval(row, TRIP_N_CALL_TIME[n])
-        trips.append((n, rec))
+        rec = {f: cellval(row, field_map.get(f)) for f in field_names}
+        trips.append((trip_number, rec))
     return trips
 
 
@@ -274,14 +308,13 @@ def import_workbook(path, default_location, dry_run, supabase):
 
         if is_per_row_date:
             location = "atlanta"
-            structure = "atlanta"
         else:
             parsed = parse_tab_name(sheet_name, default_location)
             if parsed is None:
                 if clean_name.lower() not in SKIP_TAB_NAMES:
                     skipped_tabs.append(sheet_name)
                 continue
-            location, tab_shift_date, structure = parsed
+            location, tab_shift_date = parsed
 
         ws = wb[sheet_name]
         rows = list(ws.iter_rows(values_only=True))
@@ -289,9 +322,9 @@ def import_workbook(path, default_location, dry_run, supabase):
             skipped_tabs.append(f"{sheet_name} (too few rows)")
             continue
 
-        problems = validate_headers(rows[HEADER_ROW_INDEX], structure)
+        shift_map, trip_maps, problems = discover_columns(rows[HEADER_ROW_INDEX])
         if problems:
-            skipped_tabs.append(f"{sheet_name} (header mismatch: {problems[0]})")
+            skipped_tabs.append(f"{sheet_name} ({problems[0]})")
             continue
 
         tab_shifts, tab_trips, undated_rows = 0, 0, 0
@@ -302,7 +335,7 @@ def import_workbook(path, default_location, dry_run, supabase):
                 undated_rows += 1
                 continue
 
-            shift = extract_shift(row, location, shift_date, structure)
+            shift = extract_shift(row, location, shift_date, shift_map)
             if shift is None:
                 continue
             name_key = shift["driver_name_text"].strip().lower()
@@ -310,7 +343,7 @@ def import_workbook(path, default_location, dry_run, supabase):
             if shift["driver_id"] is not None:
                 shift["driver_name_text"] = None  # have a real driver_id, don't also store free text
 
-            trips = extract_trips(row)
+            trips = extract_trips(row, trip_maps)
             tab_shifts += 1
             tab_trips += len(trips)
 
