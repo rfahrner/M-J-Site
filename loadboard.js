@@ -581,6 +581,94 @@
     }
   }
 
+  /* ---------------- realtime: live sync with other users ---------------- */
+  // DOM data-field names that don't match the row object's own key name.
+  const SHIFT_FIELD_TO_STATE_KEY = { driverName: "driverNameText" };
+
+  function currentlyEditedField(rowId, tripId) {
+    const tr = document.getElementById(rowId);
+    const activeEl = document.activeElement;
+    if (!tr || !tr.contains(activeEl)) return null;
+    if (tripId != null && activeEl.dataset.trip !== tripId) return null;
+    if (tripId == null && activeEl.dataset.trip) return null; // focus is in a trip field, not a shift field
+    return activeEl.dataset.field || null;
+  }
+
+  function handleRealtimeShiftChange(payload) {
+    if (payload.eventType === "DELETE") return; // no delete-row feature yet
+    const dbRow = payload.new;
+    if (!dbRow || dbRow.shift_date !== state.activeDate) return; // not the day currently being viewed
+    const rows = state.sheets[sheetKey(state.activeLocation, state.activeDate)];
+    if (!rows) return; // this day isn't loaded in this tab yet — nothing to merge into
+
+    const existing = rows.find((r) => r.dbId === dbRow.id);
+    if (!existing) {
+      rows.push(shiftFromDbRow(dbRow));
+      renderBoardTable(); // a whole new row appeared — simplest to redraw
+      return;
+    }
+    const domField = currentlyEditedField(existing.id, null);
+    const stateKey = domField ? (SHIFT_FIELD_TO_STATE_KEY[domField] || domField) : null;
+    const preserved = stateKey ? existing[stateKey] : undefined;
+    const fresh = shiftFromDbRow(dbRow);
+    Object.assign(existing, fresh, { id: existing.id, trips: existing.trips, addedAt: existing.addedAt });
+    if (stateKey) existing[stateKey] = preserved; // don't clobber what the user is actively typing right now
+    recalcRowCalcCellsInPlace(existing.id);
+  }
+
+  function handleRealtimeTripChange(payload) {
+    if (payload.eventType === "DELETE") return;
+    const dbTrip = payload.new;
+    if (!dbTrip) return;
+    const rows = state.sheets[sheetKey(state.activeLocation, state.activeDate)];
+    if (!rows) return;
+    const parentRow = rows.find((r) => r.dbId === dbTrip.shift_id);
+    if (!parentRow) return; // this trip's shift isn't part of the currently-viewed day
+    const idx = dbTrip.trip_number - 1;
+    if (idx < 0 || idx > 4) return;
+    const localTrip = parentRow.trips[idx];
+
+    const domField = currentlyEditedField(parentRow.id, localTrip.id);
+    const preserved = domField ? localTrip[domField] : undefined;
+    const fresh = tripFromDbRow(dbTrip);
+    Object.assign(localTrip, fresh, { id: localTrip.id });
+    if (domField) localTrip[domField] = preserved;
+    recalcRowCalcCellsInPlace(parentRow.id);
+  }
+
+  function handleRealtimeDriverChange(payload) {
+    if (payload.eventType === "DELETE") return;
+    const dbDriver = payload.new;
+    if (!dbDriver) return;
+    const idx = state.drivers.findIndex((d) => String(d.id) === String(dbDriver.id));
+    const fresh = driverFromDbRow(dbDriver);
+    if (idx !== -1) {
+      fresh.addedAt = state.drivers[idx].addedAt; // preserve this tab's own highlight timer
+      state.drivers[idx] = fresh;
+    } else {
+      state.drivers.push(fresh);
+    }
+    refreshDriverDatalist();
+    if (currentFile() === "driverlist.html") renderDriverList();
+    else if (state.activeLocation) renderBoardTable(); // driver-linked display cells may need refreshing
+  }
+
+  function setupRealtimeSync(locationKey) {
+    if (!supabaseClient) return;
+    const channel = supabaseClient.channel(`board-${locationKey}`);
+    channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_shifts", filter: `location=eq.${locationKey}` }, handleRealtimeShiftChange);
+    channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_trips" }, handleRealtimeTripChange);
+    channel.on("postgres_changes", { event: "*", schema: "public", table: "atlanta_drivers" }, handleRealtimeDriverChange);
+    channel.subscribe();
+  }
+
+  function setupDriverListRealtimeSync() {
+    if (!supabaseClient) return;
+    const channel = supabaseClient.channel("driverlist");
+    channel.on("postgres_changes", { event: "*", schema: "public", table: "atlanta_drivers" }, handleRealtimeDriverChange);
+    channel.subscribe();
+  }
+
   /* ---------------- rendering: driver list ---------------- */
 
   function refreshDriverDatalist() {
@@ -951,6 +1039,7 @@
   function initBoardPage(info) {
     state.activeLocation = info.key;
     loadAndRenderBoard();
+    setupRealtimeSync(info.key);
 
     $("#date-prev").addEventListener("click", () => setActiveDate(dateKey(addDays(keyToDate(state.activeDate), -1))));
     $("#date-next").addEventListener("click", () => setActiveDate(dateKey(addDays(keyToDate(state.activeDate), 1))));
@@ -1051,6 +1140,7 @@
 
   function initDriverListPage() {
     renderDriverList();
+    setupDriverListRealtimeSync();
     if ($("#btn-add-driver")) $("#btn-add-driver").addEventListener("click", () => openAddDriverModal(false));
     $("#driverlist-table-body").addEventListener("click", (e) => {
       const btn = e.target.closest('[data-action="edit-driver"]');
