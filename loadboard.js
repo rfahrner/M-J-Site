@@ -117,6 +117,7 @@
       tonu: !!row.tonu,
       highlighted: !!row.highlighted,
       shift_start: row.shiftStart || null,
+      shift_complete: !!row.shiftComplete,
     };
   }
   function shiftFromDbRow(dbRow) {
@@ -129,6 +130,10 @@
       tonu: !!dbRow.tonu,
       highlighted: !!dbRow.highlighted,
       shiftStart: dbRow.shift_start || "",
+      shiftComplete: !!dbRow.shift_complete,
+      selected: false, // local-only UI state, not persisted — see note in chat
+      createdAt: dbRow.created_at || null,
+      updatedAt: dbRow.updated_at || null,
       addedAt: null,
       trips: [blankTrip(), blankTrip(), blankTrip(), blankTrip(), blankTrip()],
     };
@@ -250,7 +255,8 @@
   function blankRow(driverId, driverNameText) {
     return {
       id: uid("row"), dbId: null, driverId: driverId || null, driverNameText: driverNameText || "",
-      proNumber: "", tonu: false, highlighted: false, shiftStart: "", addedAt: null,
+      proNumber: "", tonu: false, highlighted: false, shiftStart: "", shiftComplete: false, selected: false,
+      createdAt: null, updatedAt: null, addedAt: null,
       trips: [blankTrip(), blankTrip(), blankTrip(), blankTrip(), blankTrip()],
     };
   }
@@ -476,14 +482,23 @@
     const drv = row.driverId ? findDriver(row.driverId) : null;
     const displayName = drv ? drv.name : row.driverNameText;
     const tripsHtml = row.trips.map((t, i) => tripCellsHtml(row, t, i + 1)).join("");
-    return `<tr id="${row.id}" class="${row.tonu ? "is-tonu" : ""} ${row.highlighted ? "is-row-pinned" : ""} ${row.addedAt ? "is-new" : ""}">
-      <td class="pin pin-mark">
-        <button class="row-pin-btn ${row.highlighted ? "is-active" : ""}" data-action="toggle-row-pin" data-row="${row.id}" title="Highlight this row">★</button>
+    const rowClasses = [
+      row.tonu ? "is-tonu" : "",
+      row.highlighted ? "is-row-pinned" : "",
+      row.selected ? "is-row-selected" : "",
+      row.addedAt ? "is-new" : "",
+    ].join(" ");
+    return `<tr id="${row.id}" class="${rowClasses}">
+      <td class="pin pin-select">
+        <input type="checkbox" class="chk" data-action="toggle-row-select" data-row="${row.id}" ${row.selected ? "checked" : ""} title="Select">
+      </td>
+      <td class="pin pin-text">
+        <button class="text-btn" data-action="text-driver" data-row="${row.id}" title="Text this driver">Text</button>
       </td>
       <td class="pin pin-tonu">
         <button class="tonu-btn ${row.tonu ? "is-active" : ""}" data-action="toggle-tonu" data-row="${row.id}">TONU</button>
       </td>
-      <td class="pin pin-pro">
+      <td class="pin pin-pro${row.shiftComplete ? " shift-complete-tint" : ""}">
         <input class="cell-input" placeholder="PRO#" data-row="${row.id}" data-field="proNumber" value="${escapeHtml(row.proNumber)}">
       </td>
       <td class="pin pin-driver">
@@ -501,6 +516,8 @@
       ${tripsHtml}
     </tr>`;
   }
+
+
 
   function renderBoardChrome() {
     const loc = LOCATIONS.find((l) => l.key === state.activeLocation);
@@ -521,9 +538,11 @@
   // or once the driver list arrives and driver-linked cells need refreshing).
   function renderBoardTable() {
     const rows = getSheet(state.activeLocation, state.activeDate);
+    const displayRows = [...rows].sort((a, b) => (a.shiftComplete ? 1 : 0) - (b.shiftComplete ? 1 : 0)); // stable — completed shifts sink to the bottom, order preserved otherwise
     const thead = `<thead>
       <tr>
-        <th class="pin pin-mark" rowspan="2"></th>
+        <th class="pin pin-select" rowspan="2"></th>
+        <th class="pin pin-text" rowspan="2"></th>
         <th class="pin pin-tonu" rowspan="2">TONU</th>
         <th class="pin pin-pro" rowspan="2">PRO#</th>
         <th class="pin pin-driver" rowspan="2">Driver</th>
@@ -537,7 +556,7 @@
       </tr>
       <tr>${[1, 2, 3, 4, 5].map(tripSubheaderHtml).join("")}</tr>
     </thead>`;
-    const tbody = `<tbody>${rows.map(rowToHtml).join("")}</tbody>`;
+    const tbody = `<tbody>${displayRows.map(rowToHtml).join("")}</tbody>`;
 
     $("#board-table").innerHTML = thead + tbody;
     const emptyState = $("#board-empty-state");
@@ -610,10 +629,15 @@
     const domField = currentlyEditedField(existing.id, null);
     const stateKey = domField ? (SHIFT_FIELD_TO_STATE_KEY[domField] || domField) : null;
     const preserved = stateKey ? existing[stateKey] : undefined;
+    const wasComplete = existing.shiftComplete;
     const fresh = shiftFromDbRow(dbRow);
-    Object.assign(existing, fresh, { id: existing.id, trips: existing.trips, addedAt: existing.addedAt });
+    Object.assign(existing, fresh, { id: existing.id, trips: existing.trips, addedAt: existing.addedAt, selected: existing.selected });
     if (stateKey) existing[stateKey] = preserved; // don't clobber what the user is actively typing right now
-    recalcRowCalcCellsInPlace(existing.id);
+    if (wasComplete !== existing.shiftComplete) {
+      renderBoardTable(); // needs to move to the top/bottom — a single-row rebuild can't reposition it
+    } else {
+      recalcRowCalcCellsInPlace(existing.id);
+    }
   }
 
   function handleRealtimeTripChange(payload) {
@@ -733,12 +757,114 @@
     if (!found) return;
     found.row.highlighted = !found.row.highlighted;
     const tr = document.getElementById(rowId);
-    if (tr) {
-      tr.classList.toggle("is-row-pinned", found.row.highlighted);
-      const btn = tr.querySelector('[data-action="toggle-row-pin"]');
-      if (btn) btn.classList.toggle("is-active", found.row.highlighted);
-    }
+    if (tr) tr.classList.toggle("is-row-pinned", found.row.highlighted);
     saveShiftNow(found.row);
+  }
+
+  // Local-only, not persisted to Supabase — this is a per-user selection
+  // state for a bulk-action feature that hasn't been designed yet.
+  function toggleRowSelected(rowId) {
+    const found = findRowAnywhere(rowId);
+    if (!found) return;
+    found.row.selected = !found.row.selected;
+    const tr = document.getElementById(rowId);
+    if (tr) tr.classList.toggle("is-row-selected", found.row.selected);
+  }
+
+  function toggleShiftComplete(rowId) {
+    const found = findRowAnywhere(rowId);
+    if (!found) return;
+    found.row.shiftComplete = !found.row.shiftComplete;
+    saveShiftNow(found.row);
+    renderBoardTable(); // full redraw needed — this row needs to move to the bottom (or back up)
+  }
+
+  function textDriverForRow(rowId) {
+    const found = findRowAnywhere(rowId);
+    if (!found) return;
+    const drv = found.row.driverId ? findDriver(found.row.driverId) : null;
+    textDriverPhone(drv ? drv.phone : null);
+  }
+
+  function textDriverPhone(rawPhone) {
+    const digits = (rawPhone || "").replace(/\D/g, "");
+    if (!digits) {
+      setDriverSyncStatus("No phone number on file for this driver.", "error");
+      return;
+    }
+    const withCountryCode = digits.length === 10 ? "1" + digits : digits;
+    const a = document.createElement("a");
+    a.href = `mailto:${withCountryCode}@textbetter.com`;
+    a.click();
+  }
+
+  /* ---------------- right-click context menu ---------------- */
+
+  function closeContextMenu() {
+    const existing = document.getElementById("row-context-menu");
+    if (existing) existing.remove();
+  }
+
+  function openRowContextMenu(rowId, x, y) {
+    closeContextMenu();
+    const found = findRowAnywhere(rowId);
+    if (!found) return;
+    const row = found.row;
+    const items = [
+      { label: row.tonu ? "Un-TONU" : "TONU", action: () => toggleTonu(rowId) },
+      { label: row.highlighted ? "Remove Highlight" : "Highlight", action: () => toggleRowPin(rowId) },
+      { label: row.shiftComplete ? "Mark Shift Incomplete" : "Shift Complete", action: () => toggleShiftComplete(rowId) },
+      { label: "Load History", action: () => openLoadHistoryModal(rowId) },
+      { label: "Text Now", action: () => textDriverForRow(rowId) },
+    ];
+    const menu = document.createElement("div");
+    menu.className = "row-context-menu";
+    menu.id = "row-context-menu";
+    menu.innerHTML = items.map((it, i) => `<button class="context-menu-item" data-idx="${i}">${it.label}</button>`).join("");
+    document.body.appendChild(menu);
+    menu.style.left = x + "px";
+    menu.style.top = y + "px";
+    const rect = menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) menu.style.left = Math.max(4, window.innerWidth - rect.width - 8) + "px";
+    if (rect.bottom > window.innerHeight) menu.style.top = Math.max(4, window.innerHeight - rect.height - 8) + "px";
+    $all(".context-menu-item", menu).forEach((btn, i) => {
+      btn.addEventListener("click", () => { items[i].action(); closeContextMenu(); });
+    });
+  }
+
+  /* ---------------- Load History (basic — full change-attribution needs a user-identity system, flagged separately) ---------------- */
+
+  async function openLoadHistoryModal(rowId) {
+    const found = findRowAnywhere(rowId);
+    const modal = $("#modal-load-history");
+    if (!found || !modal) return;
+    const row = found.row;
+    const drv = row.driverId ? findDriver(row.driverId) : null;
+    const body = $("#lh-body");
+    if (body) body.innerHTML = `<div class="subtext">Loading…</div>`;
+    modal.classList.remove("hidden");
+
+    let createdAt = row.createdAt, updatedAt = row.updatedAt;
+    if (supabaseClient && row.dbId) {
+      try {
+        const { data, error } = await supabaseClient.from(SHIFTS_TABLE).select("created_at, updated_at").eq("id", row.dbId);
+        if (!error && data && data[0]) {
+          createdAt = data[0].created_at;
+          updatedAt = data[0].updated_at;
+          row.createdAt = createdAt;
+          row.updatedAt = updatedAt;
+        }
+      } catch (e) { /* fall back to cached timestamps below */ }
+    }
+    if (!body) return;
+    const fmt = (v) => (v ? new Date(v).toLocaleString() : "—");
+    body.innerHTML = `
+      <div class="field"><label>PRO#</label><div class="static-text">${escapeHtml(row.proNumber || "—")}</div></div>
+      <div class="field"><label>Driver</label><div class="static-text">${escapeHtml(drv ? drv.name : (row.driverNameText || "—"))}</div></div>
+      <div class="field"><label>Created</label><div class="static-text">${fmt(createdAt)}</div></div>
+      <div class="field"><label>Last Updated</label><div class="static-text">${fmt(updatedAt)}</div></div>
+      <div class="calc-note" style="margin-top:12px;">Detailed field-by-field history — who changed what, and when — isn't tracked yet. That needs a real user-identity system first (nobody logs in currently), which is a bigger separate feature. This is what's available for now.</div>
+    `;
   }
 
   /* ---------------- highlighting ---------------- */
@@ -1080,8 +1206,14 @@
     boardTable.addEventListener("click", (e) => {
       const tonuBtn = e.target.closest('[data-action="toggle-tonu"]');
       if (tonuBtn) toggleTonu(tonuBtn.dataset.row);
-      const pinBtn = e.target.closest('[data-action="toggle-row-pin"]');
-      if (pinBtn) toggleRowPin(pinBtn.dataset.row);
+      const textBtn = e.target.closest('[data-action="text-driver"]');
+      if (textBtn) textDriverForRow(textBtn.dataset.row);
+    });
+    boardTable.addEventListener("contextmenu", (e) => {
+      const tr = e.target.closest("tr");
+      if (!tr || !tr.id) return; // header row has no id — let the browser's normal menu show there
+      e.preventDefault();
+      openRowContextMenu(tr.id, e.clientX, e.clientY);
     });
     boardTable.addEventListener("input", (e) => {
       const t = e.target;
@@ -1122,6 +1254,10 @@
     });
     boardTable.addEventListener("change", (e) => {
       const t = e.target;
+      if (t.dataset.action === "toggle-row-select") {
+        toggleRowSelected(t.dataset.row);
+        return;
+      }
       if (t.type === "checkbox" && t.dataset.trip) {
         const found = findRowAnywhere(t.dataset.row);
         if (!found) return;
@@ -1134,6 +1270,18 @@
         }
       }
     });
+
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest("#row-context-menu")) closeContextMenu();
+    });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeContextMenu(); });
+    document.addEventListener("scroll", closeContextMenu, true);
+
+    if ($("#modal-load-history")) {
+      on("lh-close", "click", () => $("#modal-load-history").classList.add("hidden"));
+      on("lh-close-btn", "click", () => $("#modal-load-history").classList.add("hidden"));
+      $("#modal-load-history").addEventListener("click", (e) => { if (e.target.id === "modal-load-history") $("#modal-load-history").classList.add("hidden"); });
+    }
 
     setInterval(checkMidnightRollover, 60 * 1000);
   }
