@@ -16,11 +16,58 @@
     <div class="tabs" id="tabs"></div>
   </div>
 
-  <div class="placeholder">
-    <h2>Accounting</h2>
-    <p>This tab will pull straight from the load board &mdash; billing, load numbers, and the rest of the math &mdash; once we build it out next.</p>
+  <div id="driverlist-view" class="panel">
+    <div class="toolbar" style="padding-left:0;padding-right:0;border-bottom:none;">
+      <div class="toolbar-left">
+        <h1 style="margin-top:0;">Accounting</h1>
+        <div class="subtext">Loads land here automatically when marked Shift Complete on any board. Cost/Revenue Level, status, and Total Carrier Pay are editable per load.</div>
+      </div>
+      <div class="toolbar-actions" style="align-items:center; gap:8px;">
+        <label for="fsc-rate-input" style="font-size:12.5px; font-weight:700;">Current FSC Rate</label>
+        <input type="number" id="fsc-rate-input" step="0.01" min="0" style="width:80px; padding:6px 8px; border:1px solid var(--slate-500); border-radius:var(--radius-sm);">
+        <button class="btn" id="btn-save-fsc">Save FSC Rate</button>
+      </div>
+    </div>
+    <div class="location-tabs" id="acct-location-tabs">
+      <button type="button" class="location-tab" data-location="atlanta">Atlanta</button>
+      <button type="button" class="location-tab" data-location="buildingc">Building C</button>
+      <button type="button" class="location-tab" data-location="delaware">Delaware</button>
+      <button type="button" class="location-tab" data-location="houston">Houston</button>
+    </div>
+    <div class="date-nav" style="position:relative; padding: 0 0 14px 0;">
+      <button id="date-prev" title="Previous day">&lsaquo;</button>
+      <input type="date" id="date-input" readonly>
+      <button id="date-next" title="Next day">&rsaquo;</button>
+      <button id="date-today" class="today-pill">Today</button>
+      <button type="button" class="btn btn-ghost" id="acct-show-all" style="margin-left:8px;">Show All Days</button>
+      <div id="date-dropdown" class="date-dropdown hidden"></div>
+    </div>
+    <div id="driver-sync-status" class="hidden"></div>
+    <div class="driverlist-scroll">
+      <table class="driverlist" id="accounting-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Aljex #</th>
+            <th>Driver</th>
+            <th>MC</th>
+            <th>Cost Level</th>
+            <th>Revenue Level</th>
+            <th>Total Miles</th>
+            <th>Total Stops</th>
+            <th>Total Cost</th>
+            <th>Total Revenue</th>
+            <th>FSC Payment</th>
+            <th>Total Carrier Pay</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="accounting-table-body"></tbody>
+      </table>
+    </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="loadboard.js" defer></script>
 </body>
 </html>

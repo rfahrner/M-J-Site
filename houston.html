@@ -30,6 +30,8 @@
         <div id="date-dropdown" class="date-dropdown hidden"></div>
       </div>
       <div class="toolbar-actions">
+        <button class="btn btn-ghost" id="btn-complete-selected">Complete Selected</button>
+        <button class="btn btn-ghost" id="btn-text-selected">Text Selected</button>
         <button class="btn btn-ghost" id="btn-add-driver">+ Add Driver</button>
         <button class="btn" id="btn-add-load">+ Add Load</button>
       </div>
@@ -157,6 +159,39 @@
       <div class="modal-body" id="lh-body"></div>
       <div class="modal-footer">
         <button class="btn btn-ghost" id="lh-close-btn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= Text Group modal (reused for "Text Selected") ================= -->
+  <div class="overlay hidden" id="modal-text-group">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Text Selected Drivers</h3>
+        <button class="modal-close" id="tg-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="tg-setup-step" data-selected-group="">
+          <div class="field hidden" id="tg-group-tabs-wrap">
+            <label>Group (by rating)</label>
+            <div id="tg-group-tabs" class="tg-group-tabs"></div>
+          </div>
+          <div class="field">
+            <label for="tg-message">Message</label>
+            <textarea id="tg-message" rows="5" placeholder="Type the message to send…"></textarea>
+          </div>
+          <div id="tg-error" class="form-error hidden"></div>
+        </div>
+        <div id="tg-progress-step" class="hidden">
+          <div id="tg-progress-body"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="tg-cancel">Cancel</button>
+        <button class="btn" id="tg-start">Start</button>
+        <button class="btn hidden" id="tg-open-batch">Open in Outlook</button>
+        <button class="btn hidden" id="tg-confirm-sent">Sent — Next Batch</button>
+        <button class="btn hidden" id="tg-finish">Done</button>
       </div>
     </div>
   </div>

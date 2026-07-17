@@ -121,6 +121,8 @@
       highlighted: !!row.highlighted,
       shift_start: row.shiftStart || null,
       shift_complete: !!row.shiftComplete,
+      shift_complete_at: row.shiftCompleteAt || null,
+      rate: row.rate === "" || row.rate == null ? null : Number(row.rate),
     };
   }
   function shiftFromDbRow(dbRow) {
@@ -134,6 +136,8 @@
       highlighted: !!dbRow.highlighted,
       shiftStart: dbRow.shift_start || "",
       shiftComplete: !!dbRow.shift_complete,
+      shiftCompleteAt: dbRow.shift_complete_at || null,
+      rate: dbRow.rate != null ? String(dbRow.rate) : "",
       selected: false, // local-only UI state, not persisted — see note in chat
       createdAt: dbRow.created_at || null,
       updatedAt: dbRow.updated_at || null,
@@ -280,7 +284,7 @@
   function blankRow(driverId, driverNameText) {
     return {
       id: uid("row"), dbId: null, driverId: driverId || null, driverNameText: driverNameText || "",
-      proNumber: "", tonu: false, highlighted: false, shiftStart: "", shiftComplete: false, selected: false,
+      proNumber: "", tonu: false, highlighted: false, shiftStart: "", shiftComplete: false, shiftCompleteAt: null, rate: "", selected: false,
       createdAt: null, updatedAt: null, addedAt: null,
       cellSnapshot: "", mcSnapshot: "", emailSnapshot: "", dispatcherPhoneSnapshot: "", ratingSnapshot: "",
       trips: [blankTrip(), blankTrip(), blankTrip(), blankTrip(), blankTrip()],
@@ -444,12 +448,14 @@
     tripSaveTimers.set(trip.id, setTimeout(() => saveTripNow(row, trip, tripNumber), SAVE_DEBOUNCE_MS));
   }
 
+  const CALC_FIELD_RETENTION_MS = 3 * 60 * 60 * 1000; // 3 hours
+
   function computeCalc(trip, row) {
     const dispatch = parseHHMM(trip.dispatchTime);
     const miles = parseFloat(trip.routeMiles);
     const out = { lastStopDepart: "", returnToDC: "", etaNextDispatch: "", hosLeft: "", tripCallTime: "" };
     if (dispatch != null) out.tripCallTime = minsToClock(dispatch - 30);
-    if (dispatch == null || isNaN(miles) || miles <= 0) return out;
+    if (dispatch == null || isNaN(miles) || miles <= 0) return applyCalcRetention(out, row);
 
     const leg = (miles / AVG_MPH) * 60;
     const lastStopDepartMin = dispatch + leg;
@@ -462,6 +468,19 @@
 
     const shiftStartMin = parseHHMM(row.shiftStart);
     if (shiftStartMin != null) out.hosLeft = minsToDuration(14 * 60 - (etaNextMin - shiftStartMin));
+    return applyCalcRetention(out, row);
+  }
+
+  // 3 hours after a shift is marked complete, these 4 fields specifically
+  // are cleared — they won't be needed again. Return to DC isn't on this
+  // list and stays visible.
+  function applyCalcRetention(out, row) {
+    if (row && row.shiftComplete && row.shiftCompleteAt) {
+      const elapsed = Date.now() - new Date(row.shiftCompleteAt).getTime();
+      if (elapsed > CALC_FIELD_RETENTION_MS) {
+        return { ...out, lastStopDepart: "", etaNextDispatch: "", hosLeft: "", tripCallTime: "" };
+      }
+    }
     return out;
   }
 
@@ -537,8 +556,8 @@
       <td class="pin pin-text">
         <button class="text-btn" data-action="text-driver" data-row="${row.id}" title="Text this driver">Text</button>
       </td>
-      <td class="pin pin-tonu">
-        <button class="tonu-btn ${row.tonu ? "is-active" : ""}" data-action="toggle-tonu" data-row="${row.id}">TONU</button>
+      <td class="pin pin-rate">
+        <input class="cell-input small" style="width:60px;" placeholder="Rate" data-row="${row.id}" data-field="rate" value="${escapeHtml(row.rate)}">
       </td>
       <td class="pin pin-pro${row.shiftComplete ? " shift-complete-tint" : ""}">
         <input class="cell-input" placeholder="PRO#" data-row="${row.id}" data-field="proNumber" value="${escapeHtml(row.proNumber)}">
@@ -659,9 +678,9 @@
     const displayRows = [...rows].sort((a, b) => (a.shiftComplete ? 1 : 0) - (b.shiftComplete ? 1 : 0)); // stable — completed shifts sink to the bottom, order preserved otherwise
     const thead = `<thead>
       <tr>
-        <th class="pin pin-select" rowspan="2"></th>
+        <th class="pin pin-select" rowspan="2"><input type="checkbox" class="chk" id="select-all-rows" title="Select all"></th>
         <th class="pin pin-text" rowspan="2"></th>
-        <th class="pin pin-tonu" rowspan="2">TONU</th>
+        <th class="pin pin-rate" rowspan="2">Rate</th>
         <th class="pin pin-pro" rowspan="2">PRO#</th>
         <th class="pin pin-driver" rowspan="2">Driver</th>
         <th class="col-cell" rowspan="2">Cell</th>
@@ -674,7 +693,9 @@
       </tr>
       <tr>${[1, 2, 3, 4, 5].map(tripSubheaderHtml).join("")}</tr>
     </thead>`;
-    const tbody = `<tbody>${displayRows.map(rowToHtml).join("")}</tbody>`;
+    const totalCols = 5 + 6 + 5 * TRIP_SUBCOLS.length;
+    const addRowHtml = `<tr class="quick-add-row"><td colspan="${totalCols}"><button type="button" class="quick-add-btn" id="btn-quick-add-row">+ Add Row</button></td></tr>`;
+    const tbody = `<tbody>${displayRows.map(rowToHtml).join("")}${addRowHtml}</tbody>`;
 
     $("#board-table").innerHTML = thead + tbody;
     const emptyState = $("#board-empty-state");
@@ -694,6 +715,20 @@
     await ensureSheetLoaded(state.activeLocation, state.activeDate);
     if (myToken !== boardRenderToken) return; // superseded by a newer navigation
     renderBoardTable();
+  }
+
+  function updateDriverLinkedCellsInPlace(rowId) {
+    const found = findRowAnywhere(rowId);
+    const tr = document.getElementById(rowId);
+    if (!found || !tr) return;
+    const row = found.row;
+    const drv = row.driverId ? findDriver(row.driverId) : null;
+    const setText = (selector, val) => { const el = tr.querySelector(selector); if (el) el.textContent = val; };
+    setText(".col-cell .static-text", pick(drv && drv.phone, row.cellSnapshot));
+    setText(".col-dispatcherPhone .static-text", pick(drv && drv.dispatcherPhone, row.dispatcherPhoneSnapshot));
+    setText(".col-email .static-text", pick(drv && drv.email, row.emailSnapshot));
+    setText(".col-mc .static-text", pick(drv && drv.mc, row.mcSnapshot));
+    setText(".col-rating .static-text", pick(drv && drv.rating, row.ratingSnapshot));
   }
 
   function recalcRowCalcCellsInPlace(rowId) {
@@ -894,11 +929,67 @@
     if (tr) tr.classList.toggle("is-row-selected", found.row.selected);
   }
 
+  function selectAllRows(checked) {
+    const rows = getSheet(state.activeLocation, state.activeDate);
+    rows.forEach((row) => {
+      row.selected = checked;
+      const tr = document.getElementById(row.id);
+      if (tr) {
+        tr.classList.toggle("is-row-selected", checked);
+        const chk = tr.querySelector('[data-action="toggle-row-select"]');
+        if (chk) chk.checked = checked;
+      }
+    });
+  }
+
+  async function completeSelectedRows() {
+    const rows = getSheet(state.activeLocation, state.activeDate).filter((r) => r.selected && !r.shiftComplete);
+    if (!rows.length) { setDriverSyncStatus("No selected loads need completing — either nothing's checked, or they're already complete.", "error"); return; }
+    for (const row of rows) {
+      row.shiftComplete = true;
+      row.shiftCompleteAt = new Date().toISOString();
+      await saveShiftNow(row); // must finish first — sendShiftToAccounting needs row.dbId to be set
+      sendShiftToAccounting(row, state.activeLocation, state.activeDate).catch((e) => console.error("sendShiftToAccounting threw:", e));
+    }
+    renderBoardTable();
+  }
+
+  function openTextSelectedModal() {
+    const rows = getSheet(state.activeLocation, state.activeDate).filter((r) => r.selected);
+    if (!rows.length) { setDriverSyncStatus("Nothing's checked yet — select some loads first.", "error"); return; }
+    const modal = $("#modal-text-group");
+    if (!modal) return;
+    groupTextState = null;
+    $("#tg-group-tabs-wrap").classList.add("hidden"); // no group to pick — the checkboxes already picked them
+    $("#tg-message").value = "";
+    $("#tg-setup-step").classList.remove("hidden");
+    $("#tg-progress-step").classList.add("hidden");
+    $("#tg-error").classList.add("hidden");
+    modal.classList.remove("hidden");
+    modal.dataset.mode = "selected-rows";
+  }
+
+  function startTextSelected() {
+    const message = $("#tg-message").value.trim();
+    const errEl = $("#tg-error");
+    if (!message) { errEl.textContent = "Write a message first."; errEl.classList.remove("hidden"); return; }
+    const rows = getSheet(state.activeLocation, state.activeDate).filter((r) => r.selected);
+    const members = rows.map((r) => {
+      const drv = r.driverId ? findDriver(r.driverId) : null;
+      return { name: drv ? drv.name : (r.driverNameText || "Unnamed"), phone: drv ? drv.phone : "" };
+    });
+    beginTextBatchFlow(members, "Selected Loads", message);
+  }
+
   function toggleShiftComplete(rowId) {
     const found = findRowAnywhere(rowId);
     if (!found) return;
     found.row.shiftComplete = !found.row.shiftComplete;
+    found.row.shiftCompleteAt = found.row.shiftComplete ? new Date().toISOString() : null;
     saveShiftNow(found.row);
+    if (found.row.shiftComplete) {
+      sendShiftToAccounting(found.row, state.activeLocation, state.activeDate).catch((e) => console.error("sendShiftToAccounting threw:", e));
+    }
     renderBoardTable(); // full redraw needed — this row needs to move to the bottom (or back up)
   }
 
@@ -946,6 +1037,8 @@
     const modal = $("#modal-text-group");
     if (!modal) return;
     groupTextState = null;
+    if ($("#tg-group-tabs-wrap")) $("#tg-group-tabs-wrap").classList.remove("hidden");
+    modal.dataset.mode = "rating-group";
     const groups = availableRatingGroups();
     const tabsEl = $("#tg-group-tabs");
     if (tabsEl) {
@@ -967,6 +1060,28 @@
     $("#tg-setup-step").dataset.selectedGroup = groupKey;
   }
 
+  function beginTextBatchFlow(members, label, message) {
+    const errEl = $("#tg-error");
+    const withPhone = [];
+    const skipped = [];
+    members.forEach((d) => { (formatTextAddress(d.phone) ? withPhone : skipped).push(d); });
+
+    if (withPhone.length === 0) {
+      errEl.textContent = `No one in ${label} has a phone number on file.`;
+      errEl.classList.remove("hidden");
+      return;
+    }
+    errEl.classList.add("hidden");
+
+    const batches = [];
+    for (let i = 0; i < withPhone.length; i += GROUP_BATCH_SIZE) batches.push(withPhone.slice(i, i + GROUP_BATCH_SIZE));
+
+    groupTextState = { groupKey: label, message, batches, batchIndex: 0, skipped, totalSent: 0 };
+    $("#tg-setup-step").classList.add("hidden");
+    $("#tg-progress-step").classList.remove("hidden");
+    renderGroupTextProgress();
+  }
+
   function startGroupTexting() {
     const groupKey = $("#tg-setup-step").dataset.selectedGroup;
     const message = $("#tg-message").value.trim();
@@ -976,23 +1091,7 @@
     errEl.classList.add("hidden");
 
     const members = driversForLocation(state.driverListTab || "atlanta").filter((d) => driverGroupKey(d) === groupKey);
-    const withPhone = [];
-    const skipped = [];
-    members.forEach((d) => { (formatTextAddress(d.phone) ? withPhone : skipped).push(d); });
-
-    if (withPhone.length === 0) {
-      errEl.textContent = `No one in Group ${groupKey} has a phone number on file.`;
-      errEl.classList.remove("hidden");
-      return;
-    }
-
-    const batches = [];
-    for (let i = 0; i < withPhone.length; i += GROUP_BATCH_SIZE) batches.push(withPhone.slice(i, i + GROUP_BATCH_SIZE));
-
-    groupTextState = { groupKey, message, batches, batchIndex: 0, skipped, totalSent: 0 };
-    $("#tg-setup-step").classList.add("hidden");
-    $("#tg-progress-step").classList.remove("hidden");
-    renderGroupTextProgress();
+    beginTextBatchFlow(members, `Group ${groupKey}`, message);
   }
 
   function renderGroupTextProgress() {
@@ -1325,6 +1424,15 @@
     box.classList.remove("hidden");
   }
 
+  function quickAddBlankRow() {
+    const row = blankRow(null, "");
+    row.addedAt = Date.now();
+    getSheet(state.activeLocation, state.activeDate).push(row);
+    renderBoardTable();
+    const input = document.querySelector(`#${row.id} input[data-field="driverName"]`);
+    if (input) input.focus();
+  }
+
   async function submitAddLoad() {
     const nameField = $("#al-driver-input");
     const name = nameField.value.trim();
@@ -1434,6 +1542,19 @@
 
     if ($("#btn-add-driver")) $("#btn-add-driver").addEventListener("click", () => openAddDriverModal(false));
     if ($("#btn-add-load")) $("#btn-add-load").addEventListener("click", () => openAddLoadModal());
+    if ($("#btn-complete-selected")) $("#btn-complete-selected").addEventListener("click", completeSelectedRows);
+    if ($("#btn-text-selected")) $("#btn-text-selected").addEventListener("click", openTextSelectedModal);
+
+    if ($("#modal-text-group")) {
+      on("tg-close", "click", () => $("#modal-text-group").classList.add("hidden"));
+      on("tg-cancel", "click", () => $("#modal-text-group").classList.add("hidden"));
+      on("tg-start", "click", startTextSelected);
+      on("tg-open-batch", "click", openCurrentGroupBatch);
+      on("tg-confirm-sent", "click", confirmGroupBatchSent);
+      on("tg-finish", "click", () => $("#modal-text-group").classList.add("hidden"));
+      $("#modal-text-group").addEventListener("click", (e) => { if (e.target.id === "modal-text-group") $("#modal-text-group").classList.add("hidden"); });
+    }
+
 
     if ($("#btn-columns") && $("#columns-panel")) {
       $("#columns-panel").innerHTML = buildColumnsPanelHtml();
@@ -1464,10 +1585,9 @@
 
     const boardTable = $("#board-table");
     boardTable.addEventListener("click", (e) => {
-      const tonuBtn = e.target.closest('[data-action="toggle-tonu"]');
-      if (tonuBtn) toggleTonu(tonuBtn.dataset.row);
       const textBtn = e.target.closest('[data-action="text-driver"]');
       if (textBtn) textDriverForRow(textBtn.dataset.row);
+      if (e.target.id === "btn-quick-add-row") quickAddBlankRow();
     });
     boardTable.addEventListener("contextmenu", (e) => {
       const tr = e.target.closest("tr");
@@ -1488,12 +1608,17 @@
         scheduleShiftSave(found.row);
         return;
       }
+      if (t.dataset.field === "rate") {
+        found.row.rate = t.value;
+        scheduleShiftSave(found.row);
+        return;
+      }
       if (t.dataset.field === "driverName") {
         found.row.driverNameText = t.value;
         found.row.driverId = null;
         const match = driversForLocation(state.activeLocation || "atlanta").find((d) => d.name.toLowerCase() === t.value.trim().toLowerCase());
         if (match) found.row.driverId = match.id;
-        recalcRowCalcCellsInPlace(rowId);
+        updateDriverLinkedCellsInPlace(rowId);
         scheduleShiftSave(found.row);
         return;
       }
@@ -1514,6 +1639,10 @@
     });
     boardTable.addEventListener("change", (e) => {
       const t = e.target;
+      if (t.id === "select-all-rows") {
+        selectAllRows(t.checked);
+        return;
+      }
       if (t.dataset.action === "toggle-row-select") {
         toggleRowSelected(t.dataset.row);
         return;
@@ -1710,7 +1839,9 @@
     return `<tr id="${row.id}" class="${rowClasses}">
       <td class="pin pin-select"><input type="checkbox" class="chk" data-action="toggle-row-select" data-row="${row.id}" ${row.selected ? "checked" : ""} title="Select"></td>
       <td class="pin pin-text"><button class="text-btn" data-action="text-driver" data-row="${row.id}" title="Text this driver">Text</button></td>
-      <td class="pin pin-tonu"><button class="tonu-btn ${row.tonu ? "is-active" : ""}" data-action="toggle-tonu" data-row="${row.id}">TONU</button></td>
+      <td class="pin pin-rate">
+        <input class="cell-input small" style="width:60px;" placeholder="Rate" data-row="${row.id}" data-field="normalRate" value="${escapeHtml(row.normalRate)}">
+      </td>
       <td class="pin pin-pro${row.shiftComplete ? " shift-complete-tint" : ""}">
         <input class="cell-input" placeholder="Aljex#" data-row="${row.id}" data-field="aljexNumber" value="${escapeHtml(row.aljexNumber)}">
       </td>
@@ -1729,7 +1860,6 @@
       <td class="col-hou-ttt"><input class="cell-input small" style="width:60px;" data-row="${row.id}" data-field="ttt" value="${escapeHtml(row.ttt)}"></td>
       <td class="col-hou-comments"><input class="cell-input" data-row="${row.id}" data-field="comments" value="${escapeHtml(row.comments)}"></td>
       <td class="col-hou-timeout"><input class="cell-input" data-row="${row.id}" data-field="timeOutRemarks" value="${escapeHtml(row.timeOutRemarks)}"></td>
-      <td class="col-hou-rate"><input class="cell-input small" style="width:80px;" data-row="${row.id}" data-field="normalRate" value="${escapeHtml(row.normalRate)}"></td>
     </tr>`;
   }
 
@@ -1737,9 +1867,9 @@
     const rows = getHoustonSheet(state.activeDate);
     const displayRows = [...rows].sort((a, b) => (a.shiftComplete ? 1 : 0) - (b.shiftComplete ? 1 : 0));
     const thead = `<thead><tr>
-      <th class="pin pin-select"></th>
+      <th class="pin pin-select"><input type="checkbox" class="chk" id="select-all-rows" title="Select all"></th>
       <th class="pin pin-text"></th>
-      <th class="pin pin-tonu">TONU</th>
+      <th class="pin pin-rate">Rate</th>
       <th class="pin pin-pro">Aljex #</th>
       <th class="pin pin-driver">Driver</th>
       <th class="col-cell">Phone</th>
@@ -1752,9 +1882,10 @@
       <th class="col-hou-ttt">TTT</th>
       <th class="col-hou-comments">Comments</th>
       <th class="col-hou-timeout">Time Out / Remarks</th>
-      <th class="col-hou-rate">Normal Rate</th>
     </tr></thead>`;
-    const tbody = `<tbody>${displayRows.map(houstonRowToHtml).join("")}</tbody>`;
+    const totalHoustonCols = 15;
+    const addRowHtml = `<tr class="quick-add-row"><td colspan="${totalHoustonCols}"><button type="button" class="quick-add-btn" id="btn-quick-add-row">+ Add Row</button></td></tr>`;
+    const tbody = `<tbody>${displayRows.map(houstonRowToHtml).join("")}${addRowHtml}</tbody>`;
     $("#board-table").innerHTML = thead + tbody;
     const emptyState = $("#board-empty-state");
     if (emptyState) emptyState.classList.toggle("hidden", rows.length > 0);
@@ -1794,6 +1925,62 @@
     const tr = document.getElementById(rowId);
     if (tr) tr.classList.toggle("is-row-selected", found.row.selected);
   }
+
+  function selectAllHoustonRows(checked) {
+    const rows = getHoustonSheet(state.activeDate);
+    rows.forEach((row) => {
+      row.selected = checked;
+      const tr = document.getElementById(row.id);
+      if (tr) {
+        tr.classList.toggle("is-row-selected", checked);
+        const chk = tr.querySelector('[data-action="toggle-row-select"]');
+        if (chk) chk.checked = checked;
+      }
+    });
+  }
+
+  function completeSelectedHoustonRows() {
+    const rows = getHoustonSheet(state.activeDate).filter((r) => r.selected && !r.shiftComplete);
+    if (!rows.length) { setDriverSyncStatus("No selected loads need completing — either nothing's checked, or they're already complete.", "error"); return; }
+    rows.forEach((row) => { row.shiftComplete = true; saveHoustonRowNow(row); });
+    renderHoustonBoardTable();
+  }
+
+  function openTextSelectedHoustonModal() {
+    const rows = getHoustonSheet(state.activeDate).filter((r) => r.selected);
+    if (!rows.length) { setDriverSyncStatus("Nothing's checked yet — select some loads first.", "error"); return; }
+    const modal = $("#modal-text-group");
+    if (!modal) return;
+    groupTextState = null;
+    if ($("#tg-group-tabs-wrap")) $("#tg-group-tabs-wrap").classList.add("hidden");
+    $("#tg-message").value = "";
+    $("#tg-setup-step").classList.remove("hidden");
+    $("#tg-progress-step").classList.add("hidden");
+    $("#tg-error").classList.add("hidden");
+    modal.classList.remove("hidden");
+  }
+
+  function startTextSelectedHouston() {
+    const message = $("#tg-message").value.trim();
+    const errEl = $("#tg-error");
+    if (!message) { errEl.textContent = "Write a message first."; errEl.classList.remove("hidden"); return; }
+    const rows = getHoustonSheet(state.activeDate).filter((r) => r.selected);
+    const members = rows.map((r) => {
+      const drv = r.driverId ? findDriver(r.driverId) : null;
+      return { name: drv ? drv.name : (r.driverName || "Unnamed"), phone: drv ? drv.phone : r.driverPhone };
+    });
+    beginTextBatchFlow(members, "Selected Loads", message);
+  }
+
+  function quickAddHoustonBlankRow() {
+    const row = blankHoustonRow(null, "");
+    row.addedAt = Date.now();
+    getHoustonSheet(state.activeDate).push(row);
+    renderHoustonBoardTable();
+    const input = document.querySelector(`#${row.id} input[data-field="driverName"]`);
+    if (input) input.focus();
+  }
+
   function toggleHoustonShiftComplete(rowId) {
     const found = findHoustonRowAnywhere(rowId);
     if (!found) return;
@@ -1958,6 +2145,18 @@
 
     if ($("#btn-add-driver")) $("#btn-add-driver").addEventListener("click", () => openAddDriverModal(false));
     if ($("#btn-add-load")) $("#btn-add-load").addEventListener("click", () => openAddLoadModal());
+    if ($("#btn-complete-selected")) $("#btn-complete-selected").addEventListener("click", completeSelectedHoustonRows);
+    if ($("#btn-text-selected")) $("#btn-text-selected").addEventListener("click", openTextSelectedHoustonModal);
+
+    if ($("#modal-text-group")) {
+      on("tg-close", "click", () => $("#modal-text-group").classList.add("hidden"));
+      on("tg-cancel", "click", () => $("#modal-text-group").classList.add("hidden"));
+      on("tg-start", "click", startTextSelectedHouston);
+      on("tg-open-batch", "click", openCurrentGroupBatch);
+      on("tg-confirm-sent", "click", confirmGroupBatchSent);
+      on("tg-finish", "click", () => $("#modal-text-group").classList.add("hidden"));
+      $("#modal-text-group").addEventListener("click", (e) => { if (e.target.id === "modal-text-group") $("#modal-text-group").classList.add("hidden"); });
+    }
 
     if ($("#modal-load-history")) {
       on("lh-close", "click", () => $("#modal-load-history").classList.add("hidden"));
@@ -1967,10 +2166,9 @@
 
     const boardTable = $("#board-table");
     boardTable.addEventListener("click", (e) => {
-      const tonuBtn = e.target.closest('[data-action="toggle-tonu"]');
-      if (tonuBtn) toggleHoustonTonu(tonuBtn.dataset.row);
       const textBtn = e.target.closest('[data-action="text-driver"]');
       if (textBtn) textHoustonDriverForRow(textBtn.dataset.row);
+      if (e.target.id === "btn-quick-add-row") quickAddHoustonBlankRow();
     });
     boardTable.addEventListener("contextmenu", (e) => {
       const tr = e.target.closest("tr");
@@ -1979,6 +2177,7 @@
       openHoustonRowContextMenu(tr.id, e.clientX, e.clientY);
     });
     boardTable.addEventListener("change", (e) => {
+      if (e.target.id === "select-all-rows") { selectAllHoustonRows(e.target.checked); return; }
       if (e.target.dataset.action === "toggle-row-select") toggleHoustonRowSelected(e.target.dataset.row);
     });
     boardTable.addEventListener("input", (e) => {
@@ -2001,6 +2200,16 @@
       found.row.driverId = null;
       const match = driversForLocation("houston").find((d) => d.name.toLowerCase() === t.value.trim().toLowerCase());
       if (match) found.row.driverId = match.id;
+      const tr = document.getElementById(found.row.id);
+      if (tr) {
+        const drv = found.row.driverId ? findDriver(found.row.driverId) : null;
+        const setText = (selector, val) => { const el = tr.querySelector(selector); if (el) el.textContent = val; };
+        setText(".col-cell .static-text", pick(drv && drv.phone, found.row.driverPhone));
+        setText(".col-dispatcherPhone .static-text", pick(drv && drv.dispatcherPhone, found.row.dispatcherPhone));
+        setText(".col-hou-carrier .static-text", pick(drv && drv.carrier, found.row.carrier));
+        setText(".col-mc .static-text", pick(drv && drv.mc, found.row.mc));
+        setText(".col-rating .static-text", pick(drv && drv.rating, found.row.rating));
+      }
       scheduleHoustonRowSave(found.row);
     });
 
@@ -2015,6 +2224,339 @@
     loadAndRenderHoustonBoard();
   }
 
+  /* ================================================================
+     Accounting calculation engine — ported from a Python reference
+     implementation validated against 6 real rows from the actual
+     accounting workbook (every field matched exactly). Pricing tiers
+     and settings are fetched live from Supabase so they stay editable
+     without a code change.
+     ================================================================ */
+
+  const ACCOUNTING_TABLE = "loads_accounting";
+  const ACCOUNTING_ROUTES_TABLE = "loads_accounting_routes";
+  let pricingTiers = null;   // { cost_1: [{min,max,rate}...], revenue_2: [...], ... }
+  let pricingSettings = null; // { fsc_rate: 5.06, cost_1_per_mile: 2.4, ... }
+
+  async function loadPricingData() {
+    if (!supabaseClient) return;
+    const [{ data: tiers, error: tErr }, { data: settings, error: sErr }] = await Promise.all([
+      supabaseClient.from("pricing_tiers").select("*"),
+      supabaseClient.from("pricing_settings").select("*"),
+    ]);
+    if (tErr) { console.error("Failed to load pricing_tiers:", tErr); return; }
+    if (sErr) { console.error("Failed to load pricing_settings:", sErr); return; }
+    pricingTiers = {};
+    (tiers || []).forEach((t) => {
+      (pricingTiers[t.table_name] = pricingTiers[t.table_name] || []).push(
+        { min: Number(t.min_miles), max: Number(t.max_miles), rate: Number(t.rate) }
+      );
+    });
+    pricingSettings = {};
+    (settings || []).forEach((s) => { pricingSettings[s.key] = Number(s.value); });
+  }
+
+  function tierLookup(tableRows, miles) {
+    if (!tableRows) return null;
+    const hit = tableRows.find((t) => miles >= t.min && miles <= t.max);
+    return hit ? hit.rate : null;
+  }
+
+  // Pure function — same logic as the validated Python reference. Takes
+  // pricing data as an argument (rather than reading module state) so it
+  // stays independently testable.
+  function calcRoute({ costLevel, revenueLevel, miles, stops, contractRate }, tiers, settings) {
+    const costTable = tiers[`cost_${costLevel}`];
+    const costPerMile = settings[`cost_${costLevel}_per_mile`] || 0;
+    let linehaulCost = tierLookup(costTable, miles);
+    if (linehaulCost === null) linehaulCost = miles * costPerMile;
+
+    const freeStops = settings.stop_charge_free_stops || 0;
+    const stopChargeRate = settings.stop_charge_per_stop || 0;
+    const stopChargeRevRate = settings.stop_charge_revenue_per_stop || 0;
+    const stopCharge = stops > freeStops ? (stops - freeStops) * stopChargeRate : 0;
+    const stopChargeRevenue = stops * stopChargeRevRate;
+    const totalCost = linehaulCost + stopCharge;
+
+    let revenue;
+    if (revenueLevel === 4) {
+      revenue = (contractRate || 0) / (settings.market_revenue_divisor || 1);
+    } else {
+      const revTable = tiers[`revenue_${revenueLevel}`];
+      const revPerMile = settings[`revenue_${revenueLevel}_per_mile`] || 0;
+      revenue = tierLookup(revTable, miles);
+      if (revenue === null) revenue = revPerMile ? miles * revPerMile : 0;
+    }
+    const totalRevenue = revenue + stopChargeRevenue;
+
+    const round2 = (n) => Math.round(n * 100) / 100;
+    return {
+      linehaulCost: round2(linehaulCost), stopCharge: round2(stopCharge),
+      stopChargeRevenue: round2(stopChargeRevenue), totalCost: round2(totalCost),
+      revenue: round2(revenue), totalRevenue: round2(totalRevenue),
+    };
+  }
+
+  function calcFscPayment(fscRate, totalMiles, settings) {
+    const mult = settings.fsc_multiplier || 0;
+    return Math.round(fscRate * mult * totalMiles * 100) / 100;
+  }
+
+  async function sendShiftToAccounting(row, locationKey, dKey) {
+    if (!supabaseClient || !row.dbId) return;
+    if (!pricingTiers || !pricingSettings) await loadPricingData();
+    if (!pricingTiers || !pricingSettings) return; // pricing data unavailable — don't guess, skip silently (logged below)
+
+    const drv = row.driverId ? findDriver(row.driverId) : null;
+    const routes = row.trips
+      .map((t, i) => ({ trip: t, num: i + 1 }))
+      .filter(({ trip }) => trip.routeId && String(trip.routeId).trim());
+
+    const costLevel = 1, revenueLevel = 1; // sensible default — editable afterward on the Accounting page
+    let totalCost = 0, totalRevenue = 0, totalMiles = 0, totalStops = 0;
+    const routeRecords = routes.map(({ trip, num }) => {
+      const miles = Number(trip.routeMiles) || 0;
+      const stops = Number(trip.stopCount) || 0;
+      const calc = calcRoute({ costLevel, revenueLevel, miles, stops, contractRate: null }, pricingTiers, pricingSettings);
+      totalCost += calc.totalCost; totalRevenue += calc.totalRevenue; totalMiles += miles; totalStops += stops;
+      return {
+        route_number: num, route_id: trip.routeId || null, trip_id: trip.tripId || null, trailer: trip.trailerOut || null,
+        miles, stops, linehaul_cost: calc.linehaulCost, stop_charge: calc.stopCharge, total_cost: calc.totalCost,
+        revenue: calc.revenue, stop_charge_revenue: calc.stopChargeRevenue, total_revenue: calc.totalRevenue,
+      };
+    });
+    const fscRate = pricingSettings.fsc_rate || 0;
+    const fscPayment = calcFscPayment(fscRate, totalMiles, pricingSettings);
+
+    const accountingRow = {
+      source_shift_id: row.dbId, location: locationKey, shift_date: dKey,
+      aljex_load_number: row.proNumber || null,
+      mc_dot: drv ? (drv.mc || null) : null,
+      driver_id: row.driverId ? Number(row.driverId) : null,
+      driver_name_text: drv ? drv.name : (row.driverNameText || null),
+      driver_cell: drv ? (drv.phone || null) : null,
+      carrier_email: drv ? (drv.email || null) : null,
+      cost_level: costLevel, revenue_level: revenueLevel,
+      total_carrier_pay: totalCost, // starting suggestion — editable afterward
+      fsc_rate_snapshot: fscRate, fsc_payment: fscPayment,
+      total_cost: Math.round(totalCost * 100) / 100, total_revenue: Math.round(totalRevenue * 100) / 100,
+      total_miles: totalMiles, total_stops: totalStops,
+    };
+
+    try {
+      const { data: existing } = await supabaseClient.from(ACCOUNTING_TABLE).select("id").eq("source_shift_id", row.dbId);
+      let accountingId;
+      if (existing && existing.length) {
+        accountingId = existing[0].id;
+        await supabaseClient.from(ACCOUNTING_TABLE).update(accountingRow).eq("id", accountingId);
+        await supabaseClient.from(ACCOUNTING_ROUTES_TABLE).delete().eq("accounting_id", accountingId);
+      } else {
+        const { data: inserted, error } = await supabaseClient.from(ACCOUNTING_TABLE).insert(accountingRow).select();
+        if (error) throw error;
+        accountingId = inserted[0].id;
+      }
+      if (routeRecords.length) {
+        await supabaseClient.from(ACCOUNTING_ROUTES_TABLE).insert(routeRecords.map((r) => ({ ...r, accounting_id: accountingId })));
+      }
+      await supabaseClient.from(SHIFTS_TABLE).update({ sent_to_accounting: true }).eq("id", row.dbId);
+    } catch (e) {
+      console.error("sendShiftToAccounting failed:", e);
+      setDriverSyncStatus(`Marked complete, but couldn't send to Accounting (${e.message || e}).`, "error");
+    }
+  }
+
+  /* ---------------- Accounting page ---------------- */
+
+  let accountingRecords = [];
+
+  async function loadAccountingRecords() {
+    if (!supabaseClient) return;
+    const { data, error } = await supabaseClient.from(ACCOUNTING_TABLE).select("*");
+    if (error) { console.error("Failed to load accounting records:", error); setDriverSyncStatus(`Couldn't load Accounting (${error.message}).`, "error"); return; }
+    accountingRecords = (data || []).sort((a, b) => (a.shift_date < b.shift_date ? 1 : -1));
+  }
+
+  function fmtMoney(n) { return n == null ? "—" : `$${Number(n).toFixed(2)}`; }
+
+  function accountingRowHtml(rec) {
+    const levelOptions = (selected) => [1, 2, 3, 4].map((n) => `<option value="${n}" ${n === selected ? "selected" : ""}>${n}${n === 4 ? " (Market)" : ""}</option>`).join("");
+    const statusOptions = ["active", "released"].map((s) => `<option value="${s}" ${s === rec.status ? "selected" : ""}>${s[0].toUpperCase() + s.slice(1)}</option>`).join("");
+    return `<tr id="acct-${rec.id}">
+      <td>${escapeHtml(rec.shift_date)}</td>
+      <td>${escapeHtml(rec.aljex_load_number || "—")}</td>
+      <td>${escapeHtml(rec.driver_name_text || "—")}</td>
+      <td>${escapeHtml(rec.mc_dot || "—")}</td>
+      <td><select class="cell-input" data-action="acct-cost-level" data-id="${rec.id}">${levelOptions(rec.cost_level)}</select></td>
+      <td><select class="cell-input" data-action="acct-revenue-level" data-id="${rec.id}">${levelOptions(rec.revenue_level)}</select></td>
+      <td>${escapeHtml(rec.total_miles != null ? String(rec.total_miles) : "—")}</td>
+      <td>${escapeHtml(rec.total_stops != null ? String(rec.total_stops) : "—")}</td>
+      <td>${fmtMoney(rec.total_cost)}</td>
+      <td>${fmtMoney(rec.total_revenue)}</td>
+      <td>${fmtMoney(rec.fsc_payment)}</td>
+      <td><input class="cell-input" style="width:90px;" data-action="acct-carrier-pay" data-id="${rec.id}" value="${rec.total_carrier_pay != null ? rec.total_carrier_pay : ""}"></td>
+      <td><select class="cell-input" data-action="acct-status" data-id="${rec.id}">${statusOptions}</select></td>
+    </tr>`;
+  }
+
+  function renderAccountingTable() {
+    const body = $("#accounting-table-body");
+    if (!body) return;
+    const loc = state.acctLocationTab || "atlanta";
+    let filtered = accountingRecords.filter((r) => r.location === loc);
+    if (state.acctDateFilter) filtered = filtered.filter((r) => r.shift_date === state.acctDateFilter);
+    body.innerHTML = filtered.length
+      ? filtered.map(accountingRowHtml).join("")
+      : `<tr><td colspan="13" class="subtext" style="padding:16px;">No completed loads ${state.acctDateFilter ? "for this day" : ""} here yet — mark a shift complete on the ${loc} board and it'll show up here.</td></tr>`;
+  }
+
+  function switchAcctLocationTab(loc) {
+    state.acctLocationTab = loc;
+    $all(".location-tab", $("#acct-location-tabs")).forEach((btn) => btn.classList.toggle("is-active", btn.dataset.location === loc));
+    renderAccountingTable();
+  }
+
+  function setAcctDateFilter(dKey) {
+    state.acctDateFilter = dKey;
+    state.activeDate = dKey; // reuses the shared calendar's "selected day" highlighting
+    renderAcctDateChrome();
+    renderAccountingTable();
+  }
+
+  async function recalcAccountingRecord(accountingId, patch) {
+    accountingId = Number(accountingId);
+    const rec = accountingRecords.find((r) => Number(r.id) === accountingId);
+    if (!rec) return;
+    Object.assign(rec, patch);
+    if (!pricingTiers || !pricingSettings) await loadPricingData();
+
+    const { data: routes, error } = await supabaseClient.from(ACCOUNTING_ROUTES_TABLE).select("*").eq("accounting_id", accountingId);
+    if (error) { console.error("Failed to load routes for recalc:", error); return; }
+
+    let totalCost = 0, totalRevenue = 0;
+    const routeUpdates = (routes || []).map((r) => {
+      const calc = calcRoute({ costLevel: rec.cost_level, revenueLevel: rec.revenue_level, miles: Number(r.miles) || 0, stops: Number(r.stops) || 0, contractRate: rec.contract_rate }, pricingTiers, pricingSettings);
+      totalCost += calc.totalCost; totalRevenue += calc.totalRevenue;
+      return { id: r.id, linehaul_cost: calc.linehaulCost, stop_charge: calc.stopCharge, total_cost: calc.totalCost, revenue: calc.revenue, stop_charge_revenue: calc.stopChargeRevenue, total_revenue: calc.totalRevenue };
+    });
+
+    rec.total_cost = Math.round(totalCost * 100) / 100;
+    rec.total_revenue = Math.round(totalRevenue * 100) / 100;
+
+    try {
+      await supabaseClient.from(ACCOUNTING_TABLE).update({ cost_level: rec.cost_level, revenue_level: rec.revenue_level, total_cost: rec.total_cost, total_revenue: rec.total_revenue }).eq("id", accountingId);
+      for (const ru of routeUpdates) {
+        await supabaseClient.from(ACCOUNTING_ROUTES_TABLE).update(ru).eq("id", ru.id);
+      }
+    } catch (e) {
+      console.error("recalcAccountingRecord failed:", e);
+      setDriverSyncStatus(`Couldn't save the recalculated totals (${e.message || e}).`, "error");
+    }
+    renderAccountingTable();
+  }
+
+  function renderAcctDateChrome() {
+    const input = $("#date-input");
+    if (!input) return;
+    input.value = state.activeDate || state.todayKey;
+    input.min = state.minDate;
+    input.max = state.maxDate;
+    if ($("#date-next")) $("#date-next").disabled = (state.activeDate || state.todayKey) >= state.maxDate;
+    if ($("#date-prev")) $("#date-prev").disabled = (state.activeDate || state.todayKey) <= state.minDate;
+  }
+
+  async function initAccountingPage() {
+    // Accounting looks back further than the boards do — override the
+    // shared min/max just for this page's calendar.
+    state.minDate = dateKey(addDays(todayDate(), -60));
+    state.maxDate = state.todayKey;
+    state.acctLocationTab = "atlanta";
+    state.acctDateFilter = null;
+
+    await loadPricingData();
+    if (pricingSettings && $("#fsc-rate-input")) $("#fsc-rate-input").value = pricingSettings.fsc_rate || "";
+    await loadAccountingRecords();
+    renderAccountingTable();
+    setupAccountingRealtimeSync();
+
+    if ($("#acct-location-tabs")) {
+      $("#acct-location-tabs").addEventListener("click", (e) => {
+        const btn = e.target.closest(".location-tab");
+        if (btn) switchAcctLocationTab(btn.dataset.location);
+      });
+      switchAcctLocationTab("atlanta");
+    }
+
+    on("acct-show-all", "click", () => setAcctDateFilter(null));
+    $("#date-prev").addEventListener("click", () => setAcctDateFilter(dateKey(addDays(keyToDate(state.activeDate || state.todayKey), -1))));
+    $("#date-next").addEventListener("click", () => setAcctDateFilter(dateKey(addDays(keyToDate(state.activeDate || state.todayKey), 1))));
+    $("#date-input").addEventListener("change", (e) => setAcctDateFilter(e.target.value));
+    $("#date-input").addEventListener("click", (e) => { e.preventDefault(); state.datesWithData = new Set(accountingRecords.filter((r) => r.location === state.acctLocationTab).map((r) => r.shift_date)); openDateDropdown(); });
+    $("#date-today").addEventListener("click", () => setAcctDateFilter(state.todayKey));
+    $("#date-dropdown").addEventListener("click", (e) => {
+      const btn = e.target.closest(".cal-cell[data-date]:not(:disabled)");
+      if (btn) { setAcctDateFilter(btn.dataset.date); closeDateDropdown(); }
+    });
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest("#date-dropdown") && !e.target.closest("#date-input")) closeDateDropdown();
+    });
+    if (!state.activeDate) state.activeDate = state.todayKey;
+    renderAcctDateChrome();
+
+    on("btn-save-fsc", "click", async () => {
+      const val = Number($("#fsc-rate-input").value);
+      if (!val || val <= 0) { setDriverSyncStatus("Enter a valid FSC rate first.", "error"); return; }
+      try {
+        await supabaseClient.from("pricing_settings").update({ value: val }).eq("key", "fsc_rate");
+        pricingSettings.fsc_rate = val;
+        setDriverSyncStatus("FSC rate saved — used for every load completed from now on.", "success");
+      } catch (e) {
+        setDriverSyncStatus(`Couldn't save FSC rate (${e.message || e}).`, "error");
+      }
+    });
+
+    const table = $("#accounting-table");
+    if (table) {
+      table.addEventListener("change", (e) => {
+        const t = e.target;
+        if (t.dataset.action === "acct-cost-level") recalcAccountingRecord(t.dataset.id, { cost_level: Number(t.value) });
+        else if (t.dataset.action === "acct-revenue-level") recalcAccountingRecord(t.dataset.id, { revenue_level: Number(t.value) });
+        else if (t.dataset.action === "acct-status") {
+          const rec = accountingRecords.find((r) => r.id == t.dataset.id);
+          if (!rec) return;
+          rec.status = t.value;
+          supabaseClient.from(ACCOUNTING_TABLE).update({ status: t.value }).eq("id", rec.id)
+            .catch((err) => setDriverSyncStatus(`Couldn't save status (${err.message || err}).`, "error"));
+        }
+      });
+      table.addEventListener("input", (e) => {
+        const t = e.target;
+        if (t.dataset.action === "acct-carrier-pay") {
+          const rec = accountingRecords.find((r) => r.id == t.dataset.id);
+          if (!rec) return;
+          const val = t.value === "" ? null : Number(t.value);
+          rec.total_carrier_pay = val;
+          clearTimeout(t._saveTimer);
+          t._saveTimer = setTimeout(() => {
+            supabaseClient.from(ACCOUNTING_TABLE).update({ total_carrier_pay: val }).eq("id", rec.id)
+              .catch((err) => setDriverSyncStatus(`Couldn't save carrier pay (${err.message || err}).`, "error"));
+          }, SAVE_DEBOUNCE_MS);
+        }
+      });
+    }
+  }
+
+  function setupAccountingRealtimeSync() {
+    if (!supabaseClient) return;
+    const channel = supabaseClient.channel("accounting");
+    channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_accounting" }, (payload) => {
+      if (payload.eventType === "DELETE") return;
+      const idx = accountingRecords.findIndex((r) => r.id === payload.new.id);
+      if (idx !== -1) accountingRecords[idx] = payload.new; else accountingRecords.push(payload.new);
+      accountingRecords.sort((a, b) => (a.shift_date < b.shift_date ? 1 : -1));
+      renderAccountingTable();
+    });
+    channel.subscribe();
+  }
+
   /* ---------------- init ---------------- */
 
   function init() {
@@ -2025,6 +2567,7 @@
       if (info.type === "board") initBoardPage(info);
       else if (info.type === "houston-board") initHoustonBoardPage(info);
       else if (info.type === "driverlist") initDriverListPage();
+      else if (info.type === "accounting") initAccountingPage();
     } catch (e) { console.error("page-specific init failed:", e); }
     loadDriversFromSupabase().catch((e) => console.error("loadDriversFromSupabase() failed:", e));
   }

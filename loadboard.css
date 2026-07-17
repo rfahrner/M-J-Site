@@ -147,7 +147,7 @@ button {
   gap: 6px;
 }
 
-.date-nav button {
+.date-nav button:not(.today-pill) {
   border: 1px solid var(--line);
   background: #fff;
   border-radius: var(--radius-sm);
@@ -156,7 +156,7 @@ button {
   font-size: 14px;
   color: var(--navy-950);
 }
-.date-nav button:hover { background: var(--slate-100); }
+.date-nav button:not(.today-pill):hover { background: var(--slate-100); }
 .date-nav button:disabled { opacity: 0.35; cursor: not-allowed; }
 
 .date-nav input[type="date"] {
@@ -176,6 +176,8 @@ button {
   font-size: 11px;
   font-weight: 700;
   color: var(--slate-700);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .toolbar-actions { display: flex; gap: 8px; position: relative; }
@@ -326,7 +328,7 @@ table.board tbody tr:hover td { background: #f0f5ff; }
 }
 .pin-select { left: 0; width: 26px; min-width: 26px; text-align: center; }
 .pin-text { left: 26px; width: 46px; min-width: 46px; }
-.pin-tonu { left: 72px; width: 62px; min-width: 62px; }
+.pin-rate { left: 72px; width: 62px; min-width: 62px; }
 .pin-pro { left: 134px; width: 92px; min-width: 92px; }
 .pin-driver { left: 226px; width: 160px; min-width: 160px; }
 table.board tbody tr:nth-child(even) td.pin { background: #fbfcfe; }
@@ -340,6 +342,22 @@ td.pin-pro.shift-complete-tint {
   background: rgba(34, 197, 94, 0.18) !important;
 }
 table.board tbody tr:hover td.pin-pro.shift-complete-tint { background: rgba(34, 197, 94, 0.28) !important; }
+
+tr.quick-add-row td { background: var(--slate-100) !important; padding: 0; text-align: left; border-top: 1px dashed var(--line); }
+.quick-add-btn {
+  position: sticky;
+  left: 6px;
+  border: 1px dashed var(--slate-500);
+  background: #fff;
+  color: var(--navy-950);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 18px;
+  border-radius: var(--radius-sm);
+  width: auto;
+  margin: 6px;
+}
+.quick-add-btn:hover { background: var(--slate-100); border-style: solid; }
 
 .text-btn {
   border: 1px solid var(--slate-500);
@@ -579,8 +597,8 @@ td.trip-tint-b {
 /* Highlight is now a context-menu action rather than a dedicated button —
    the amber tint itself is defined above (tr.is-row-pinned). */
 
-tr.is-tonu td:not(.pin-tonu) .cell-input,
-tr.is-tonu td:not(.pin-tonu) span.static-text {
+tr.is-tonu td:not(.pin-select):not(.pin-text) .cell-input,
+tr.is-tonu td:not(.pin-select):not(.pin-text) span.static-text {
   text-decoration: line-through;
   color: var(--slate-500);
 }
