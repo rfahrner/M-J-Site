@@ -22,11 +22,12 @@
         <h1 id="sheet-title">Building C Spreadsheet</h1>
         <div class="subtext" id="sheet-subtext"></div>
       </div>
-      <div class="date-nav">
+      <div class="date-nav" style="position:relative;">
         <button id="date-prev" title="Previous day">&lsaquo;</button>
-        <input type="date" id="date-input">
+        <input type="date" id="date-input" readonly>
         <button id="date-next" title="Next day">&rsaquo;</button>
         <button id="date-today" class="today-pill">Today</button>
+        <div id="date-dropdown" class="date-dropdown hidden"></div>
       </div>
       <div class="toolbar-actions">
         <button class="btn btn-ghost" id="btn-columns">Columns</button>

@@ -24,13 +24,20 @@
       </div>
       <div class="toolbar-actions">
         <button class="btn" id="btn-add-driver">+ Add Driver</button>
+        <button class="btn btn-ghost" id="btn-text-group">Text Group</button>
       </div>
     </div>
     <div id="driver-sync-status" class="hidden"></div>
+    <div class="location-tabs" id="driverlist-location-tabs">
+      <button type="button" class="location-tab" data-location="atlanta">Atlanta &amp; Building C</button>
+      <button type="button" class="location-tab" data-location="delaware">Delaware</button>
+      <button type="button" class="location-tab" data-location="houston">Houston</button>
+    </div>
     <div class="driverlist-scroll">
       <table class="driverlist">
         <thead>
           <tr>
+            <th></th>
             <th class="sortable" data-sort="name">Name<span class="sort-arrow"></span></th>
             <th>Phone</th>
             <th class="sortable" data-sort="mc">MC #<span class="sort-arrow"></span></th>
@@ -51,7 +58,7 @@
   <div class="overlay hidden" id="modal-add-driver">
     <div class="modal">
       <div class="modal-header">
-        <h3>Add Driver</h3>
+        <h3 id="ad-modal-title">Add Driver</h3>
         <button class="modal-close" id="ad-close">&times;</button>
       </div>
       <div class="modal-body">
@@ -114,6 +121,39 @@
       <div class="modal-footer">
         <button class="btn btn-ghost" id="ad-cancel">Cancel</button>
         <button class="btn" id="ad-submit">Add</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= Text Group modal ================= -->
+  <div class="overlay hidden" id="modal-text-group">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Text a Group</h3>
+        <button class="modal-close" id="tg-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="tg-setup-step" data-selected-group="">
+          <div class="field">
+            <label>Group (by rating)</label>
+            <div id="tg-group-tabs" class="tg-group-tabs"></div>
+          </div>
+          <div class="field">
+            <label for="tg-message">Message</label>
+            <textarea id="tg-message" rows="5" placeholder="Type the message to send to this group…"></textarea>
+          </div>
+          <div id="tg-error" class="form-error hidden"></div>
+        </div>
+        <div id="tg-progress-step" class="hidden">
+          <div id="tg-progress-body"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="tg-cancel">Cancel</button>
+        <button class="btn" id="tg-start">Start</button>
+        <button class="btn hidden" id="tg-open-batch">Open in Outlook</button>
+        <button class="btn hidden" id="tg-confirm-sent">Sent — Next Batch</button>
+        <button class="btn hidden" id="tg-finish">Done</button>
       </div>
     </div>
   </div>
