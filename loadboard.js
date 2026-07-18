@@ -165,6 +165,7 @@
       dispatch_time: trip.dispatchTime || null,
       salvage: !!trip.salvage,
       backhaul: !!trip.backhaul,
+      minimized: !!trip.minimized,
     };
   }
   function tripFromDbRow(dbRow) {
@@ -179,6 +180,7 @@
       dispatchTime: dbRow.dispatch_time || "",
       salvage: !!dbRow.salvage,
       backhaul: !!dbRow.backhaul,
+      minimized: !!dbRow.minimized,
     };
   }
 
@@ -279,7 +281,7 @@
   }
 
   function blankTrip() {
-    return { id: uid("trip"), dbId: null, routeId: "", tripId: "", trailerOut: "", routeMiles: "", stopCount: "", dispatchTime: "", salvage: false, backhaul: false };
+    return { id: uid("trip"), dbId: null, routeId: "", tripId: "", trailerOut: "", routeMiles: "", stopCount: "", dispatchTime: "", salvage: false, backhaul: false, minimized: false };
   }
   function blankRow(driverId, driverNameText) {
     return {
@@ -287,7 +289,7 @@
       proNumber: "", tonu: false, highlighted: false, shiftStart: "", shiftComplete: false, shiftCompleteAt: null, rate: "", selected: false,
       createdAt: null, updatedAt: null, addedAt: null,
       cellSnapshot: "", mcSnapshot: "", emailSnapshot: "", dispatcherPhoneSnapshot: "", ratingSnapshot: "",
-      trips: [blankTrip(), blankTrip(), blankTrip(), blankTrip(), blankTrip()],
+      trips: [blankTrip()],
     };
   }
   function sheetKey(locationKey, dKey) { return `${locationKey}__${dKey}`; }
@@ -329,10 +331,9 @@
       } else if (tripRows) {
         rows.forEach((row, i) => {
           const dbId = shiftRows[i].id;
-          const mine = tripRows.filter((t) => t.shift_id === dbId);
-          const byNumber = {};
-          mine.forEach((t) => { byNumber[t.trip_number] = tripFromDbRow(t); });
-          row.trips = [1, 2, 3, 4, 5].map((n) => byNumber[n] || blankTrip());
+          const mine = tripRows.filter((t) => t.shift_id === dbId).sort((a, b) => a.trip_number - b.trip_number);
+          row.trips = mine.map(tripFromDbRow);
+          if (!row.trips.length || row.trips[row.trips.length - 1].minimized) row.trips.push(blankTrip());
         });
       }
     }
@@ -439,6 +440,19 @@
     }
   }
 
+  async function completeTripAndStartNew(rowId) {
+    const found = findRowAnywhere(rowId);
+    if (!found) return;
+    const row = found.row;
+    const activeTrip = row.trips[row.trips.length - 1];
+    if (!activeTrip || !String(activeTrip.routeId || "").trim()) return;
+    activeTrip.minimized = true;
+    const tripNumber = row.trips.length;
+    await saveTripNow(row, activeTrip, tripNumber);
+    row.trips.push(blankTrip());
+    renderBoardTable();
+  }
+
   function scheduleShiftSave(row) {
     clearTimeout(shiftSaveTimers.get(row.id));
     shiftSaveTimers.set(row.id, setTimeout(() => saveShiftNow(row), SAVE_DEBOUNCE_MS));
@@ -447,6 +461,7 @@
     clearTimeout(tripSaveTimers.get(trip.id));
     tripSaveTimers.set(trip.id, setTimeout(() => saveTripNow(row, trip, tripNumber), SAVE_DEBOUNCE_MS));
   }
+
 
   const CALC_FIELD_RETENTION_MS = 3 * 60 * 60 * 1000; // 3 hours
 
@@ -503,19 +518,20 @@
 
   /* ---------------- rendering: board ---------------- */
 
-  function tripBlockHeaderHtml(n) {
-    return `<th class="group-trip${n % 2 === 0 ? " group-trip-alt" : ""}" colspan="${TRIP_SUBCOLS.length}">Trip #${n}</th>`;
-  }
-  function tripSubheaderHtml(n) {
-    const altClass = n % 2 === 0 ? " trip-tint-b" : "";
-    return TRIP_SUBCOLS.map((c, i) => `<th class="${i === 0 ? "trip-block-start" : ""}${altClass} col-${c.key}">${c.label}</th>`).join("");
+  function activeTripHeaderHtml() {
+    return TRIP_SUBCOLS.map((c, i) => `<th class="${i === 0 ? "trip-block-start" : ""} col-${c.key}">${c.label}</th>`).join("");
   }
 
-  function tripCellsHtml(row, trip, n) {
+  function completedTripChipsHtml(row) {
+    const done = row.trips.filter((t) => t.minimized);
+    if (!done.length) return `<span class="subtext" style="font-size:11px;">—</span>`;
+    return done.map((t) => `<button type="button" class="trip-chip" data-open-pro="${row.id}" data-trip="${t.id}">${escapeHtml(t.routeId || t.tripId || "Trip")} ✓</button>`).join(" ");
+  }
+
+  function tripCellsHtml(row, trip) {
     const calc = computeCalc(trip, row);
-    const altClass = n % 2 === 0 ? " trip-tint-b" : "";
     return TRIP_SUBCOLS.map((col, i) => {
-      const cls = (i === 0 ? "trip-block-start" : "") + altClass + ` col-${col.key}`;
+      const cls = (i === 0 ? "trip-block-start" : "") + ` col-${col.key}`;
       if (col.type === "checkbox") {
         const on = !!trip[col.key];
         const flagCls = col.key === "salvage" ? "flag-yes" : "flag-backhaul";
@@ -528,8 +544,11 @@
       }
       const placeholder = col.type === "time" ? "--:--" : "";
       const inputmode = col.inputmode ? ` inputmode="${col.inputmode}"` : "";
-      return `<td class="${cls}"><input class="cell-input ${col.small ? "small" : ""}" type="text" placeholder="${placeholder}"${inputmode}
-        data-row="${row.id}" data-trip="${trip.id}" data-field="${col.key}" value="${escapeHtml(trip[col.key])}"></td>`;
+      const linkBtn = (col.key === "tripId" && trip.tripId)
+        ? `<button type="button" class="cell-link-btn" data-open-pro="${row.id}" data-trip="${trip.id}" title="Open trip details">↗</button>` : "";
+      return `<td class="${cls}"><div class="cell-with-link">
+        <input class="cell-input ${col.small ? "small" : ""}" type="text" placeholder="${placeholder}"${inputmode}
+        data-row="${row.id}" data-trip="${trip.id}" data-field="${col.key}" value="${escapeHtml(trip[col.key])}">${linkBtn}</div></td>`;
     }).join("");
   }
 
@@ -542,13 +561,15 @@
   function rowToHtml(row) {
     const drv = row.driverId ? findDriver(row.driverId) : null;
     const displayName = drv ? drv.name : row.driverNameText;
-    const tripsHtml = row.trips.map((t, i) => tripCellsHtml(row, t, i + 1)).join("");
+    const activeTrip = row.trips[row.trips.length - 1];
+    const canComplete = activeTrip && String(activeTrip.routeId || "").trim();
     const rowClasses = [
       row.tonu ? "is-tonu" : "",
       row.highlighted ? "is-row-pinned" : "",
       row.selected ? "is-row-selected" : "",
       row.addedAt ? "is-new" : "",
     ].join(" ");
+    const proLinkBtn = row.proNumber ? `<button type="button" class="cell-link-btn" data-open-pro="${row.id}" title="Open load details">↗</button>` : "";
     return `<tr id="${row.id}" class="${rowClasses}">
       <td class="pin pin-select">
         <input type="checkbox" class="chk" data-action="toggle-row-select" data-row="${row.id}" ${row.selected ? "checked" : ""} title="Select">
@@ -560,7 +581,9 @@
         <input class="cell-input small" style="width:60px;" placeholder="Rate" data-row="${row.id}" data-field="rate" value="${escapeHtml(row.rate)}">
       </td>
       <td class="pin pin-pro${row.shiftComplete ? " shift-complete-tint" : ""}">
-        <input class="cell-input" placeholder="PRO#" data-row="${row.id}" data-field="proNumber" value="${escapeHtml(row.proNumber)}">
+        <div class="cell-with-link">
+          <input class="cell-input" placeholder="PRO#" data-row="${row.id}" data-field="proNumber" value="${escapeHtml(row.proNumber)}">${proLinkBtn}
+        </div>
       </td>
       <td class="pin pin-driver">
         <div class="driver-name-wrap">
@@ -574,7 +597,11 @@
       <td class="col-mc"><span class="static-text">${escapeHtml(pick(drv && drv.mc, row.mcSnapshot))}</span></td>
       <td class="col-rating"><span class="static-text">${escapeHtml(pick(drv && drv.rating, row.ratingSnapshot))}</span></td>
       <td class="col-shiftStart"><input class="cell-input small" style="width:60px;" placeholder="--:--" data-row="${row.id}" data-field="shiftStart" value="${escapeHtml(row.shiftStart)}"></td>
-      ${tripsHtml}
+      <td class="col-completed-trips">${completedTripChipsHtml(row)}</td>
+      ${activeTrip ? tripCellsHtml(row, activeTrip) : ""}
+      <td class="col-trip-actions">
+        <button type="button" class="complete-trip-btn" data-action="complete-trip" data-row="${row.id}" ${canComplete ? "" : "disabled"} title="${canComplete ? "Complete this trip and start a new one" : "Enter a Route ID first"}">Complete &amp; New</button>
+      </td>
     </tr>`;
   }
 
@@ -689,11 +716,13 @@
         <th class="col-mc" rowspan="2">MC #</th>
         <th class="col-rating" rowspan="2">Rating</th>
         <th class="col-shiftStart" rowspan="2">Shift Start</th>
-        ${[1, 2, 3, 4, 5].map(tripBlockHeaderHtml).join("")}
+        <th class="col-completed-trips" rowspan="2">Completed Trips</th>
+        <th class="group-trip" colspan="${TRIP_SUBCOLS.length}">Current Trip</th>
+        <th class="col-trip-actions" rowspan="2"></th>
       </tr>
-      <tr>${[1, 2, 3, 4, 5].map(tripSubheaderHtml).join("")}</tr>
+      <tr>${activeTripHeaderHtml()}</tr>
     </thead>`;
-    const totalCols = 5 + 6 + 5 * TRIP_SUBCOLS.length;
+    const totalCols = 5 + 6 + 2 + TRIP_SUBCOLS.length;
     const addRowHtml = `<tr class="quick-add-row"><td colspan="${totalCols}"><button type="button" class="quick-add-btn" id="btn-quick-add-row"><span class="quick-add-btn-label">+ Add Row</span></button></td></tr>`;
     const tbody = `<tbody>${displayRows.map(rowToHtml).join("")}${addRowHtml}</tbody>`;
 
@@ -1184,7 +1213,7 @@
       { label: row.tonu ? "Un-TONU" : "TONU", action: () => toggleTonu(rowId) },
       { label: row.highlighted ? "Remove Highlight" : "Highlight", action: () => toggleRowPin(rowId) },
       { label: row.shiftComplete ? "Mark Shift Incomplete" : "Shift Complete", action: () => toggleShiftComplete(rowId) },
-      { label: "Load History", action: () => openLoadHistoryModal(rowId) },
+      { label: "Load Details", action: () => openLoadDetailsModal(rowId) },
       { label: "Text Now", action: () => textDriverForRow(rowId) },
       { label: "Delete", action: () => deleteRow(rowId), danger: true },
     ];
@@ -1205,9 +1234,156 @@
 
   /* ---------------- Load History (basic — full change-attribution needs a user-identity system, flagged separately) ---------------- */
 
+  /* ---------------- Load Details modal (PRO#/Trip ID popup) ---------------- */
+
+  let loadDetailsState = null; // { rowId, activeTab, attachments, history }
+
+  async function openLoadDetailsModal(rowId, jumpToTripId, forceTab) {
+    const found = findRowAnywhere(rowId);
+    const modal = $("#modal-load-details");
+    if (!found || !modal) return;
+    const row = found.row;
+    loadDetailsState = {
+      rowId,
+      activeTab: forceTab || (jumpToTripId ? `trip-${jumpToTripId}` : "overview"),
+      attachments: [],
+      history: [],
+    };
+    $("#ld-title").textContent = `Load ${row.proNumber || "(no PRO# yet)"}`;
+    modal.classList.remove("hidden");
+    renderLoadDetailsTabs();
+
+    if (supabaseClient && row.dbId) {
+      const [{ data: attachments }, { data: history }] = await Promise.all([
+        supabaseClient.from("load_attachments").select("*").eq("shift_id", row.dbId),
+        supabaseClient.from("load_change_history").select("*").eq("shift_id", row.dbId),
+      ]).catch(() => [{ data: [] }, { data: [] }]);
+      loadDetailsState.attachments = attachments || [];
+      loadDetailsState.history = (history || []).sort((a, b) => (a.changed_at < b.changed_at ? 1 : -1));
+      renderLoadDetailsTabContent();
+    }
+  }
+
+  function closeLoadDetailsModal() {
+    $("#modal-load-details").classList.add("hidden");
+    loadDetailsState = null;
+  }
+
+  function loadDetailsTabs(row) {
+    return [
+      { key: "overview", label: "Overview" },
+      ...row.trips.map((t, i) => ({ key: `trip-${t.id}`, label: t.tripId || t.routeId || `Trip ${i + 1}` })),
+      { key: "images", label: "Trip Sheet Images" },
+      { key: "history", label: "Change History" },
+    ];
+  }
+
+  function renderLoadDetailsTabs() {
+    if (!loadDetailsState) return;
+    const found = findRowAnywhere(loadDetailsState.rowId);
+    if (!found) return;
+    const tabs = loadDetailsTabs(found.row);
+    $("#ld-tabs").innerHTML = tabs.map((t) =>
+      `<button type="button" class="ld-tab ${t.key === loadDetailsState.activeTab ? "is-active" : ""}" data-tab="${t.key}">${escapeHtml(t.label)}</button>`
+    ).join("");
+    renderLoadDetailsTabContent();
+  }
+
+  function renderLoadDetailsTabContent() {
+    if (!loadDetailsState) return;
+    const found = findRowAnywhere(loadDetailsState.rowId);
+    const body = $("#ld-tab-content");
+    if (!found || !body) return;
+    const row = found.row;
+    const tab = loadDetailsState.activeTab;
+    const drv = row.driverId ? findDriver(row.driverId) : null;
+
+    if (tab === "overview") {
+      body.innerHTML = `
+        <div class="field"><label>PRO#</label><div class="static-text">${escapeHtml(row.proNumber || "—")}</div></div>
+        <div class="field"><label>Driver</label><div class="static-text">${escapeHtml(drv ? drv.name : (row.driverNameText || "—"))}</div></div>
+        <div class="field"><label>Rate</label><div class="static-text">${escapeHtml(row.rate || "—")}</div></div>
+        <div class="field"><label>Status</label><div class="static-text">${row.shiftComplete ? "Complete" : "Active"}</div></div>
+        <div class="field"><label>Trips on this load</label><div class="static-text">${row.trips.length} (${row.trips.filter((t) => t.minimized).length} completed)</div></div>
+      `;
+    } else if (tab.startsWith("trip-")) {
+      const tripDbOrLocalId = tab.slice(5);
+      const trip = row.trips.find((t) => t.id === tripDbOrLocalId);
+      if (!trip) { body.innerHTML = `<div class="subtext">Trip not found.</div>`; return; }
+      body.innerHTML = `
+        <div class="field"><label>Route ID</label><div class="static-text">${escapeHtml(trip.routeId || "—")}</div></div>
+        <div class="field"><label>Trip ID</label><div class="static-text">${escapeHtml(trip.tripId || "—")}</div></div>
+        <div class="field"><label>Trailer #</label><div class="static-text">${escapeHtml(trip.trailerOut || "—")}</div></div>
+        <div class="field"><label>Route Miles</label><div class="static-text">${escapeHtml(trip.routeMiles || "—")}</div></div>
+        <div class="field"><label>Stops</label><div class="static-text">${escapeHtml(trip.stopCount || "—")}</div></div>
+        <div class="field"><label>Status</label><div class="static-text">${trip.minimized ? "Completed" : "Active"}</div></div>
+      `;
+    } else if (tab === "images") {
+      const gallery = loadDetailsState.attachments.length
+        ? loadDetailsState.attachments.map((a) => `
+            <div class="ld-image-item">
+              <img class="ld-image-thumb" src="${escapeHtml(a.publicUrl || "")}" alt="${escapeHtml(a.file_name)}">
+              <button type="button" class="ld-image-remove" data-remove-attachment="${a.id}" title="Remove">&times;</button>
+            </div>`).join("")
+        : `<div class="subtext">No trip sheet images uploaded yet.</div>`;
+      body.innerHTML = `
+        <input type="file" id="ld-file-input" accept="image/*" multiple>
+        <div class="ld-image-gallery" id="ld-image-gallery">${gallery}</div>
+      `;
+    } else if (tab === "history") {
+      const rows = loadDetailsState.history;
+      body.innerHTML = `
+        <div class="calc-note" style="margin-bottom:10px;">Shows what changed and when — there's no login system yet, so it can't show who made each change.</div>
+        <div class="ld-history-row"><div>When</div><div>Field</div><div>Was</div><div>Now</div></div>
+        ${rows.length ? rows.map((h) => `
+          <div class="ld-history-row">
+            <div>${new Date(h.changed_at).toLocaleString()}</div>
+            <div>${escapeHtml(h.field_name)}</div>
+            <div class="ld-history-old">${escapeHtml(h.old_value || "—")}</div>
+            <div class="ld-history-new">${escapeHtml(h.new_value || "—")}</div>
+          </div>`).join("") : `<div class="subtext" style="padding:10px 0;">No changes recorded yet.</div>`}
+      `;
+    }
+  }
+
+  async function uploadTripSheetImages(fileList) {
+    const found = findRowAnywhere(loadDetailsState.rowId);
+    if (!found || !supabaseClient) return;
+    const row = found.row;
+    if (!row.dbId) { setDriverSyncStatus("Save this load first (enter a driver or PRO#) before uploading images.", "error"); return; }
+    for (const file of fileList) {
+      const path = `${row.dbId}/${Date.now()}_${file.name}`;
+      try {
+        const { error: upErr } = await supabaseClient.storage.from("trip-sheets").upload(path, file);
+        if (upErr) throw upErr;
+        const { data: urlData } = supabaseClient.storage.from("trip-sheets").getPublicUrl(path);
+        const { data: inserted, error: insErr } = await supabaseClient.from("load_attachments")
+          .insert({ shift_id: row.dbId, file_path: path, file_name: file.name }).select();
+        if (insErr) throw insErr;
+        loadDetailsState.attachments.push({ ...inserted[0], publicUrl: urlData.publicUrl });
+      } catch (e) {
+        console.error("uploadTripSheetImages failed:", e);
+        setDriverSyncStatus(`Couldn't upload ${file.name} (${e.message || e}).`, "error");
+      }
+    }
+    renderLoadDetailsTabContent();
+  }
+
+  async function removeTripSheetImage(attachmentId) {
+    const att = loadDetailsState.attachments.find((a) => String(a.id) === String(attachmentId));
+    if (!att || !confirm(`Remove ${att.file_name}?`)) return;
+    try {
+      await supabaseClient.storage.from("trip-sheets").remove([att.file_path]);
+      await supabaseClient.from("load_attachments").delete().eq("id", att.id);
+      loadDetailsState.attachments = loadDetailsState.attachments.filter((a) => a.id !== att.id);
+      renderLoadDetailsTabContent();
+    } catch (e) {
+      setDriverSyncStatus(`Couldn't remove that image (${e.message || e}).`, "error");
+    }
+  }
+
   async function openLoadHistoryModal(rowId) {
     const found = findRowAnywhere(rowId);
-    const modal = $("#modal-load-history");
     if (!found || !modal) return;
     const row = found.row;
     const drv = row.driverId ? findDriver(row.driverId) : null;
@@ -1493,6 +1669,75 @@
 
   /* ---------------- midnight rollover (client-side stand-in, board pages only) ---------------- */
 
+  /* ---------------- "Available" list — session-only scratchpad, never saved, always today's ---------------- */
+
+  let availableRows = [];
+
+  function blankAvailableRow() {
+    return { id: uid("avail"), driverId: null, driverName: "" };
+  }
+
+  function availableRowHtml(row) {
+    const drv = row.driverId ? findDriver(row.driverId) : null;
+    const displayName = drv ? drv.name : row.driverName;
+    return `<tr id="${row.id}">
+      <td class="col-availDriver">
+        <input class="cell-input" list="driverNamesList" placeholder="Type driver name…" data-avail-row="${row.id}" value="${escapeHtml(displayName)}">
+      </td>
+      <td class="col-cell"><span class="static-text">${escapeHtml(drv && drv.phone ? drv.phone : "—")}</span></td>
+      <td class="col-dispatcherPhone"><span class="static-text">${escapeHtml(drv && drv.dispatcherPhone ? drv.dispatcherPhone : "—")}</span></td>
+      <td class="col-email"><span class="static-text">${escapeHtml(drv && drv.email ? drv.email : "—")}</span></td>
+      <td class="col-mc"><span class="static-text">${escapeHtml(drv && drv.mc ? drv.mc : "—")}</span></td>
+      <td class="col-rating"><span class="static-text">${escapeHtml(drv && drv.rating ? drv.rating : "—")}</span></td>
+      <td class="col-availRemove"><button type="button" class="available-remove-btn" data-avail-remove="${row.id}" title="Remove">&times;</button></td>
+    </tr>`;
+  }
+
+  function renderAvailableTable() {
+    const body = $("#available-table-body");
+    if (!body) return;
+    body.innerHTML = availableRows.map(availableRowHtml).join("");
+  }
+
+  function addAvailableRow() {
+    availableRows.push(blankAvailableRow());
+    renderAvailableTable();
+  }
+
+  function removeAvailableRow(rowId) {
+    availableRows = availableRows.filter((r) => r.id !== rowId);
+    renderAvailableTable();
+  }
+
+  function initAvailableSection() {
+    if (!$("#available-table-body")) return; // not every page has this section
+    availableRows = [blankAvailableRow()];
+    renderAvailableTable();
+
+    on("btn-available-add-row", "click", addAvailableRow);
+
+    const table = $("#available-table");
+    table.addEventListener("click", (e) => {
+      const rmBtn = e.target.closest("[data-avail-remove]");
+      if (rmBtn) removeAvailableRow(rmBtn.dataset.availRemove);
+    });
+    table.addEventListener("input", (e) => {
+      const t = e.target;
+      if (!t.dataset.availRow) return;
+      const row = availableRows.find((r) => r.id === t.dataset.availRow);
+      if (!row) return;
+      row.driverName = t.value;
+      row.driverId = null;
+      const match = driversForLocation(state.activeLocation || "atlanta").find((d) => d.name.toLowerCase() === t.value.trim().toLowerCase());
+      if (match) row.driverId = match.id;
+    });
+    table.addEventListener("focusout", (e) => {
+      const t = e.target;
+      if (!t.dataset.availRow) return;
+      renderAvailableTable(); // refresh the driver-linked columns now that typing is done, without disrupting the datalist mid-type
+    });
+  }
+
   function checkMidnightRollover() {
     const newToday = dateKey(todayDate());
     if (newToday !== state.todayKey) {
@@ -1501,6 +1746,8 @@
       state.maxDate = dateKey(addDays(todayDate(), FUTURE_DAYS));
       state.minDate = dateKey(addDays(todayDate(), -HISTORY_DAYS));
       if (wasOnToday) setActiveDate(newToday);
+      availableRows = [blankAvailableRow()]; // a new day — the "Available" list doesn't carry over
+      renderAvailableTable();
     }
   }
 
@@ -1551,6 +1798,7 @@
     loadAndRenderBoard();
     setupRealtimeSync(info.key);
     loadDatesWithData(info.key).catch((e) => console.error("loadDatesWithData() failed:", e));
+    initAvailableSection();
 
     $("#date-prev").addEventListener("click", () => setActiveDate(dateKey(addDays(keyToDate(state.activeDate), -1))));
     $("#date-next").addEventListener("click", () => setActiveDate(dateKey(addDays(keyToDate(state.activeDate), 1))));
@@ -1578,6 +1826,23 @@
       on("tg-confirm-sent", "click", confirmGroupBatchSent);
       on("tg-finish", "click", () => $("#modal-text-group").classList.add("hidden"));
       $("#modal-text-group").addEventListener("click", (e) => { if (e.target.id === "modal-text-group") $("#modal-text-group").classList.add("hidden"); });
+    }
+
+    if ($("#modal-load-details")) {
+      on("ld-close", "click", closeLoadDetailsModal);
+      on("ld-close-btn", "click", closeLoadDetailsModal);
+      $("#modal-load-details").addEventListener("click", (e) => { if (e.target.id === "modal-load-details") closeLoadDetailsModal(); });
+      $("#ld-tabs").addEventListener("click", (e) => {
+        const tabBtn = e.target.closest(".ld-tab");
+        if (tabBtn && loadDetailsState) { loadDetailsState.activeTab = tabBtn.dataset.tab; renderLoadDetailsTabs(); }
+      });
+      $("#ld-tab-content").addEventListener("change", (e) => {
+        if (e.target.id === "ld-file-input" && e.target.files.length) uploadTripSheetImages(Array.from(e.target.files));
+      });
+      $("#ld-tab-content").addEventListener("click", (e) => {
+        const rmBtn = e.target.closest("[data-remove-attachment]");
+        if (rmBtn) removeTripSheetImage(rmBtn.dataset.removeAttachment);
+      });
     }
 
 
@@ -1613,6 +1878,32 @@
       const textBtn = e.target.closest('[data-action="text-driver"]');
       if (textBtn) textDriverForRow(textBtn.dataset.row);
       if (e.target.id === "btn-quick-add-row") quickAddBlankRow();
+      const completeBtn = e.target.closest('[data-action="complete-trip"]');
+      if (completeBtn && !completeBtn.disabled) completeTripAndStartNew(completeBtn.dataset.row);
+      const openProBtn = e.target.closest('[data-open-pro]');
+      if (openProBtn) openLoadDetailsModal(openProBtn.dataset.openPro, openProBtn.dataset.trip || null);
+    });
+    boardTable.addEventListener("focusout", (e) => {
+      const t = e.target;
+      const field = t.dataset && t.dataset.field;
+      if (field !== "proNumber" && field !== "tripId") return;
+      const wrap = t.closest(".cell-with-link");
+      if (!wrap) return;
+      let btn = wrap.querySelector(".cell-link-btn");
+      if (t.value.trim()) {
+        if (!btn) {
+          btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "cell-link-btn";
+          btn.title = field === "proNumber" ? "Open load details" : "Open trip details";
+          btn.textContent = "↗";
+          btn.dataset.openPro = t.dataset.row;
+          if (field === "tripId") btn.dataset.trip = t.dataset.trip;
+          wrap.appendChild(btn);
+        }
+      } else if (btn) {
+        btn.remove();
+      }
     });
     boardTable.addEventListener("contextmenu", (e) => {
       const tr = e.target.closest("tr");
@@ -2177,6 +2468,7 @@
     loadAndRenderHoustonBoard();
     setupHoustonRealtimeSync();
     loadHoustonDatesWithData().catch((e) => console.error("loadHoustonDatesWithData() failed:", e));
+    initAvailableSection();
 
     $("#date-prev").addEventListener("click", () => setHoustonActiveDate(dateKey(addDays(keyToDate(state.activeDate), -1))));
     $("#date-next").addEventListener("click", () => setHoustonActiveDate(dateKey(addDays(keyToDate(state.activeDate), 1))));

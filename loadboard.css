@@ -795,7 +795,85 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
   display: flex; justify-content: flex-end; gap: 8px;
 }
 
-.field { margin-bottom: 13px; }
+.modal-large { width: 760px; }
+.modal-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+}
+.ld-tab {
+  border: none;
+  background: none;
+  padding: 10px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--slate-500);
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+}
+.ld-tab:hover { color: var(--navy-950); }
+.ld-tab.is-active { color: var(--navy-950); border-bottom-color: var(--navy-950); }
+
+.trip-chip {
+  display: inline-block;
+  border: 1px solid var(--slate-500);
+  background: var(--slate-100);
+  color: var(--navy-950);
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 999px;
+  margin: 2px 3px 2px 0;
+}
+.trip-chip:hover { background: #fff; }
+
+.cell-with-link { display: flex; align-items: center; gap: 3px; }
+.cell-with-link .cell-input { flex: 1; min-width: 0; }
+.cell-link-btn {
+  flex-shrink: 0;
+  border: 1px solid var(--slate-500);
+  background: #fff;
+  color: var(--navy-950);
+  font-size: 11px;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  line-height: 1;
+}
+.cell-link-btn:hover { background: var(--slate-100); }
+
+.complete-trip-btn {
+  border: 1px solid var(--slate-700);
+  background: var(--navy-900);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+.complete-trip-btn:hover:not(:disabled) { background: var(--navy-800); }
+.complete-trip-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.col-completed-trips { min-width: 160px; max-width: 220px; white-space: normal; }
+.col-trip-actions { min-width: 110px; text-align: center; }
+
+.ld-history-row { display: grid; grid-template-columns: 130px 140px 1fr 1fr; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+.ld-history-row:first-child { font-weight: 700; color: var(--slate-500); font-size: 10.5px; text-transform: uppercase; }
+.ld-history-old { color: var(--slate-500); text-decoration: line-through; }
+.ld-history-new { color: var(--navy-950); font-weight: 600; }
+
+.ld-image-gallery { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.ld-image-thumb { width: 120px; height: 120px; border-radius: var(--radius-sm); border: 1px solid var(--line); object-fit: cover; }
+.ld-image-item { position: relative; }
+.ld-image-remove {
+  position: absolute; top: 4px; right: 4px;
+  background: rgba(0,0,0,0.65); color: #fff; border: none;
+  width: 20px; height: 20px; border-radius: 50%; font-size: 12px; line-height: 1;
+}
+
 .field label {
   display: block;
   font-size: 11.5px;
@@ -838,3 +916,41 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
 .field-error { color: var(--red-600); font-size: 11px; margin-top: 3px; display: none; }
 .field.has-error input, .field.has-error select { border-color: var(--red-600); }
 .field.has-error .field-error { display: block; }
+
+#available-section { margin-top: 100px; padding-bottom: 40px; }
+.available-title { font-size: 16px; margin: 0 0 4px 0; }
+table.available-table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 900px;
+  font-family: var(--font-ui);
+}
+table.available-table thead th {
+  background: var(--navy-950);
+  color: #fff;
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+table.available-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 6px 10px;
+  font-size: 12.5px;
+}
+table.available-table tbody tr:nth-child(even) { background: #fbfcfe; }
+.col-availDriver { min-width: 200px; }
+.col-availRemove { width: 32px; }
+.available-remove-btn {
+  border: none;
+  background: none;
+  color: var(--slate-500);
+  font-size: 15px;
+  line-height: 1;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+}
+.available-remove-btn:hover { background: rgba(220, 38, 38, 0.1); color: var(--red-600, #dc2626); }

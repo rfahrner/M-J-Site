@@ -51,6 +51,28 @@
       <table class="board" id="board-table"></table>
     </div>
     <div id="board-empty-state" class="board-empty hidden">No loads yet for this day. Use &ldquo;+ Add Load&rdquo; to start filling in the sheet.</div>
+
+    <div id="available-section">
+      <h2 class="available-title">Available</h2>
+      <div class="subtext" style="margin-bottom:10px;">Drivers on standby for today &mdash; a quick list, not saved anywhere. Clears automatically the next day.</div>
+      <table class="available-table" id="available-table">
+        <thead>
+          <tr>
+            <th class="col-availDriver">Driver Name</th>
+            <th class="col-cell">Cell</th>
+            <th class="col-dispatcherPhone">Dispatcher Phone</th>
+            <th class="col-email">Email</th>
+            <th class="col-mc">MC #</th>
+            <th class="col-rating">Rating</th>
+            <th class="col-availRemove"></th>
+          </tr>
+        </thead>
+        <tbody id="available-table-body"></tbody>
+      </table>
+      <button type="button" class="quick-add-btn" id="btn-available-add-row" style="width:auto; margin-top:6px;">
+        <span class="quick-add-btn-label">+ Add Row</span>
+      </button>
+    </div>
   </div>
 
   <!-- ================= Add Driver modal ================= -->
@@ -186,6 +208,21 @@
         <button class="btn hidden" id="tg-open-batch">Open in Outlook</button>
         <button class="btn hidden" id="tg-confirm-sent">Sent — Next Batch</button>
         <button class="btn hidden" id="tg-finish">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= Load Details modal (PRO#/Trip ID popup) ================= -->
+  <div class="overlay hidden" id="modal-load-details">
+    <div class="modal modal-large">
+      <div class="modal-header">
+        <h3 id="ld-title">Load Details</h3>
+        <button class="modal-close" id="ld-close">&times;</button>
+      </div>
+      <div class="modal-tabs" id="ld-tabs"></div>
+      <div class="modal-body" id="ld-tab-content"></div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="ld-close-btn">Close</button>
       </div>
     </div>
   </div>

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Delaware Spreadsheet</title>
+  <title>Houston Spreadsheet</title>
   <link rel="stylesheet" href="loadboard.css">
 </head>
 <body>
@@ -19,7 +19,7 @@
   <div id="board-view">
     <div class="toolbar">
       <div class="toolbar-left">
-        <h1 id="sheet-title">Delaware Spreadsheet</h1>
+        <h1 id="sheet-title">Houston Spreadsheet</h1>
         <div class="subtext" id="sheet-subtext"></div>
       </div>
       <div class="date-nav" style="position:relative;">
@@ -32,8 +32,6 @@
       <div class="toolbar-actions">
         <button class="btn btn-ghost" id="btn-complete-selected">Complete Selected</button>
         <button class="btn btn-ghost" id="btn-text-selected">Text Selected</button>
-        <button class="btn btn-ghost" id="btn-columns">Columns</button>
-        <div id="columns-panel" class="columns-panel hidden"></div>
         <button class="btn btn-ghost" id="btn-add-driver">+ Add Driver</button>
         <button class="btn" id="btn-add-load">+ Add Load</button>
       </div>
@@ -41,16 +39,32 @@
 
     <div id="driver-sync-status" class="hidden"></div>
 
-    <div class="calc-note">
-      &#9888; Last Stop Depart, Return to DC, ETA for Next Dispatch, HOS Left, and Trip Call Time are placeholder calculations
-      (45&nbsp;mph average, standard buffers) so the board works end-to-end today &mdash; send over your exact Excel formulas
-      and I'll swap in the real math. Loads are saved to the database as you enter them.
-    </div>
-
     <div class="grid-scroll">
       <table class="board" id="board-table"></table>
     </div>
     <div id="board-empty-state" class="board-empty hidden">No loads yet for this day. Use &ldquo;+ Add Load&rdquo; to start filling in the sheet.</div>
+
+    <div id="available-section">
+      <h2 class="available-title">Available</h2>
+      <div class="subtext" style="margin-bottom:10px;">Drivers on standby for today &mdash; a quick list, not saved anywhere. Clears automatically the next day.</div>
+      <table class="available-table" id="available-table">
+        <thead>
+          <tr>
+            <th class="col-availDriver">Driver Name</th>
+            <th class="col-cell">Cell</th>
+            <th class="col-dispatcherPhone">Dispatcher Phone</th>
+            <th class="col-email">Email</th>
+            <th class="col-mc">MC #</th>
+            <th class="col-rating">Rating</th>
+            <th class="col-availRemove"></th>
+          </tr>
+        </thead>
+        <tbody id="available-table-body"></tbody>
+      </table>
+      <button type="button" class="quick-add-btn" id="btn-available-add-row" style="width:auto; margin-top:6px;">
+        <span class="quick-add-btn-label">+ Add Row</span>
+      </button>
+    </div>
   </div>
 
   <!-- ================= Add Driver modal ================= -->
@@ -142,17 +156,31 @@
           <button class="inline-add-driver" id="al-add-new-driver-link">+ Add new driver</button>
         </div>
         <div class="field">
-          <label for="al-pro">PRO# (optional &mdash; can fill in later)</label>
-          <input type="text" id="al-pro" placeholder="Unique load/shift ID">
+          <label for="al-pro">Aljex # (optional &mdash; can fill in later)</label>
+          <input type="text" id="al-pro" placeholder="Unique load ID">
         </div>
         <div class="field">
-          <label for="al-shift-start">Shift start (optional &mdash; can fill in later)</label>
+          <label for="al-shift-start">Time (optional &mdash; can fill in later)</label>
           <input type="text" id="al-shift-start" placeholder="--:--">
         </div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-ghost" id="al-cancel">Cancel</button>
         <button class="btn" id="al-submit">Add Load</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= Load History modal ================= -->
+  <div class="overlay hidden" id="modal-load-history">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Load History</h3>
+        <button class="modal-close" id="lh-close">&times;</button>
+      </div>
+      <div class="modal-body" id="lh-body"></div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="lh-close-btn">Close</button>
       </div>
     </div>
   </div>
@@ -190,21 +218,22 @@
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <!-- ================= Load History modal ================= -->
-  <div class="overlay hidden" id="modal-load-history">
-    <div class="modal">
+  <!-- ================= Load Details modal (PRO#/Trip ID popup) ================= -->
+  <div class="overlay hidden" id="modal-load-details">
+    <div class="modal modal-large">
       <div class="modal-header">
-        <h3>Load History</h3>
-        <button class="modal-close" id="lh-close">&times;</button>
+        <h3 id="ld-title">Load Details</h3>
+        <button class="modal-close" id="ld-close">&times;</button>
       </div>
-      <div class="modal-body" id="lh-body"></div>
+      <div class="modal-tabs" id="ld-tabs"></div>
+      <div class="modal-body" id="ld-tab-content"></div>
       <div class="modal-footer">
-        <button class="btn btn-ghost" id="lh-close-btn">Close</button>
+        <button class="btn btn-ghost" id="ld-close-btn">Close</button>
       </div>
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="loadboard.js" defer></script>
 </body>
 </html>

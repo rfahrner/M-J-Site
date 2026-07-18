@@ -196,6 +196,21 @@
     </div>
   </div>
 
+  <!-- ================= Load Details modal (PRO#/Trip ID popup) ================= -->
+  <div class="overlay hidden" id="modal-load-details">
+    <div class="modal modal-large">
+      <div class="modal-header">
+        <h3 id="ld-title">Load Details</h3>
+        <button class="modal-close" id="ld-close">&times;</button>
+      </div>
+      <div class="modal-tabs" id="ld-tabs"></div>
+      <div class="modal-body" id="ld-tab-content"></div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="ld-close-btn">Close</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="loadboard.js" defer></script>
 </body>
