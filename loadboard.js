@@ -694,7 +694,7 @@
       <tr>${[1, 2, 3, 4, 5].map(tripSubheaderHtml).join("")}</tr>
     </thead>`;
     const totalCols = 5 + 6 + 5 * TRIP_SUBCOLS.length;
-    const addRowHtml = `<tr class="quick-add-row"><td colspan="${totalCols}"><button type="button" class="quick-add-btn" id="btn-quick-add-row">+ Add Row</button></td></tr>`;
+    const addRowHtml = `<tr class="quick-add-row"><td colspan="${totalCols}"><button type="button" class="quick-add-btn" id="btn-quick-add-row"><span class="quick-add-btn-label">+ Add Row</span></button></td></tr>`;
     const tbody = `<tbody>${displayRows.map(rowToHtml).join("")}${addRowHtml}</tbody>`;
 
     $("#board-table").innerHTML = thead + tbody;
@@ -993,6 +993,30 @@
     renderBoardTable(); // full redraw needed — this row needs to move to the bottom (or back up)
   }
 
+  async function deleteRow(rowId) {
+    const found = findRowAnywhere(rowId);
+    if (!found) return;
+    const row = found.row;
+    const drv = row.driverId ? findDriver(row.driverId) : null;
+    const label = [row.proNumber, drv ? drv.name : row.driverNameText].filter(Boolean).join(" — ") || "this load";
+    if (!confirm(`Delete ${label}? This can't be undone.`)) return;
+
+    const rows = getSheet(state.activeLocation, state.activeDate);
+    const idx = rows.findIndex((r) => r.id === rowId);
+    if (idx !== -1) rows.splice(idx, 1);
+    renderBoardTable();
+
+    if (row.dbId && supabaseClient) {
+      try {
+        const { error } = await supabaseClient.from(SHIFTS_TABLE).delete().eq("id", row.dbId);
+        if (error) throw error;
+      } catch (e) {
+        console.error("deleteRow failed:", e);
+        setDriverSyncStatus(`Row removed here, but couldn't delete it from the database (${e.message || e}) — it may come back on refresh.`, "error");
+      }
+    }
+  }
+
   function textDriverForRow(rowId) {
     const found = findRowAnywhere(rowId);
     if (!found) return;
@@ -1162,11 +1186,12 @@
       { label: row.shiftComplete ? "Mark Shift Incomplete" : "Shift Complete", action: () => toggleShiftComplete(rowId) },
       { label: "Load History", action: () => openLoadHistoryModal(rowId) },
       { label: "Text Now", action: () => textDriverForRow(rowId) },
+      { label: "Delete", action: () => deleteRow(rowId), danger: true },
     ];
     const menu = document.createElement("div");
     menu.className = "row-context-menu";
     menu.id = "row-context-menu";
-    menu.innerHTML = items.map((it, i) => `<button class="context-menu-item" data-idx="${i}">${it.label}</button>`).join("");
+    menu.innerHTML = items.map((it, i) => `<button class="context-menu-item${it.danger ? " context-menu-item-danger" : ""}" data-idx="${i}">${it.label}</button>`).join("");
     document.body.appendChild(menu);
     menu.style.left = x + "px";
     menu.style.top = y + "px";
@@ -1884,7 +1909,7 @@
       <th class="col-hou-timeout">Time Out / Remarks</th>
     </tr></thead>`;
     const totalHoustonCols = 15;
-    const addRowHtml = `<tr class="quick-add-row"><td colspan="${totalHoustonCols}"><button type="button" class="quick-add-btn" id="btn-quick-add-row">+ Add Row</button></td></tr>`;
+    const addRowHtml = `<tr class="quick-add-row"><td colspan="${totalHoustonCols}"><button type="button" class="quick-add-btn" id="btn-quick-add-row"><span class="quick-add-btn-label">+ Add Row</span></button></td></tr>`;
     const tbody = `<tbody>${displayRows.map(houstonRowToHtml).join("")}${addRowHtml}</tbody>`;
     $("#board-table").innerHTML = thead + tbody;
     const emptyState = $("#board-empty-state");
@@ -1988,6 +2013,31 @@
     saveHoustonRowNow(found.row);
     renderHoustonBoardTable();
   }
+
+  async function deleteHoustonRow(rowId) {
+    const found = findHoustonRowAnywhere(rowId);
+    if (!found) return;
+    const row = found.row;
+    const drv = row.driverId ? findDriver(row.driverId) : null;
+    const label = [row.aljexNumber, drv ? drv.name : row.driverName].filter(Boolean).join(" — ") || "this load";
+    if (!confirm(`Delete ${label}? This can't be undone.`)) return;
+
+    const rows = getHoustonSheet(state.activeDate);
+    const idx = rows.findIndex((r) => r.id === rowId);
+    if (idx !== -1) rows.splice(idx, 1);
+    renderHoustonBoardTable();
+
+    if (row.dbId && supabaseClient) {
+      try {
+        const { error } = await supabaseClient.from(HOUSTON_TABLE).delete().eq("id", row.dbId);
+        if (error) throw error;
+      } catch (e) {
+        console.error("deleteHoustonRow failed:", e);
+        setDriverSyncStatus(`Row removed here, but couldn't delete it from the database (${e.message || e}) — it may come back on refresh.`, "error");
+      }
+    }
+  }
+
   function textHoustonDriverForRow(rowId) {
     const found = findHoustonRowAnywhere(rowId);
     if (!found) return;
@@ -2033,11 +2083,12 @@
       { label: row.shiftComplete ? "Mark Shift Incomplete" : "Shift Complete", action: () => toggleHoustonShiftComplete(rowId) },
       { label: "Load History", action: () => openHoustonLoadHistoryModal(rowId) },
       { label: "Text Now", action: () => textHoustonDriverForRow(rowId) },
+      { label: "Delete", action: () => deleteHoustonRow(rowId), danger: true },
     ];
     const menu = document.createElement("div");
     menu.className = "row-context-menu";
     menu.id = "row-context-menu";
-    menu.innerHTML = items.map((it, i) => `<button class="context-menu-item" data-idx="${i}">${it.label}</button>`).join("");
+    menu.innerHTML = items.map((it, i) => `<button class="context-menu-item${it.danger ? " context-menu-item-danger" : ""}" data-idx="${i}">${it.label}</button>`).join("");
     document.body.appendChild(menu);
     menu.style.left = x + "px";
     menu.style.top = y + "px";
