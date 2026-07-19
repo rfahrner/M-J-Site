@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Houston Spreadsheet</title>
+  <title>Delaware Spreadsheet</title>
   <link rel="stylesheet" href="loadboard.css">
 </head>
 <body>
@@ -19,7 +19,7 @@
   <div id="board-view">
     <div class="toolbar">
       <div class="toolbar-left">
-        <h1 id="sheet-title">Houston Spreadsheet</h1>
+        <h1 id="sheet-title">Delaware Spreadsheet</h1>
         <div class="subtext" id="sheet-subtext"></div>
       </div>
       <div class="date-nav" style="position:relative;">
@@ -30,14 +30,22 @@
         <div id="date-dropdown" class="date-dropdown hidden"></div>
       </div>
       <div class="toolbar-actions">
-        <button class="btn btn-ghost" id="btn-complete-selected">Complete Selected</button>
-        <button class="btn btn-ghost" id="btn-text-selected">Text Selected</button>
+        <button class="btn btn-ghost hidden" id="btn-complete-selected">Complete Selected</button>
+        <button class="btn btn-ghost hidden" id="btn-text-selected">Text Selected</button>
+        <button class="btn btn-ghost" id="btn-columns">Columns</button>
+        <div id="columns-panel" class="columns-panel hidden"></div>
         <button class="btn btn-ghost" id="btn-add-driver">+ Add Driver</button>
         <button class="btn" id="btn-add-load">+ Add Load</button>
       </div>
     </div>
 
     <div id="driver-sync-status" class="hidden"></div>
+
+    <div class="calc-note">
+      &#9888; Last Stop Depart, Return to DC, ETA for Next Dispatch, HOS Left, and Trip Call Time are placeholder calculations
+      (45&nbsp;mph average, standard buffers) so the board works end-to-end today &mdash; send over your exact Excel formulas
+      and I'll swap in the real math. Loads are saved to the database as you enter them.
+    </div>
 
     <div class="grid-scroll">
       <table class="board" id="board-table"></table>
@@ -156,31 +164,17 @@
           <button class="inline-add-driver" id="al-add-new-driver-link">+ Add new driver</button>
         </div>
         <div class="field">
-          <label for="al-pro">Aljex # (optional &mdash; can fill in later)</label>
-          <input type="text" id="al-pro" placeholder="Unique load ID">
+          <label for="al-pro">PRO# (optional &mdash; can fill in later)</label>
+          <input type="text" id="al-pro" placeholder="Unique load/shift ID">
         </div>
         <div class="field">
-          <label for="al-shift-start">Time (optional &mdash; can fill in later)</label>
+          <label for="al-shift-start">Shift start (optional &mdash; can fill in later)</label>
           <input type="text" id="al-shift-start" placeholder="--:--">
         </div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-ghost" id="al-cancel">Cancel</button>
         <button class="btn" id="al-submit">Add Load</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ================= Load History modal ================= -->
-  <div class="overlay hidden" id="modal-load-history">
-    <div class="modal">
-      <div class="modal-header">
-        <h3>Load History</h3>
-        <button class="modal-close" id="lh-close">&times;</button>
-      </div>
-      <div class="modal-body" id="lh-body"></div>
-      <div class="modal-footer">
-        <button class="btn btn-ghost" id="lh-close-btn">Close</button>
       </div>
     </div>
   </div>
@@ -211,7 +205,8 @@
       <div class="modal-footer">
         <button class="btn btn-ghost" id="tg-cancel">Cancel</button>
         <button class="btn" id="tg-start">Start</button>
-        <button class="btn hidden" id="tg-open-batch">Open in Outlook</button>
+        <button class="btn hidden" id="tg-send-now">Send Now</button>
+        <button class="btn btn-ghost hidden" id="tg-open-batch">Open in Outlook Instead</button>
         <button class="btn hidden" id="tg-confirm-sent">Sent — Next Batch</button>
         <button class="btn hidden" id="tg-finish">Done</button>
       </div>
@@ -233,7 +228,61 @@
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <!-- ================= Stop Times modal (shown when a trip is marked Complete) ================= -->
+  <div class="overlay hidden" id="modal-stop-times">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Stop Times</h3>
+        <button class="modal-close" id="st-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="subtext" style="margin-bottom:12px;">Optional — record in/out times for each stop before closing this trip out.</div>
+        <div id="st-stop-fields"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="st-skip">Skip</button>
+        <button class="btn" id="st-confirm">Confirm &amp; Complete</button>
+      </div>
+    </div>
+  </div>
+
+    <div class="overlay hidden" id="modal-send-text">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Send Text</h3>
+        <button class="modal-close" id="send-text-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="field"><label>To</label><div class="static-text" id="send-text-phone-display"></div></div>
+        <div class="field">
+          <label>Message</label>
+          <textarea class="cell-input" id="send-text-message" rows="5" style="width:100%;" placeholder="Type your message..."></textarea>
+          <div class="subtext" id="send-text-counter" style="margin-top:4px;">0 characters — 1 text</div>
+        </div>
+        <div class="subtext" id="send-text-status" style="margin-top:8px;"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="send-text-cancel">Cancel</button>
+        <button class="btn" id="send-text-submit">Send</button>
+      </div>
+    </div>
+  </div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <!-- ================= Load History modal ================= -->
+  <div class="overlay hidden" id="modal-load-history">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Load History</h3>
+        <button class="modal-close" id="lh-close">&times;</button>
+      </div>
+      <div class="modal-body" id="lh-body"></div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="lh-close-btn">Close</button>
+      </div>
+    </div>
+  </div>
+
   <script src="loadboard.js" defer></script>
 </body>
 </html>

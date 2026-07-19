@@ -32,6 +32,7 @@
       <button type="button" class="location-tab" data-location="atlanta">Atlanta &amp; Building C</button>
       <button type="button" class="location-tab" data-location="delaware">Delaware</button>
       <button type="button" class="location-tab" data-location="houston">Houston</button>
+      <button type="button" class="location-tab" data-location="preferred">Preferred Drivers</button>
     </div>
     <div class="driverlist-scroll">
       <table class="driverlist">
@@ -44,6 +45,7 @@
             <th>Dispatcher Phone</th>
             <th>Email</th><th>2nd Email</th>
             <th class="sortable" data-sort="rating">Rating<span class="sort-arrow"></span></th>
+            <th class="sortable" data-sort="normalRate">Rate<span class="sort-arrow"></span></th>
             <th class="sortable" data-sort="carrier">Carrier<span class="sort-arrow"></span></th>
             <th>Rate/Booking Contact</th>
             <th>Interchange Agmt</th><th>Interchange Coverage</th><th>Notes</th>
@@ -134,7 +136,7 @@
       </div>
       <div class="modal-body">
         <div id="tg-setup-step" data-selected-group="">
-          <div class="field">
+          <div class="field" id="tg-group-tabs-wrap">
             <label>Group (by rating)</label>
             <div id="tg-group-tabs" class="tg-group-tabs"></div>
           </div>
@@ -151,7 +153,8 @@
       <div class="modal-footer">
         <button class="btn btn-ghost" id="tg-cancel">Cancel</button>
         <button class="btn" id="tg-start">Start</button>
-        <button class="btn hidden" id="tg-open-batch">Open in Outlook</button>
+        <button class="btn hidden" id="tg-send-now">Send Now</button>
+        <button class="btn btn-ghost hidden" id="tg-open-batch">Open in Outlook Instead</button>
         <button class="btn hidden" id="tg-confirm-sent">Sent — Next Batch</button>
         <button class="btn hidden" id="tg-finish">Done</button>
       </div>

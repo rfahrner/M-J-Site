@@ -45,6 +45,14 @@
   const FUTURE_DAYS = 14;               // how far ahead loads can be pre-scheduled
   const AVG_MPH = 45;                   // placeholder speed for calc columns
 
+  // Prompted to send when a dispatcher marks a trip as Salvage or Backhaul.
+  // NOTE: the two message bodies were given to me with the trigger labels
+  // swapped (the "if backhaul" message text described a salvage pickup, and
+  // vice versa) — mapped here to match what each message actually SAYS,
+  // flagged clearly in chat rather than silently guessed.
+  const SALVAGE_MESSAGE = "This is D&L, you have a salvage pick up at your last stop. Please Call or text me your return info (what trailer the salvage is on, if anything was missing or damaged, and your ETA back) when you are done at your last stop, Also a pic of your stores in and out times.";
+  const BACKHAUL_MESSAGE = "This is D&L, you have a Backhaul pickup at your last stop. Please Call or text me your return info (what trailer the load is on, if anything was missing or damaged, and your ETA back) when you are done at your last stop, Also a pic of your stores in and out times.";
+
   const TRIP_SUBCOLS = [
     { key: "routeId",     label: "Route ID",         type: "text" },
     { key: "tripId",      label: "Trip ID",           type: "text" },
@@ -70,8 +78,34 @@
   const TRIPS_TABLE = "loads_trips";
 
   const supabaseClient = (typeof window !== "undefined" && window.supabase)
-    ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY)
+    ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+        auth: { persistSession: true, autoRefreshToken: true, storageKey: "dl-dispatch-auth" },
+      })
     : null;
+
+  let currentUserRole = null; // set by requireAuth() before any page-specific init runs
+
+  async function requireAuth() {
+    if (!supabaseClient) return true; // no client configured (e.g. local test) — don't block
+    const { data } = await supabaseClient.auth.getSession();
+    if (!data.session) {
+      window.location.href = "login.html";
+      return false;
+    }
+    const { data: userData } = await supabaseClient.auth.getUser();
+    currentUserRole = (userData && userData.user && userData.user.user_metadata && userData.user.user_metadata.role) || null;
+    supabaseClient.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT") window.location.href = "login.html";
+    });
+    return true;
+  }
+
+  function isAccountingUser() { return currentUserRole === "accounting"; }
+
+  async function signOut() {
+    if (supabaseClient) await supabaseClient.auth.signOut();
+    window.location.href = "login.html";
+  }
 
   function driverToDbRow(d) {
     return {
@@ -105,6 +139,7 @@
       tiiAmount: row["Interchange Coverage $"] != null ? Number(row["Interchange Coverage $"]) : null,
       carrier: row["Carrier"] || "",
       rateBooking: row["Rate/booking contact"] || "",
+      normalRate: row["normal_rate"] != null ? String(row["normal_rate"]) : "",
       location: row["location"] || "atlanta",
       addedAt: null,
     };
@@ -123,12 +158,15 @@
       shift_complete: !!row.shiftComplete,
       shift_complete_at: row.shiftCompleteAt || null,
       rate: row.rate === "" || row.rate == null ? null : Number(row.rate),
+      notes: row.notes || null,
     };
   }
   function shiftFromDbRow(dbRow) {
     return {
       id: uid("row"),
       dbId: dbRow.id,
+      location: dbRow.location || null,
+      shiftDate: dbRow.shift_date || null,
       driverId: dbRow.driver_id != null ? String(dbRow.driver_id) : null,
       driverNameText: dbRow.driver_name_text || "",
       proNumber: dbRow.pro_number || "",
@@ -138,6 +176,7 @@
       shiftComplete: !!dbRow.shift_complete,
       shiftCompleteAt: dbRow.shift_complete_at || null,
       rate: dbRow.rate != null ? String(dbRow.rate) : "",
+      notes: dbRow.notes || "",
       selected: false, // local-only UI state, not persisted — see note in chat
       createdAt: dbRow.created_at || null,
       updatedAt: dbRow.updated_at || null,
@@ -166,6 +205,9 @@
       salvage: !!trip.salvage,
       backhaul: !!trip.backhaul,
       minimized: !!trip.minimized,
+      complete: !!trip.complete,
+      driver_id: trip.driverId ? Number(trip.driverId) : null,
+      notes: trip.notes || null,
     };
   }
   function tripFromDbRow(dbRow) {
@@ -181,6 +223,9 @@
       salvage: !!dbRow.salvage,
       backhaul: !!dbRow.backhaul,
       minimized: !!dbRow.minimized,
+      complete: !!dbRow.complete,
+      driverId: dbRow.driver_id != null ? String(dbRow.driver_id) : null,
+      notes: dbRow.notes || "",
     };
   }
 
@@ -258,7 +303,7 @@
     if (aEmpty && bEmpty) return 0;
     if (aEmpty) return 1;  // blanks always sort last, regardless of direction
     if (bEmpty) return -1;
-    const cmp = key === "mc"
+    const cmp = (key === "mc" || key === "normalRate")
       ? Number(av) - Number(bv)
       : String(av).localeCompare(String(bv), undefined, { sensitivity: "base", numeric: true });
     return dir === "desc" ? -cmp : cmp;
@@ -281,12 +326,13 @@
   }
 
   function blankTrip() {
-    return { id: uid("trip"), dbId: null, routeId: "", tripId: "", trailerOut: "", routeMiles: "", stopCount: "", dispatchTime: "", salvage: false, backhaul: false, minimized: false };
+    return { id: uid("trip"), dbId: null, routeId: "", tripId: "", trailerOut: "", routeMiles: "", stopCount: "", dispatchTime: "", salvage: false, backhaul: false, minimized: false, complete: false, driverId: null, notes: "" };
   }
   function blankRow(driverId, driverNameText) {
     return {
-      id: uid("row"), dbId: null, driverId: driverId || null, driverNameText: driverNameText || "",
-      proNumber: "", tonu: false, highlighted: false, shiftStart: "", shiftComplete: false, shiftCompleteAt: null, rate: "", selected: false,
+      id: uid("row"), dbId: null, location: state.activeLocation || null, shiftDate: state.activeDate || null,
+      driverId: driverId || null, driverNameText: driverNameText || "",
+      proNumber: "", tonu: false, highlighted: false, shiftStart: "", shiftComplete: false, shiftCompleteAt: null, rate: "", notes: "", selected: false,
       createdAt: null, updatedAt: null, addedAt: null,
       cellSnapshot: "", mcSnapshot: "", emailSnapshot: "", dispatcherPhoneSnapshot: "", ratingSnapshot: "",
       trips: [blankTrip()],
@@ -340,11 +386,14 @@
     state.sheets[k] = rows;
   }
   function findDriver(id) { return state.drivers.find((d) => String(d.id) === String(id)) || null; }
+  const standaloneLoadedRows = {}; // row.id -> row, for modal access from pages that don't have state.sheets (e.g. Accounting)
+
   function findRowAnywhere(rowId) {
     for (const k in state.sheets) {
       const r = state.sheets[k].find((x) => x.id === rowId);
       if (r) return { row: r, sheetKey: k };
     }
+    if (standaloneLoadedRows[rowId]) return { row: standaloneLoadedRows[rowId], sheetKey: null };
     return null;
   }
 
@@ -401,7 +450,7 @@
   async function saveShiftNow(row) {
     if (!supabaseClient) return null;
     try {
-      const payload = shiftToDbRow(row, state.activeLocation, state.activeDate);
+      const payload = shiftToDbRow(row, row.location || state.activeLocation, row.shiftDate || state.activeDate);
       if (row.dbId) {
         const { error } = await supabaseClient.from(SHIFTS_TABLE).update(payload).eq("id", row.dbId);
         if (error) { console.error("Failed to save row:", error); setDriverSyncStatus(`Couldn't save changes to this row (${error.message}).`, "error"); return null; }
@@ -440,18 +489,105 @@
     }
   }
 
-  async function completeTripAndStartNew(rowId) {
+  async function minimizeTrip(rowId, tripId) {
     const found = findRowAnywhere(rowId);
     if (!found) return;
     const row = found.row;
-    const activeTrip = row.trips[row.trips.length - 1];
-    if (!activeTrip || !String(activeTrip.routeId || "").trim()) return;
-    activeTrip.minimized = true;
-    const tripNumber = row.trips.length;
-    await saveTripNow(row, activeTrip, tripNumber);
-    row.trips.push(blankTrip());
+    const trip = row.trips.find((t) => t.id === tripId);
+    if (!trip) return;
+    trip.minimized = true;
+    await saveTripNow(row, trip, row.trips.indexOf(trip) + 1);
     renderBoardTable();
   }
+
+  async function restoreTrip(rowId, tripId) {
+    const found = findRowAnywhere(rowId);
+    if (!found) return;
+    const row = found.row;
+    const trip = row.trips.find((t) => t.id === tripId);
+    if (!trip) return;
+    trip.minimized = false;
+    await saveTripNow(row, trip, row.trips.indexOf(trip) + 1);
+    renderBoardTable();
+  }
+
+  function addNewTrip(rowId) {
+    const found = findRowAnywhere(rowId);
+    if (!found) return;
+    found.row.trips.push(blankTrip());
+    renderBoardTable();
+  }
+
+  function completeTrip(rowId, tripId) {
+    const found = findRowAnywhere(rowId);
+    if (!found) return;
+    const trip = found.row.trips.find((t) => t.id === tripId);
+    if (!trip || !String(trip.routeId || "").trim()) return;
+    openStopTimesModal(rowId, tripId);
+  }
+
+  let stopTimesModalState = null; // { rowId, tripId, stopCount }
+
+  function openStopTimesModal(rowId, tripId) {
+    const found = findRowAnywhere(rowId);
+    if (!found) return;
+    const trip = found.row.trips.find((t) => t.id === tripId);
+    if (!trip || !$("#modal-stop-times")) return;
+    const stopCount = Math.max(0, parseInt(trip.stopCount, 10) || 0);
+    stopTimesModalState = { rowId, tripId, stopCount };
+    $("#st-stop-fields").innerHTML = stopCount
+      ? stopFieldsHtml(stopCount, [])
+      : `<div class="subtext">No stop count set on this trip — nothing to fill in, but you can still confirm or skip.</div>`;
+    $("#modal-stop-times").classList.remove("hidden");
+  }
+
+  function closeStopTimesModal() {
+    if ($("#modal-stop-times")) $("#modal-stop-times").classList.add("hidden");
+    stopTimesModalState = null;
+  }
+
+  async function finalizeTripCompletion(saveStopTimes) {
+    if (!stopTimesModalState) return;
+    const { rowId, tripId, stopCount } = stopTimesModalState;
+    const found = findRowAnywhere(rowId);
+    if (!found) { closeStopTimesModal(); return; }
+    const row = found.row;
+    const trip = row.trips.find((t) => t.id === tripId);
+    if (!trip) { closeStopTimesModal(); return; }
+
+    if (saveStopTimes && stopCount > 0 && supabaseClient && trip.dbId) {
+      for (let i = 0; i < stopCount; i++) {
+        const timeInEl = document.querySelector(`#modal-stop-times [data-stop-field="timeIn"][data-stop-index="${i}"]`);
+        const timeOutEl = document.querySelector(`#modal-stop-times [data-stop-field="timeOut"][data-stop-index="${i}"]`);
+        const timeIn = timeInEl ? timeInEl.value.trim() : "";
+        const timeOut = timeOutEl ? timeOutEl.value.trim() : "";
+        if (!timeIn && !timeOut) continue; // nothing entered for this stop — don't create an empty record
+        try {
+          await supabaseClient.from("trip_stops").insert({ trip_id: trip.dbId, stop_number: i + 1, time_in: timeIn || null, time_out: timeOut || null });
+        } catch (e) {
+          console.error("Saving stop time failed:", e);
+        }
+      }
+    }
+
+    trip.complete = true;
+    trip.minimized = true;
+    await saveTripNow(row, trip, row.trips.indexOf(trip) + 1);
+    closeStopTimesModal();
+    renderBoardTable();
+    flashTripGreenTint(rowId, tripId);
+  }
+
+  function flashTripGreenTint(rowId, tripId) {
+    // the trip has already collapsed into a chip by the time this runs — flash the chip itself
+    requestAnimationFrame(() => {
+      const chip = document.querySelector(`.trip-chip[data-row="${rowId}"][data-trip="${tripId}"]`);
+      if (!chip) return;
+      chip.classList.add("shift-complete-tint", "trip-just-completed-flash");
+      setTimeout(() => chip.classList.remove("trip-just-completed-flash"), 1600);
+    });
+  }
+
 
   function scheduleShiftSave(row) {
     clearTimeout(shiftSaveTimers.get(row.id));
@@ -506,50 +642,219 @@
 
   /* ---------------- nav (built the same way on every page) ---------------- */
 
+  /* ---------------- board alerts: bottom-right notification panel ---------------- */
+
+  const ALERT_LOCATIONS = ["atlanta", "buildingc", "delaware"];
+  const IDLE_THRESHOLD_MIN = 60; // "shows up and doesn't get dispatched for an hour"
+  let boardAlerts = []; // current alerts, each with a stable key + firstSeenAt timestamp
+  let alertFirstSeenAt = {}; // key -> Date, persists across scans so timestamps don't reset
+  let alertScanTimer = null;
+  let alertPanelExpanded = false;
+  let alertPanelHasUnread = false;
+
+  function minsSinceMidnightNow() {
+    const d = new Date();
+    return d.getHours() * 60 + d.getMinutes();
+  }
+
+  async function scanForBoardAlerts() {
+    if (!supabaseClient) return [];
+    const todayKey = dateKey(new Date()); // existing helper — local YYYY-MM-DD
+    const { data: shifts, error: shiftErr } = await supabaseClient
+      .from(SHIFTS_TABLE).select("*").in("location", ALERT_LOCATIONS).eq("shift_date", todayKey);
+    if (shiftErr || !shifts || !shifts.length) return [];
+
+    const shiftIds = shifts.map((s) => s.id);
+    const { data: trips } = await supabaseClient.from(TRIPS_TABLE).select("*").in("shift_id", shiftIds);
+    const tripsByShift = {};
+    (trips || []).forEach((t) => { (tripsByShift[t.shift_id] = tripsByShift[t.shift_id] || []).push(t); });
+
+    const nowMin = minsSinceMidnightNow();
+    const alerts = [];
+
+    for (const s of shifts) {
+      if (s.shift_complete) continue; // finished loads don't need attention
+      const rowTrips = tripsByShift[s.id] || [];
+      const hasRealTrip = rowTrips.some((t) => (t.route_id || "").trim() || (t.trip_id || "").trim());
+      const label = s.pro_number || s.driver_name_text || `Load on ${s.location}`;
+
+      // Rule 1: idle driver — shift started over an hour ago, still nothing dispatched
+      const shiftStartMin = parseHHMM(s.shift_start);
+      if (shiftStartMin != null && !hasRealTrip) {
+        const idleFor = nowMin - shiftStartMin;
+        if (idleFor >= IDLE_THRESHOLD_MIN) {
+          alerts.push({ key: `idle-${s.id}`, type: "idle", location: s.location, message: `${label} — no load dispatched ${Math.floor(idleFor / 60)}h ${idleFor % 60}m after shift start` });
+        }
+      }
+
+      // Rules 2 & 3: per active (non-minimized) trip
+      for (const t of rowTrips) {
+        if (t.minimized || t.complete) continue;
+        const hasRoute = (t.route_id || "").trim() || (t.trip_id || "").trim();
+        if (!hasRoute) continue;
+        const tripLabel = t.trip_id || t.route_id;
+
+        if (!t.dispatch_time) {
+          alerts.push({ key: `noeta-${t.id}`, type: "missing_eta", location: s.location, message: `${label} (${tripLabel}) — no dispatch time entered, can't calculate ETA` });
+          continue; // no dispatch time means returnToDC can't be computed either — avoid a redundant second alert
+        }
+
+        const dispatch = parseHHMM(t.dispatch_time);
+        const miles = parseFloat(t.route_miles);
+        if (dispatch != null && !isNaN(miles) && miles > 0) {
+          const leg = (miles / AVG_MPH) * 60;
+          const returnMin = dispatch + leg + leg + 15;
+          if (nowMin >= returnMin) {
+            const overdueBy = Math.round(nowMin - returnMin);
+            alerts.push({ key: `overdue-${t.id}`, type: "overdue_return", location: s.location, message: `${label} (${tripLabel}) — was due back ${overdueBy}m ago` });
+          }
+        }
+      }
+    }
+    return alerts;
+  }
+
+  function formatAlertTimestamp(d) {
+    return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  }
+
+  function renderAlertPanel() {
+    const widget = $("#alert-widget");
+    if (!widget) return;
+    const headerCount = $("#alert-widget-count");
+    const body = $("#alert-widget-body");
+    const count = boardAlerts.length;
+
+    headerCount.textContent = count ? `(${count})` : "";
+    widget.classList.toggle("has-alerts", count > 0);
+    widget.classList.toggle("expanded", alertPanelExpanded);
+    widget.classList.toggle("blinking", alertPanelHasUnread && !alertPanelExpanded);
+
+    if (!count) {
+      body.innerHTML = `<div class="alert-empty">Nothing needs attention right now.</div>`;
+      return;
+    }
+    const ICONS = { idle: "⏱", overdue_return: "↩", missing_eta: "❓" };
+    // newest first
+    const sorted = [...boardAlerts].sort((a, b) => alertFirstSeenAt[b.key] - alertFirstSeenAt[a.key]);
+    body.innerHTML = sorted.map((a) => `
+      <a class="alert-chat-item" href="${a.location === "buildingc" ? "buildingc.html" : a.location + ".html"}">
+        <span class="alert-chat-icon">${ICONS[a.type] || "•"}</span>
+        <span class="alert-chat-text">${escapeHtml(a.message)}</span>
+        <span class="alert-chat-time">${formatAlertTimestamp(alertFirstSeenAt[a.key] || new Date())}</span>
+      </a>
+    `).join("");
+  }
+
+  async function refreshBoardAlerts() {
+    let fresh = [];
+    try {
+      fresh = await scanForBoardAlerts();
+    } catch (e) {
+      console.error("scanForBoardAlerts failed:", e);
+    }
+    const now = new Date();
+    let sawNew = false;
+    const nextFirstSeen = {};
+    fresh.forEach((a) => {
+      if (alertFirstSeenAt[a.key]) {
+        nextFirstSeen[a.key] = alertFirstSeenAt[a.key]; // keep original timestamp
+      } else {
+        nextFirstSeen[a.key] = now; // genuinely new — timestamp it now, trigger the blink
+        sawNew = true;
+      }
+    });
+    alertFirstSeenAt = nextFirstSeen;
+    boardAlerts = fresh;
+    if (sawNew && !alertPanelExpanded) alertPanelHasUnread = true;
+    renderAlertPanel();
+  }
+
+  function toggleAlertPanel() {
+    alertPanelExpanded = !alertPanelExpanded;
+    if (alertPanelExpanded) alertPanelHasUnread = false;
+    renderAlertPanel();
+  }
+
+  function startAlertScanning() {
+    if (!$("#alert-widget")) injectAlertWidget();
+    refreshBoardAlerts();
+    if (alertScanTimer) clearInterval(alertScanTimer);
+    alertScanTimer = setInterval(refreshBoardAlerts, 60 * 1000);
+  }
+
+  function injectAlertWidget() {
+    const el = document.createElement("div");
+    el.id = "alert-widget";
+    el.innerHTML = `
+      <div class="alert-widget-header" id="alert-widget-header">
+        <span>🔔 Alerts <span id="alert-widget-count"></span></span>
+        <span class="alert-widget-toggle">▲</span>
+      </div>
+      <div class="alert-widget-body" id="alert-widget-body"></div>
+    `;
+    document.body.appendChild(el);
+    $("#alert-widget-header").addEventListener("click", toggleAlertPanel);
+  }
+
+
   function renderNav() {
     const tabsEl = $("#tabs");
     if (!tabsEl) return;
     const cur = currentFile();
-    tabsEl.innerHTML = NAV_ORDER.map((file) => {
-      const info = PAGE_MAP[file];
-      return `<a class="tab-btn${file === cur ? " active" : ""}" href="${file}">${info.label}</a>`;
-    }).join("");
+    tabsEl.innerHTML = NAV_ORDER
+      .filter((file) => PAGE_MAP[file].type !== "accounting" || isAccountingUser())
+      .map((file) => {
+        const info = PAGE_MAP[file];
+        return `<a class="tab-btn${file === cur ? " active" : ""}" href="${file}">${info.label}</a>`;
+      }).join("") + `<button type="button" class="tab-btn" id="nav-logout" style="margin-left:auto;">Log Out</button>`;
+    const logoutBtn = $("#nav-logout");
+    if (logoutBtn) logoutBtn.addEventListener("click", signOut);
   }
 
   /* ---------------- rendering: board ---------------- */
 
-  function activeTripHeaderHtml() {
-    return TRIP_SUBCOLS.map((c, i) => `<th class="${i === 0 ? "trip-block-start" : ""} col-${c.key}">${c.label}</th>`).join("");
+  function openTripsFor(row) {
+    const open = row.trips.filter((t) => !t.minimized);
+    return open.length ? open : [row.trips[row.trips.length - 1]]; // always show at least one editable trip row
   }
 
-  function completedTripChipsHtml(row) {
+  function routesChipsHtml(row) {
     const done = row.trips.filter((t) => t.minimized);
     if (!done.length) return `<span class="subtext" style="font-size:11px;">—</span>`;
-    return done.map((t) => `<button type="button" class="trip-chip" data-open-pro="${row.id}" data-trip="${t.id}">${escapeHtml(t.routeId || t.tripId || "Trip")} ✓</button>`).join(" ");
+    return done.map((t, i) => {
+      const statusCls = t.complete ? "trip-segment-done" : "";
+      const title = t.complete ? "Closed out — click to view" : "Click to view or edit";
+      return `<button type="button" class="trip-chip ${statusCls}" data-action="restore-trip" data-row="${row.id}" data-trip="${t.id}" title="${title}">${escapeHtml(t.tripId || t.routeId || `Trip ${i + 1}`)}</button>`;
+    }).join(" ");
   }
 
-  function tripCellsHtml(row, trip) {
+  function tripFieldCellsHtml(row, trip) {
     const calc = computeCalc(trip, row);
-    return TRIP_SUBCOLS.map((col, i) => {
-      const cls = (i === 0 ? "trip-block-start" : "") + ` col-${col.key}`;
+    const canComplete = String(trip.routeId || "").trim();
+    return TRIP_SUBCOLS.map((col) => {
       if (col.type === "checkbox") {
         const on = !!trip[col.key];
         const flagCls = col.key === "salvage" ? "flag-yes" : "flag-backhaul";
-        return `<td class="${cls} ${on ? flagCls : ""}" style="text-align:center;">
+        return `<td class="col-${col.key} ${on ? flagCls : ""}" style="text-align:center;">
           <input type="checkbox" class="chk" data-row="${row.id}" data-trip="${trip.id}" data-field="${col.key}" ${on ? "checked" : ""}>
         </td>`;
       }
       if (col.type === "calc") {
-        return `<td class="${cls}"><input class="cell-input calc" value="${escapeHtml(calc[col.key])}" readonly tabindex="-1"></td>`;
+        return `<td class="col-${col.key}"><input class="cell-input calc" value="${escapeHtml(calc[col.key])}" readonly tabindex="-1"></td>`;
       }
       const placeholder = col.type === "time" ? "--:--" : "";
       const inputmode = col.inputmode ? ` inputmode="${col.inputmode}"` : "";
       const linkBtn = (col.key === "tripId" && trip.tripId)
         ? `<button type="button" class="cell-link-btn" data-open-pro="${row.id}" data-trip="${trip.id}" title="Open trip details">↗</button>` : "";
-      return `<td class="${cls}"><div class="cell-with-link">
+      return `<td class="col-${col.key}"><div class="cell-with-link">
         <input class="cell-input ${col.small ? "small" : ""}" type="text" placeholder="${placeholder}"${inputmode}
         data-row="${row.id}" data-trip="${trip.id}" data-field="${col.key}" value="${escapeHtml(trip[col.key])}">${linkBtn}</div></td>`;
-    }).join("");
+    }).join("") + `<td class="col-trip-actions">
+        <button type="button" class="tc-btn" data-action="minimize-trip" data-row="${row.id}" data-trip="${trip.id}" title="Collapse — doesn't mark it done">&minus;</button>
+        <button type="button" class="tc-btn" data-action="add-trip" data-row="${row.id}" title="Add another trip">+</button>
+        <button type="button" class="tc-btn tc-btn-primary" data-action="complete-trip" data-row="${row.id}" data-trip="${trip.id}" ${canComplete ? "" : "disabled"} title="${canComplete ? "Mark closed out" : "Enter a Route ID first"}">${trip.complete ? "✓" : "Complete"}</button>
+      </td>`;
   }
 
   function pick(driverVal, snapshotVal) {
@@ -558,54 +863,55 @@
     return "—";
   }
 
-  function rowToHtml(row) {
+  function shiftInfoCellsHtml(row, rowspan) {
     const drv = row.driverId ? findDriver(row.driverId) : null;
     const displayName = drv ? drv.name : row.driverNameText;
-    const activeTrip = row.trips[row.trips.length - 1];
-    const canComplete = activeTrip && String(activeTrip.routeId || "").trim();
+    const proLinkBtn = row.proNumber ? `<button type="button" class="cell-link-btn" data-open-pro="${row.id}" title="Open load details">↗</button>` : "";
+    const rs = rowspan > 1 ? ` rowspan="${rowspan}"` : "";
+    return `
+      <td class="pin pin-select"${rs}>
+        <input type="checkbox" class="chk" data-action="toggle-row-select" data-row="${row.id}" ${row.selected ? "checked" : ""} title="Select">
+      </td>
+      <td class="pin pin-text"${rs}>
+        <button class="text-btn" data-action="text-driver" data-row="${row.id}" title="Text this driver">Text</button>
+      </td>
+      <td class="pin pin-rate"${rs}>
+        <input class="cell-input small" style="width:60px;" placeholder="Rate" data-row="${row.id}" data-field="rate" value="${escapeHtml(row.rate)}">
+      </td>
+      <td class="pin pin-pro${row.shiftComplete ? " shift-complete-tint" : ""}"${rs}>
+        <div class="cell-with-link">
+          <input class="cell-input" placeholder="PRO#" data-row="${row.id}" data-field="proNumber" value="${escapeHtml(row.proNumber)}">${proLinkBtn}
+        </div>
+      </td>
+      <td class="pin pin-driver"${rs}>
+        <div class="driver-name-wrap">
+          <input class="cell-input" list="driverNamesList" placeholder="Type driver name…"
+            data-row="${row.id}" data-field="driverName" value="${escapeHtml(displayName)}">
+        </div>
+      </td>
+      <td class="col-cell"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.phone, row.cellSnapshot))}</span></td>
+      <td class="col-dispatcherPhone"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.dispatcherPhone, row.dispatcherPhoneSnapshot))}</span></td>
+      <td class="col-email"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.email, row.emailSnapshot))}</span></td>
+      <td class="col-mc"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.mc, row.mcSnapshot))}</span></td>
+      <td class="col-rating"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.rating, row.ratingSnapshot))}</span></td>
+      <td class="col-shiftStart"${rs}><input class="cell-input small" style="width:60px;" placeholder="--:--" data-row="${row.id}" data-field="shiftStart" value="${escapeHtml(row.shiftStart)}"></td>
+      <td class="col-routes"${rs}>${routesChipsHtml(row)}</td>`;
+  }
+
+  function rowsToHtml(row) {
+    const open = openTripsFor(row);
     const rowClasses = [
       row.tonu ? "is-tonu" : "",
       row.highlighted ? "is-row-pinned" : "",
       row.selected ? "is-row-selected" : "",
       row.addedAt ? "is-new" : "",
     ].join(" ");
-    const proLinkBtn = row.proNumber ? `<button type="button" class="cell-link-btn" data-open-pro="${row.id}" title="Open load details">↗</button>` : "";
-    return `<tr id="${row.id}" class="${rowClasses}">
-      <td class="pin pin-select">
-        <input type="checkbox" class="chk" data-action="toggle-row-select" data-row="${row.id}" ${row.selected ? "checked" : ""} title="Select">
-      </td>
-      <td class="pin pin-text">
-        <button class="text-btn" data-action="text-driver" data-row="${row.id}" title="Text this driver">Text</button>
-      </td>
-      <td class="pin pin-rate">
-        <input class="cell-input small" style="width:60px;" placeholder="Rate" data-row="${row.id}" data-field="rate" value="${escapeHtml(row.rate)}">
-      </td>
-      <td class="pin pin-pro${row.shiftComplete ? " shift-complete-tint" : ""}">
-        <div class="cell-with-link">
-          <input class="cell-input" placeholder="PRO#" data-row="${row.id}" data-field="proNumber" value="${escapeHtml(row.proNumber)}">${proLinkBtn}
-        </div>
-      </td>
-      <td class="pin pin-driver">
-        <div class="driver-name-wrap">
-          <input class="cell-input" list="driverNamesList" placeholder="Type driver name…"
-            data-row="${row.id}" data-field="driverName" value="${escapeHtml(displayName)}">
-        </div>
-      </td>
-      <td class="col-cell"><span class="static-text">${escapeHtml(pick(drv && drv.phone, row.cellSnapshot))}</span></td>
-      <td class="col-dispatcherPhone"><span class="static-text">${escapeHtml(pick(drv && drv.dispatcherPhone, row.dispatcherPhoneSnapshot))}</span></td>
-      <td class="col-email"><span class="static-text">${escapeHtml(pick(drv && drv.email, row.emailSnapshot))}</span></td>
-      <td class="col-mc"><span class="static-text">${escapeHtml(pick(drv && drv.mc, row.mcSnapshot))}</span></td>
-      <td class="col-rating"><span class="static-text">${escapeHtml(pick(drv && drv.rating, row.ratingSnapshot))}</span></td>
-      <td class="col-shiftStart"><input class="cell-input small" style="width:60px;" placeholder="--:--" data-row="${row.id}" data-field="shiftStart" value="${escapeHtml(row.shiftStart)}"></td>
-      <td class="col-completed-trips">${completedTripChipsHtml(row)}</td>
-      ${activeTrip ? tripCellsHtml(row, activeTrip) : ""}
-      <td class="col-trip-actions">
-        <button type="button" class="complete-trip-btn" data-action="complete-trip" data-row="${row.id}" ${canComplete ? "" : "disabled"} title="${canComplete ? "Complete this trip and start a new one" : "Enter a Route ID first"}">Complete &amp; New</button>
-      </td>
-    </tr>`;
+    return open.map((trip, i) => {
+      const idAttr = i === 0 ? ` id="${row.id}"` : ` id="${row.id}__${trip.id}" data-parent-row="${row.id}"`;
+      const shiftCells = i === 0 ? shiftInfoCellsHtml(row, open.length) : "";
+      return `<tr${idAttr} class="${rowClasses}">${shiftCells}${tripFieldCellsHtml(row, trip)}</tr>`;
+    }).join("");
   }
-
-
 
   function renderBoardChrome() {
     const loc = LOCATIONS.find((l) => l.key === state.activeLocation);
@@ -701,35 +1007,37 @@
   // any time data already loaded needs a full redraw (e.g. after Add Load,
   // or once the driver list arrives and driver-linked cells need refreshing).
   function renderBoardTable() {
+    if (!$("#board-table")) return; // this page (e.g. Accounting) has no board grid — nothing to redraw
     const rows = getSheet(state.activeLocation, state.activeDate);
     const displayRows = [...rows].sort((a, b) => (a.shiftComplete ? 1 : 0) - (b.shiftComplete ? 1 : 0)); // stable — completed shifts sink to the bottom, order preserved otherwise
+    const tripHeaderCells = TRIP_SUBCOLS.map((c) => `<th class="col-${c.key}">${c.label}</th>`).join("");
     const thead = `<thead>
       <tr>
-        <th class="pin pin-select" rowspan="2"><input type="checkbox" class="chk" id="select-all-rows" title="Select all"></th>
-        <th class="pin pin-text" rowspan="2"></th>
-        <th class="pin pin-rate" rowspan="2">Rate</th>
-        <th class="pin pin-pro" rowspan="2">PRO#</th>
-        <th class="pin pin-driver" rowspan="2">Driver</th>
-        <th class="col-cell" rowspan="2">Cell</th>
-        <th class="col-dispatcherPhone" rowspan="2">Dispatcher Phone</th>
-        <th class="col-email" rowspan="2">Email</th>
-        <th class="col-mc" rowspan="2">MC #</th>
-        <th class="col-rating" rowspan="2">Rating</th>
-        <th class="col-shiftStart" rowspan="2">Shift Start</th>
-        <th class="col-completed-trips" rowspan="2">Completed Trips</th>
-        <th class="group-trip" colspan="${TRIP_SUBCOLS.length}">Current Trip</th>
-        <th class="col-trip-actions" rowspan="2"></th>
+        <th class="pin pin-select"><input type="checkbox" class="chk" id="select-all-rows" title="Select all"></th>
+        <th class="pin pin-text"></th>
+        <th class="pin pin-rate">Rate</th>
+        <th class="pin pin-pro">PRO#</th>
+        <th class="pin pin-driver">Driver</th>
+        <th class="col-cell">Cell</th>
+        <th class="col-dispatcherPhone">Dispatcher Phone</th>
+        <th class="col-email">Email</th>
+        <th class="col-mc">MC #</th>
+        <th class="col-rating">Rating</th>
+        <th class="col-shiftStart">Shift Start</th>
+        <th class="col-routes">Routes</th>
+        ${tripHeaderCells}
+        <th class="col-trip-actions"></th>
       </tr>
-      <tr>${activeTripHeaderHtml()}</tr>
     </thead>`;
-    const totalCols = 5 + 6 + 2 + TRIP_SUBCOLS.length;
+    const totalCols = 12 + TRIP_SUBCOLS.length + 1;
     const addRowHtml = `<tr class="quick-add-row"><td colspan="${totalCols}"><button type="button" class="quick-add-btn" id="btn-quick-add-row"><span class="quick-add-btn-label">+ Add Row</span></button></td></tr>`;
-    const tbody = `<tbody>${displayRows.map(rowToHtml).join("")}${addRowHtml}</tbody>`;
+    const tbody = `<tbody>${displayRows.map(rowsToHtml).join("")}${addRowHtml}</tbody>`;
 
     $("#board-table").innerHTML = thead + tbody;
     const emptyState = $("#board-empty-state");
     if (emptyState) emptyState.classList.toggle("hidden", rows.length > 0);
     refreshDriverDatalist();
+    updateBulkActionButtonsVisibility();
   }
 
   // Async — the actual "switch to this day" entry point. Fetches from
@@ -758,28 +1066,29 @@
     setText(".col-email .static-text", pick(drv && drv.email, row.emailSnapshot));
     setText(".col-mc .static-text", pick(drv && drv.mc, row.mcSnapshot));
     setText(".col-rating .static-text", pick(drv && drv.rating, row.ratingSnapshot));
+    if (drv && drv.normalRate && !String(row.rate || "").trim()) {
+      row.rate = drv.normalRate;
+      const rateInput = tr.querySelector('input[data-field="rate"]');
+      if (rateInput) rateInput.value = drv.normalRate;
+    }
   }
 
   function recalcRowCalcCellsInPlace(rowId) {
     const found = findRowAnywhere(rowId);
-    const tr = document.getElementById(rowId);
-    if (!found || !tr) return;
-    const activeEl = document.activeElement;
-    const wasThisRow = tr.contains(activeEl);
-    const activeField = wasThisRow ? activeEl.dataset.field : null;
-    const activeTrip = wasThisRow ? activeEl.dataset.trip : null;
-    const selStart = wasThisRow ? activeEl.selectionStart : null;
-    tr.outerHTML = rowToHtml(found.row);
-    if (wasThisRow) {
-      const newTr = document.getElementById(rowId);
-      const sel = activeTrip
-        ? newTr.querySelector(`input[data-trip="${activeTrip}"][data-field="${activeField}"]`)
-        : newTr.querySelector(`input[data-field="${activeField}"]`);
-      if (sel) {
-        sel.focus();
-        try { if (selStart != null) sel.setSelectionRange(selStart, selStart); } catch (_) { /* input type doesn't support selection range */ }
-      }
-    }
+    if (!found) return;
+    const row = found.row;
+    const open = openTripsFor(row);
+    open.forEach((trip) => {
+      const anyFieldForTrip = document.querySelector(`[data-trip="${trip.id}"]`);
+      const tr = anyFieldForTrip ? anyFieldForTrip.closest("tr") : null;
+      if (!tr) return;
+      const calc = computeCalc(trip, row);
+      TRIP_SUBCOLS.forEach((col) => {
+        if (col.type !== "calc") return;
+        const el = tr.querySelector(`input[data-trip="${trip.id}"][data-field="${col.key}"]`);
+        if (el) el.value = calc[col.key]; // readonly calc fields — safe to set directly, never focused/typed into
+      });
+    });
   }
 
   /* ---------------- realtime: live sync with other users ---------------- */
@@ -901,13 +1210,14 @@
         <td>${escapeHtml(d.email)}</td>
         <td>${escapeHtml(d.email2 || "—")}</td>
         <td>${escapeHtml(d.rating || "—")}</td>
+        <td>${d.normalRate ? `$${Number(d.normalRate).toLocaleString()}` : "—"}</td>
         <td>${escapeHtml(d.carrier || "—")}</td>
         <td>${escapeHtml(d.rateBooking || "—")}</td>
         <td><span class="badge ${d.tia ? "badge-yes" : "badge-no"}">${d.tia ? "Yes" : "No"}</span></td>
         <td>${d.tiiAmount != null ? `$${Number(d.tiiAmount).toLocaleString()}` : "—"}</td>
         <td>${escapeHtml(d.notes || "—")}</td>
       </tr>`).join("");
-    body.innerHTML = tbody || `<tr><td colspan="13" style="text-align:center;color:var(--slate-500);padding:24px;">No drivers on file yet.</td></tr>`;
+    body.innerHTML = tbody || `<tr><td colspan="14" style="text-align:center;color:var(--slate-500);padding:24px;">No drivers on file yet.</td></tr>`;
     refreshDriverDatalist();
     $all('th[data-sort]').forEach((th) => {
       const arrow = th.querySelector(".sort-arrow");
@@ -950,12 +1260,19 @@
 
   // Local-only, not persisted to Supabase — this is a per-user selection
   // state for a bulk-action feature that hasn't been designed yet.
+  function updateBulkActionButtonsVisibility() {
+    const anySelected = getSheet(state.activeLocation, state.activeDate).some((r) => r.selected);
+    if ($("#btn-complete-selected")) $("#btn-complete-selected").classList.toggle("hidden", !anySelected);
+    if ($("#btn-text-selected")) $("#btn-text-selected").classList.toggle("hidden", !anySelected);
+  }
+
   function toggleRowSelected(rowId) {
     const found = findRowAnywhere(rowId);
     if (!found) return;
     found.row.selected = !found.row.selected;
     const tr = document.getElementById(rowId);
     if (tr) tr.classList.toggle("is-row-selected", found.row.selected);
+    updateBulkActionButtonsVisibility();
   }
 
   function selectAllRows(checked) {
@@ -969,15 +1286,25 @@
         if (chk) chk.checked = checked;
       }
     });
+    updateBulkActionButtonsVisibility();
   }
 
   async function completeSelectedRows() {
     const rows = getSheet(state.activeLocation, state.activeDate).filter((r) => r.selected && !r.shiftComplete);
     if (!rows.length) { setDriverSyncStatus("No selected loads need completing — either nothing's checked, or they're already complete.", "error"); return; }
+
+    const rowsWithOpenTrips = rows.filter((r) => openTripsForRow(r).length);
+    if (rowsWithOpenTrips.length) {
+      const label = rowsWithOpenTrips.map((r) => r.proNumber || "(no PRO#)").join(", ");
+      if (!confirm(`${rowsWithOpenTrips.length} of these loads still have trips not closed out yet (${label}). Send all selected loads to Accounting anyway?`)) return;
+    }
+
     for (const row of rows) {
       row.shiftComplete = true;
       row.shiftCompleteAt = new Date().toISOString();
       await saveShiftNow(row); // must finish first — sendShiftToAccounting needs row.dbId to be set
+      await discardBlankTrips(row);
+      await minimizeAllTrips(row);
       sendShiftToAccounting(row, state.activeLocation, state.activeDate).catch((e) => console.error("sendShiftToAccounting threw:", e));
     }
     renderBoardTable();
@@ -1010,14 +1337,51 @@
     beginTextBatchFlow(members, "Selected Loads", message);
   }
 
+  function openTripsForRow(row) {
+    return row.trips.filter((t) => String(t.routeId || "").trim() && !t.complete);
+  }
+
+  async function discardBlankTrips(row) {
+    const blank = row.trips.filter((t) => !String(t.routeId || "").trim() && !String(t.tripId || "").trim());
+    if (!blank.length) return;
+    row.trips = row.trips.filter((t) => !blank.includes(t));
+    if (!row.trips.length) row.trips.push(blankTrip()); // never leave a shift with zero trips
+    if (supabaseClient) {
+      const dbIds = blank.filter((t) => t.dbId).map((t) => t.dbId);
+      if (dbIds.length) {
+        try { await supabaseClient.from(TRIPS_TABLE).delete().in("id", dbIds); }
+        catch (e) { console.error("discardBlankTrips failed:", e); }
+      }
+    }
+  }
+
+  async function minimizeAllTrips(row) {
+    for (const trip of row.trips) {
+      if (trip.minimized) continue;
+      trip.minimized = true;
+      await saveTripNow(row, trip, row.trips.indexOf(trip) + 1);
+    }
+  }
+
   function toggleShiftComplete(rowId) {
     const found = findRowAnywhere(rowId);
     if (!found) return;
-    found.row.shiftComplete = !found.row.shiftComplete;
-    found.row.shiftCompleteAt = found.row.shiftComplete ? new Date().toISOString() : null;
-    saveShiftNow(found.row);
-    if (found.row.shiftComplete) {
-      sendShiftToAccounting(found.row, state.activeLocation, state.activeDate).catch((e) => console.error("sendShiftToAccounting threw:", e));
+    const row = found.row;
+    if (!row.shiftComplete) {
+      const open = openTripsForRow(row);
+      if (open.length) {
+        const names = open.map((t, i) => t.tripId || t.routeId || `Trip ${i + 1}`).join(", ");
+        if (!confirm(`This load still has ${open.length} trip(s) not closed out yet (${names}) — likely still waiting on paperwork. Send it to Accounting anyway?`)) return;
+      }
+    }
+    row.shiftComplete = !row.shiftComplete;
+    row.shiftCompleteAt = row.shiftComplete ? new Date().toISOString() : null;
+    saveShiftNow(row);
+    if (row.shiftComplete) {
+      discardBlankTrips(row)
+        .then(() => minimizeAllTrips(row))
+        .then(() => renderBoardTable());
+      sendShiftToAccounting(row, state.activeLocation, state.activeDate).catch((e) => console.error("sendShiftToAccounting threw:", e));
     }
     renderBoardTable(); // full redraw needed — this row needs to move to the bottom (or back up)
   }
@@ -1060,15 +1424,70 @@
     return `${withCountryCode}@textbetter.com`;
   }
 
-  function textDriverPhone(rawPhone) {
+  let sendTextModalState = null; // { rawPhone }
+
+  function updateSendTextCounter() {
+    const el = $("#send-text-counter");
+    const input = $("#send-text-message");
+    if (!el || !input) return;
+    const len = input.value.length;
+    // Standard SMS segment sizing: 160 chars fits in one text; anything
+    // longer splits into multi-part messages at 153 chars/segment (7
+    // chars go to part-tracking headers). TextBetter doesn't publish its
+    // own limit -- this is the carrier-network standard every SMS gateway
+    // is bound by, TextBetter included.
+    const segments = len === 0 ? 1 : (len <= 160 ? 1 : Math.ceil(len / 153));
+    const segLabel = segments === 1 ? "1 text" : `${segments} texts (message will split)`;
+    el.textContent = `${len} character${len === 1 ? "" : "s"} — ${segLabel}`;
+    el.style.color = segments > 1 ? "var(--amber-700, #b45309)" : "";
+  }
+
+  function textDriverPhone(rawPhone, prefilledMessage) {
     const addr = formatTextAddress(rawPhone);
     if (!addr) {
       setDriverSyncStatus("No phone number on file for this driver.", "error");
       return;
     }
-    const a = document.createElement("a");
-    a.href = `mailto:${addr}`;
-    a.click();
+    sendTextModalState = { rawPhone };
+    $("#send-text-phone-display").textContent = rawPhone;
+    $("#send-text-message").value = prefilledMessage || "";
+    $("#send-text-status").textContent = "";
+    updateSendTextCounter();
+    $("#modal-send-text").classList.remove("hidden");
+    $("#send-text-message").focus();
+  }
+
+  async function submitSendTextModal() {
+    if (!sendTextModalState) return;
+    const message = $("#send-text-message").value.trim();
+    if (!message) { $("#send-text-status").textContent = "Type a message first."; return; }
+    const sendBtn = $("#send-text-submit");
+    sendBtn.disabled = true;
+    $("#send-text-status").textContent = "Sending…";
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/send-text`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: sendTextModalState.rawPhone, message }),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || `Send failed (${res.status})`);
+      $("#modal-send-text").classList.add("hidden");
+      setDriverSyncStatus("Text sent.", "success");
+    } catch (e) {
+      console.error("send-text failed, falling back to email client:", e);
+      $("#send-text-status").innerHTML = `Couldn't send automatically (${escapeHtml(String(e.message || e))}). <button type="button" class="btn btn-ghost" id="send-text-fallback" style="margin-left:6px;">Open in email instead</button>`;
+      const fallbackBtn = $("#send-text-fallback");
+      if (fallbackBtn) fallbackBtn.addEventListener("click", () => {
+        const addr = formatTextAddress(sendTextModalState.rawPhone);
+        const a = document.createElement("a");
+        a.href = `mailto:${addr}?body=${encodeURIComponent(message)}`;
+        a.click();
+        $("#modal-send-text").classList.add("hidden");
+      });
+    } finally {
+      sendBtn.disabled = false;
+    }
   }
 
   /* ---------------- group texting (Driver List page) ---------------- */
@@ -1157,8 +1576,9 @@
 
     if (isDone) {
       $("#tg-progress-body").innerHTML = `
-        <div class="subtext" style="font-weight:700; font-size:14px;">All done — ${s.totalSent} driver(s) in Group ${s.groupKey} texted across ${s.batches.length} batch(es).</div>
+        <div class="subtext" style="font-weight:700; font-size:14px;">All done — ${s.totalSent} driver(s) in ${escapeHtml(s.groupKey)} texted across ${s.batches.length} batch(es).</div>
         ${skipNote}`;
+      $("#tg-send-now").classList.add("hidden");
       $("#tg-open-batch").classList.add("hidden");
       $("#tg-confirm-sent").classList.add("hidden");
       $("#tg-finish").classList.remove("hidden");
@@ -1169,12 +1589,39 @@
       <div class="subtext" style="font-weight:700;">Batch ${s.batchIndex + 1} of ${s.batches.length} — ${batch.length} recipient(s)</div>
       <div class="subtext" style="margin-top:6px;">${escapeHtml(batch.map((d) => d.name).join(", "))}</div>
       ${skipNote}
-      <div class="calc-note" style="margin-top:10px;">Click "Open in Outlook", review the draft, hit Send there, then come back and confirm.</div>
+      <div class="calc-note" style="margin-top:10px;" id="tg-batch-status">Click "Send Now" to send this batch automatically, or fall back to Outlook if needed.</div>
     `;
+    $("#tg-send-now").classList.remove("hidden");
+    $("#tg-send-now").disabled = false;
     $("#tg-open-batch").classList.remove("hidden");
-    $("#tg-open-batch").textContent = "Open in Outlook";
     $("#tg-confirm-sent").classList.add("hidden");
     $("#tg-finish").classList.add("hidden");
+  }
+
+  async function sendCurrentGroupBatchDirect() {
+    const s = groupTextState;
+    if (!s) return;
+    const batch = s.batches[s.batchIndex];
+    const btn = $("#tg-send-now");
+    const statusEl = $("#tg-batch-status");
+    btn.disabled = true;
+    if (statusEl) statusEl.textContent = "Sending…";
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/send-text`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phones: batch.map((d) => d.phone), message: s.message }),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || `Send failed (${res.status})`);
+      s.totalSent += batch.length;
+      s.batchIndex += 1;
+      renderGroupTextProgress();
+    } catch (e) {
+      console.error("Group batch direct-send failed:", e);
+      if (statusEl) statusEl.innerHTML = `Couldn't send automatically (${escapeHtml(String(e.message || e))}) — use "Open in Outlook Instead" below.`;
+      btn.disabled = false;
+    }
   }
 
   function openCurrentGroupBatch() {
@@ -1238,6 +1685,29 @@
 
   let loadDetailsState = null; // { rowId, activeTab, attachments, history }
 
+  async function openLoadDetailsFromAccounting(accountingRecordId, tripDbId) {
+    const acctRec = accountingRecords.find((r) => r.id == accountingRecordId);
+    if (!acctRec) return;
+    if (!acctRec.source_shift_id) { setDriverSyncStatus("This load doesn't have a linked board record to open (likely a Houston load).", "error"); return; }
+    if (!supabaseClient) return;
+    try {
+      const { data: shiftRows, error: shiftErr } = await supabaseClient.from(SHIFTS_TABLE).select("*").eq("id", acctRec.source_shift_id);
+      if (shiftErr || !shiftRows || !shiftRows[0]) throw shiftErr || new Error("Load not found");
+      const row = shiftFromDbRow(shiftRows[0]);
+      const { data: tripRows } = await supabaseClient.from(TRIPS_TABLE).select("*").eq("shift_id", row.dbId);
+      const sortedTrips = (tripRows || []).sort((a, b) => a.trip_number - b.trip_number).map(tripFromDbRow);
+      row.trips = sortedTrips.length ? sortedTrips : [blankTrip()];
+      standaloneLoadedRows[row.id] = row;
+      state.activeLocation = row.location || state.activeLocation;
+      refreshDriverDatalist();
+      const targetTrip = tripDbId ? row.trips.find((t) => String(t.dbId) === String(tripDbId)) : null;
+      await openLoadDetailsModal(row.id, targetTrip ? targetTrip.id : null);
+    } catch (e) {
+      console.error("openLoadDetailsFromAccounting failed:", e);
+      setDriverSyncStatus(`Couldn't open this load (${e.message || e}).`, "error");
+    }
+  }
+
   async function openLoadDetailsModal(rowId, jumpToTripId, forceTab) {
     const found = findRowAnywhere(rowId);
     const modal = $("#modal-load-details");
@@ -1248,18 +1718,31 @@
       activeTab: forceTab || (jumpToTripId ? `trip-${jumpToTripId}` : "overview"),
       attachments: [],
       history: [],
+      stopsByTrip: {}, // trip.id (local) -> [{stopNumber, timeIn, timeOut, dbId}]
+      editMode: null, // "overview" | trip.id | null
+      editDraft: null, // scratch copy of the fields being edited, discarded on Cancel
     };
     $("#ld-title").textContent = `Load ${row.proNumber || "(no PRO# yet)"}`;
     modal.classList.remove("hidden");
     renderLoadDetailsTabs();
 
     if (supabaseClient && row.dbId) {
-      const [{ data: attachments }, { data: history }] = await Promise.all([
+      const tripDbIds = row.trips.filter((t) => t.dbId).map((t) => t.dbId);
+      const [{ data: attachments }, { data: history }, stopsResult] = await Promise.all([
         supabaseClient.from("load_attachments").select("*").eq("shift_id", row.dbId),
         supabaseClient.from("load_change_history").select("*").eq("shift_id", row.dbId),
-      ]).catch(() => [{ data: [] }, { data: [] }]);
+        tripDbIds.length ? supabaseClient.from("trip_stops").select("*").in("trip_id", tripDbIds) : Promise.resolve({ data: [] }),
+      ]).catch(() => [{ data: [] }, { data: [] }, { data: [] }]);
       loadDetailsState.attachments = attachments || [];
       loadDetailsState.history = (history || []).sort((a, b) => (a.changed_at < b.changed_at ? 1 : -1));
+      const stopRows = stopsResult.data || [];
+      row.trips.forEach((t) => {
+        if (!t.dbId) return;
+        loadDetailsState.stopsByTrip[t.id] = stopRows
+          .filter((s) => s.trip_id === t.dbId)
+          .sort((a, b) => a.stop_number - b.stop_number)
+          .map((s) => ({ dbId: s.id, stopNumber: s.stop_number, timeIn: s.time_in || "", timeOut: s.time_out || "" }));
+      });
       renderLoadDetailsTabContent();
     }
   }
@@ -1270,9 +1753,11 @@
   }
 
   function loadDetailsTabs(row) {
+    const realTrips = row.trips.filter((t) => String(t.routeId || "").trim() || String(t.tripId || "").trim());
     return [
       { key: "overview", label: "Overview" },
-      ...row.trips.map((t, i) => ({ key: `trip-${t.id}`, label: t.tripId || t.routeId || `Trip ${i + 1}` })),
+      { key: "notes", label: "Notes" },
+      ...realTrips.map((t, i) => ({ key: `trip-${t.id}`, label: t.tripId || t.routeId || `Trip ${i + 1}` })),
       { key: "images", label: "Trip Sheet Images" },
       { key: "history", label: "Change History" },
     ];
@@ -1289,6 +1774,18 @@
     renderLoadDetailsTabContent();
   }
 
+  function stopFieldsHtml(stopCount, existingStops) {
+    const rows = Array.from({ length: stopCount }, (_, i) => {
+      const s = existingStops[i] || { stopNumber: i + 1, timeIn: "", timeOut: "" };
+      return `<div class="ld-stop-edit-row">
+        <span>Stop ${i + 1}</span>
+        <input class="cell-input small" placeholder="Time In" data-stop-field="timeIn" data-stop-index="${i}" value="${escapeHtml(s.timeIn)}">
+        <input class="cell-input small" placeholder="Time Out" data-stop-field="timeOut" data-stop-index="${i}" value="${escapeHtml(s.timeOut)}">
+      </div>`;
+    }).join("");
+    return rows || `<div class="subtext">Set a stop count above to add time fields.</div>`;
+  }
+
   function renderLoadDetailsTabContent() {
     if (!loadDetailsState) return;
     const found = findRowAnywhere(loadDetailsState.rowId);
@@ -1299,25 +1796,88 @@
     const drv = row.driverId ? findDriver(row.driverId) : null;
 
     if (tab === "overview") {
-      body.innerHTML = `
-        <div class="field"><label>PRO#</label><div class="static-text">${escapeHtml(row.proNumber || "—")}</div></div>
-        <div class="field"><label>Driver</label><div class="static-text">${escapeHtml(drv ? drv.name : (row.driverNameText || "—"))}</div></div>
-        <div class="field"><label>Rate</label><div class="static-text">${escapeHtml(row.rate || "—")}</div></div>
-        <div class="field"><label>Status</label><div class="static-text">${row.shiftComplete ? "Complete" : "Active"}</div></div>
-        <div class="field"><label>Trips on this load</label><div class="static-text">${row.trips.length} (${row.trips.filter((t) => t.minimized).length} completed)</div></div>
-      `;
+      const editing = loadDetailsState.editMode === "overview";
+      if (!editing) {
+        body.innerHTML = `
+          <div class="ld-edit-bar"><button type="button" class="btn btn-ghost" data-ld-edit="overview">Edit</button></div>
+          <div class="field"><label>PRO#</label><div class="static-text">${escapeHtml(row.proNumber || "—")}</div></div>
+          <div class="field"><label>Driver</label><div class="static-text">${escapeHtml(drv ? drv.name : (row.driverNameText || "—"))}</div></div>
+          <div class="field"><label>Rate</label><div class="static-text">${escapeHtml(row.rate || "—")}</div></div>
+          <div class="field"><label>Status</label><div class="static-text">${row.shiftComplete ? "Complete" : "Active"}</div></div>
+          <div class="field"><label>Trips on this load</label><div class="static-text">${row.trips.length} (${row.trips.filter((t) => t.minimized).length} completed)</div></div>
+        `;
+      } else {
+        const d = loadDetailsState.editDraft;
+        body.innerHTML = `
+          <div class="field"><label>PRO#</label><input class="cell-input" id="ld-ov-pro" value="${escapeHtml(d.proNumber)}"></div>
+          <div class="field"><label>Driver</label><input class="cell-input" id="ld-ov-driver" list="driverNamesList" value="${escapeHtml(d.driverName)}"></div>
+          <div class="field"><label>Rate</label><input class="cell-input" id="ld-ov-rate" value="${escapeHtml(d.rate)}"></div>
+          <div class="ld-edit-bar">
+            <button type="button" class="btn btn-ghost" data-ld-cancel="overview">Cancel</button>
+            <button type="button" class="btn" data-ld-save="overview">Save</button>
+          </div>
+        `;
+      }
+    } else if (tab === "notes") {
+      const editing = loadDetailsState.editMode === "notes";
+      if (!editing) {
+        body.innerHTML = `
+          <div class="ld-edit-bar"><button type="button" class="btn btn-ghost" data-ld-edit="notes">Edit</button></div>
+          <div class="field"><label>Notes on this load</label><div class="static-text" style="white-space:pre-wrap;">${escapeHtml(row.notes || "—")}</div></div>
+          <div class="calc-note" style="margin-top:10px;">These notes travel with the load — visible here and on the Accounting page once it's sent over.</div>
+        `;
+      } else {
+        const d = loadDetailsState.editDraft;
+        body.innerHTML = `
+          <div class="field"><label>Notes on this load</label><textarea class="cell-input" id="ld-notes-text" rows="6" style="width:100%;">${escapeHtml(d.notes)}</textarea></div>
+          <div class="ld-edit-bar">
+            <button type="button" class="btn btn-ghost" data-ld-cancel="notes">Cancel</button>
+            <button type="button" class="btn" data-ld-save="notes">Save</button>
+          </div>
+        `;
+      }
     } else if (tab.startsWith("trip-")) {
-      const tripDbOrLocalId = tab.slice(5);
-      const trip = row.trips.find((t) => t.id === tripDbOrLocalId);
+      const tripLocalId = tab.slice(5);
+      const trip = row.trips.find((t) => t.id === tripLocalId);
       if (!trip) { body.innerHTML = `<div class="subtext">Trip not found.</div>`; return; }
-      body.innerHTML = `
-        <div class="field"><label>Route ID</label><div class="static-text">${escapeHtml(trip.routeId || "—")}</div></div>
-        <div class="field"><label>Trip ID</label><div class="static-text">${escapeHtml(trip.tripId || "—")}</div></div>
-        <div class="field"><label>Trailer #</label><div class="static-text">${escapeHtml(trip.trailerOut || "—")}</div></div>
-        <div class="field"><label>Route Miles</label><div class="static-text">${escapeHtml(trip.routeMiles || "—")}</div></div>
-        <div class="field"><label>Stops</label><div class="static-text">${escapeHtml(trip.stopCount || "—")}</div></div>
-        <div class="field"><label>Status</label><div class="static-text">${trip.minimized ? "Completed" : "Active"}</div></div>
-      `;
+      const editing = loadDetailsState.editMode === tripLocalId;
+      const stops = loadDetailsState.stopsByTrip[tripLocalId] || [];
+
+      if (!editing) {
+        const tripDrv = trip.driverId ? findDriver(trip.driverId) : null;
+        const stopsHtml = stops.length
+          ? stops.map((s) => `<div class="ld-stop-row"><span>Stop ${s.stopNumber}</span><span>In: ${escapeHtml(s.timeIn || "—")}</span><span>Out: ${escapeHtml(s.timeOut || "—")}</span></div>`).join("")
+          : `<div class="subtext">No stop times recorded yet.</div>`;
+        body.innerHTML = `
+          <div class="ld-edit-bar"><button type="button" class="btn btn-ghost" data-ld-edit="${tripLocalId}">Edit</button></div>
+          <div class="field"><label>Route ID</label><div class="static-text">${escapeHtml(trip.routeId || "—")}</div></div>
+          <div class="field"><label>Trip ID</label><div class="static-text">${escapeHtml(trip.tripId || "—")}</div></div>
+          <div class="field"><label>Trailer #</label><div class="static-text">${escapeHtml(trip.trailerOut || "—")}</div></div>
+          <div class="field"><label>Route Miles</label><div class="static-text">${escapeHtml(trip.routeMiles || "—")}</div></div>
+          <div class="field"><label>Stops</label><div class="static-text">${escapeHtml(trip.stopCount || "—")}</div></div>
+          <div class="field"><label>Driver on this trip</label><div class="static-text">${escapeHtml(tripDrv ? tripDrv.name : "— (same as load driver)")}</div></div>
+          <div class="field"><label>Status</label><div class="static-text">${trip.minimized ? "Completed" : "Active"}</div></div>
+          <div class="field"><label>Notes on this route</label><div class="static-text" style="white-space:pre-wrap;">${escapeHtml(trip.notes || "—")}</div></div>
+          <div class="field"><label>Stop In/Out Times</label>${stopsHtml}</div>
+        `;
+      } else {
+        const d = loadDetailsState.editDraft;
+        const stopCount = Math.max(0, parseInt(d.stopCount, 10) || 0);
+        body.innerHTML = `
+          <div class="field"><label>Route ID</label><input class="cell-input" id="ld-tr-routeId" value="${escapeHtml(d.routeId)}"></div>
+          <div class="field"><label>Trip ID</label><input class="cell-input" id="ld-tr-tripId" value="${escapeHtml(d.tripId)}"></div>
+          <div class="field"><label>Trailer #</label><input class="cell-input" id="ld-tr-trailerOut" value="${escapeHtml(d.trailerOut)}"></div>
+          <div class="field"><label>Route Miles</label><input class="cell-input" id="ld-tr-routeMiles" value="${escapeHtml(d.routeMiles)}"></div>
+          <div class="field"><label>Stops</label><input class="cell-input" id="ld-tr-stopCount" value="${escapeHtml(d.stopCount)}"></div>
+          <div class="field"><label>Reassign Driver <span class="subtext">(leave blank to keep the load's driver)</span></label><input class="cell-input" id="ld-tr-driver" list="driverNamesList" value="${escapeHtml(d.driverName)}"></div>
+          <div class="field"><label>Notes on this route</label><textarea class="cell-input" id="ld-tr-notes" rows="3" style="width:100%;">${escapeHtml(d.notes)}</textarea></div>
+          <div class="field"><label>Stop In/Out Times</label><div id="ld-stop-fields">${stopFieldsHtml(stopCount, d.stops)}</div></div>
+          <div class="ld-edit-bar">
+            <button type="button" class="btn btn-ghost" data-ld-cancel="${tripLocalId}">Cancel</button>
+            <button type="button" class="btn" data-ld-save="${tripLocalId}">Save</button>
+          </div>
+        `;
+      }
     } else if (tab === "images") {
       const gallery = loadDetailsState.attachments.length
         ? loadDetailsState.attachments.map((a) => `
@@ -1344,6 +1904,107 @@
           </div>`).join("") : `<div class="subtext" style="padding:10px 0;">No changes recorded yet.</div>`}
       `;
     }
+  }
+
+  function startLoadDetailsEdit(tabKey) {
+    if (!loadDetailsState) return;
+    const found = findRowAnywhere(loadDetailsState.rowId);
+    if (!found) return;
+    const row = found.row;
+    loadDetailsState.editMode = tabKey;
+    if (tabKey === "overview") {
+      const drv = row.driverId ? findDriver(row.driverId) : null;
+      loadDetailsState.editDraft = { proNumber: row.proNumber || "", driverName: drv ? drv.name : (row.driverNameText || ""), rate: row.rate || "" };
+    } else if (tabKey === "notes") {
+      loadDetailsState.editDraft = { notes: row.notes || "" };
+    } else {
+      const trip = row.trips.find((t) => t.id === tabKey);
+      const tripDrv = trip.driverId ? findDriver(trip.driverId) : null;
+      loadDetailsState.editDraft = {
+        routeId: trip.routeId || "", tripId: trip.tripId || "", trailerOut: trip.trailerOut || "",
+        routeMiles: trip.routeMiles || "", stopCount: trip.stopCount || "",
+        driverName: tripDrv ? tripDrv.name : "", notes: trip.notes || "",
+        stops: (loadDetailsState.stopsByTrip[tabKey] || []).map((s) => ({ ...s })),
+      };
+    }
+    renderLoadDetailsTabContent();
+  }
+
+  function cancelLoadDetailsEdit() {
+    if (!loadDetailsState) return;
+    loadDetailsState.editMode = null;
+    loadDetailsState.editDraft = null;
+    renderLoadDetailsTabContent();
+  }
+
+  async function saveLoadDetailsEdit(tabKey) {
+    if (!loadDetailsState) return;
+    const found = findRowAnywhere(loadDetailsState.rowId);
+    if (!found) return;
+    const row = found.row;
+    const d = loadDetailsState.editDraft;
+
+    if (tabKey === "overview") {
+      row.proNumber = $("#ld-ov-pro").value.trim();
+      row.rate = $("#ld-ov-rate").value.trim();
+      const nameVal = $("#ld-ov-driver").value.trim();
+      row.driverNameText = nameVal;
+      row.driverId = null;
+      const match = driversForLocation(row.location || state.activeLocation || "atlanta").find((x) => x.name.toLowerCase() === nameVal.toLowerCase());
+      if (match) row.driverId = match.id;
+      await saveShiftNow(row);
+      $("#ld-title").textContent = `Load ${row.proNumber || "(no PRO# yet)"}`;
+    } else if (tabKey === "notes") {
+      row.notes = $("#ld-notes-text").value.trim();
+      await saveShiftNow(row);
+    } else {
+      const trip = row.trips.find((t) => t.id === tabKey);
+      if (!trip) return;
+      trip.routeId = $("#ld-tr-routeId").value.trim();
+      trip.tripId = $("#ld-tr-tripId").value.trim();
+      trip.trailerOut = $("#ld-tr-trailerOut").value.trim();
+      trip.routeMiles = $("#ld-tr-routeMiles").value.trim();
+      trip.stopCount = $("#ld-tr-stopCount").value.trim();
+      trip.notes = $("#ld-tr-notes").value.trim();
+      const driverNameVal = $("#ld-tr-driver").value.trim();
+      trip.driverId = null;
+      if (driverNameVal) {
+        const match = driversForLocation(row.location || state.activeLocation || "atlanta").find((x) => x.name.toLowerCase() === driverNameVal.toLowerCase());
+        if (match) trip.driverId = match.id;
+      }
+      await saveTripNow(row, trip, row.trips.indexOf(trip) + 1);
+
+      const stopCount = Math.max(0, parseInt(trip.stopCount, 10) || 0);
+      const newStops = [];
+      for (let i = 0; i < stopCount; i++) {
+        const timeIn = document.querySelector(`[data-stop-field="timeIn"][data-stop-index="${i}"]`);
+        const timeOut = document.querySelector(`[data-stop-field="timeOut"][data-stop-index="${i}"]`);
+        newStops.push({ stopNumber: i + 1, timeIn: timeIn ? timeIn.value.trim() : "", timeOut: timeOut ? timeOut.value.trim() : "" });
+      }
+      if (supabaseClient && trip.dbId) {
+        try {
+          for (const s of newStops) {
+            const existing = (loadDetailsState.stopsByTrip[tabKey] || []).find((x) => x.stopNumber === s.stopNumber);
+            const payload = { trip_id: trip.dbId, stop_number: s.stopNumber, time_in: s.timeIn || null, time_out: s.timeOut || null };
+            if (existing && existing.dbId) {
+              await supabaseClient.from("trip_stops").update(payload).eq("id", existing.dbId);
+            } else {
+              await supabaseClient.from("trip_stops").insert(payload);
+            }
+          }
+        } catch (e) {
+          setDriverSyncStatus(`Saved the trip, but couldn't save stop times (${e.message || e}).`, "error");
+        }
+        const { data: freshStops } = await supabaseClient.from("trip_stops").select("*").eq("trip_id", trip.dbId);
+        loadDetailsState.stopsByTrip[tabKey] = (freshStops || []).sort((a, b) => a.stop_number - b.stop_number)
+          .map((s) => ({ dbId: s.id, stopNumber: s.stop_number, timeIn: s.time_in || "", timeOut: s.time_out || "" }));
+      }
+    }
+
+    loadDetailsState.editMode = null;
+    loadDetailsState.editDraft = null;
+    renderLoadDetailsTabs();
+    renderBoardTable();
   }
 
   async function uploadTripSheetImages(fileList) {
@@ -1822,10 +2483,28 @@
       on("tg-close", "click", () => $("#modal-text-group").classList.add("hidden"));
       on("tg-cancel", "click", () => $("#modal-text-group").classList.add("hidden"));
       on("tg-start", "click", startTextSelected);
+      on("tg-send-now", "click", sendCurrentGroupBatchDirect);
       on("tg-open-batch", "click", openCurrentGroupBatch);
       on("tg-confirm-sent", "click", confirmGroupBatchSent);
       on("tg-finish", "click", () => $("#modal-text-group").classList.add("hidden"));
       $("#modal-text-group").addEventListener("click", (e) => { if (e.target.id === "modal-text-group") $("#modal-text-group").classList.add("hidden"); });
+    }
+
+    if ($("#modal-stop-times")) {
+      on("st-close", "click", closeStopTimesModal);
+      on("st-skip", "click", () => finalizeTripCompletion(false));
+      on("st-confirm", "click", () => finalizeTripCompletion(true));
+      $("#modal-stop-times").addEventListener("click", (e) => { if (e.target.id === "modal-stop-times") closeStopTimesModal(); });
+    }
+
+    if ($("#modal-send-text")) {
+      const closeSendText = () => { $("#modal-send-text").classList.add("hidden"); sendTextModalState = null; };
+      on("send-text-close", "click", closeSendText);
+      on("send-text-cancel", "click", closeSendText);
+      on("send-text-submit", "click", submitSendTextModal);
+      $("#modal-send-text").addEventListener("click", (e) => { if (e.target.id === "modal-send-text") closeSendText(); });
+      const msgInput = $("#send-text-message");
+      if (msgInput) msgInput.addEventListener("input", updateSendTextCounter);
     }
 
     if ($("#modal-load-details")) {
@@ -1834,7 +2513,7 @@
       $("#modal-load-details").addEventListener("click", (e) => { if (e.target.id === "modal-load-details") closeLoadDetailsModal(); });
       $("#ld-tabs").addEventListener("click", (e) => {
         const tabBtn = e.target.closest(".ld-tab");
-        if (tabBtn && loadDetailsState) { loadDetailsState.activeTab = tabBtn.dataset.tab; renderLoadDetailsTabs(); }
+        if (tabBtn && loadDetailsState) { loadDetailsState.activeTab = tabBtn.dataset.tab; loadDetailsState.editMode = null; renderLoadDetailsTabs(); }
       });
       $("#ld-tab-content").addEventListener("change", (e) => {
         if (e.target.id === "ld-file-input" && e.target.files.length) uploadTripSheetImages(Array.from(e.target.files));
@@ -1842,6 +2521,19 @@
       $("#ld-tab-content").addEventListener("click", (e) => {
         const rmBtn = e.target.closest("[data-remove-attachment]");
         if (rmBtn) removeTripSheetImage(rmBtn.dataset.removeAttachment);
+        const editBtn = e.target.closest("[data-ld-edit]");
+        if (editBtn) startLoadDetailsEdit(editBtn.dataset.ldEdit);
+        const cancelBtn = e.target.closest("[data-ld-cancel]");
+        if (cancelBtn) cancelLoadDetailsEdit();
+        const saveBtn = e.target.closest("[data-ld-save]");
+        if (saveBtn) saveLoadDetailsEdit(saveBtn.dataset.ldSave);
+      });
+      $("#ld-tab-content").addEventListener("input", (e) => {
+        if (e.target.id === "ld-tr-stopCount" && loadDetailsState && loadDetailsState.editDraft) {
+          loadDetailsState.editDraft.stopCount = e.target.value;
+          const container = $("#ld-stop-fields");
+          if (container) container.innerHTML = stopFieldsHtml(Math.max(0, parseInt(e.target.value, 10) || 0), loadDetailsState.editDraft.stops);
+        }
       });
     }
 
@@ -1878,14 +2570,30 @@
       const textBtn = e.target.closest('[data-action="text-driver"]');
       if (textBtn) textDriverForRow(textBtn.dataset.row);
       if (e.target.id === "btn-quick-add-row") quickAddBlankRow();
+      const minimizeBtn = e.target.closest('[data-action="minimize-trip"]');
+      if (minimizeBtn) minimizeTrip(minimizeBtn.dataset.row, minimizeBtn.dataset.trip);
+      const restoreBtn = e.target.closest('[data-action="restore-trip"]');
+      if (restoreBtn) restoreTrip(restoreBtn.dataset.row, restoreBtn.dataset.trip);
+      const addTripBtn = e.target.closest('[data-action="add-trip"]');
+      if (addTripBtn) addNewTrip(addTripBtn.dataset.row);
       const completeBtn = e.target.closest('[data-action="complete-trip"]');
-      if (completeBtn && !completeBtn.disabled) completeTripAndStartNew(completeBtn.dataset.row);
+      if (completeBtn && !completeBtn.disabled) completeTrip(completeBtn.dataset.row, completeBtn.dataset.trip);
       const openProBtn = e.target.closest('[data-open-pro]');
       if (openProBtn) openLoadDetailsModal(openProBtn.dataset.openPro, openProBtn.dataset.trip || null);
     });
     boardTable.addEventListener("focusout", (e) => {
       const t = e.target;
       const field = t.dataset && t.dataset.field;
+      if (field === "routeId") {
+        const tr = t.closest("tr");
+        const completeBtn = tr ? tr.querySelector('[data-action="complete-trip"]') : null;
+        if (completeBtn) {
+          const hasRoute = !!t.value.trim();
+          completeBtn.disabled = !hasRoute;
+          completeBtn.title = hasRoute ? "Mark closed out" : "Enter a Route ID first";
+        }
+        return;
+      }
       if (field !== "proNumber" && field !== "tripId") return;
       const wrap = t.closest(".cell-with-link");
       if (!wrap) return;
@@ -1972,6 +2680,14 @@
           const td = t.closest("td");
           td.classList.toggle(t.dataset.field === "salvage" ? "flag-yes" : "flag-backhaul", t.checked);
           saveTripNow(found.row, trip, found.row.trips.indexOf(trip) + 1);
+
+          if (t.checked && (t.dataset.field === "salvage" || t.dataset.field === "backhaul")) {
+            const drv = trip.driverId ? findDriver(trip.driverId) : (found.row.driverId ? findDriver(found.row.driverId) : null);
+            const phone = drv ? drv.phone : found.row.cellSnapshot;
+            const message = t.dataset.field === "salvage" ? SALVAGE_MESSAGE : BACKHAUL_MESSAGE;
+            if (phone) textDriverPhone(phone, message);
+            else setDriverSyncStatus(`Marked as ${t.dataset.field} — no phone on file for this driver to send the heads-up text.`, "error");
+          }
         }
       }
     });
@@ -2029,7 +2745,8 @@
       if (btn) selectTextGroup(btn.dataset.group);
     });
     on("tg-start", "click", startGroupTexting);
-    on("tg-open-batch", "click", openCurrentGroupBatch);
+    on("tg-send-now", "click", sendCurrentGroupBatchDirect);
+      on("tg-open-batch", "click", openCurrentGroupBatch);
     on("tg-confirm-sent", "click", confirmGroupBatchSent);
     const closeTextGroupModal = () => $("#modal-text-group").classList.add("hidden");
     on("tg-finish", "click", closeTextGroupModal);
@@ -2495,6 +3212,7 @@
       on("tg-close", "click", () => $("#modal-text-group").classList.add("hidden"));
       on("tg-cancel", "click", () => $("#modal-text-group").classList.add("hidden"));
       on("tg-start", "click", startTextSelectedHouston);
+      on("tg-send-now", "click", sendCurrentGroupBatchDirect);
       on("tg-open-batch", "click", openCurrentGroupBatch);
       on("tg-confirm-sent", "click", confirmGroupBatchSent);
       on("tg-finish", "click", () => $("#modal-text-group").classList.add("hidden"));
@@ -2552,6 +3270,11 @@
         setText(".col-hou-carrier .static-text", pick(drv && drv.carrier, found.row.carrier));
         setText(".col-mc .static-text", pick(drv && drv.mc, found.row.mc));
         setText(".col-rating .static-text", pick(drv && drv.rating, found.row.rating));
+        if (drv && drv.normalRate && !String(found.row.normalRate || "").trim()) {
+          found.row.normalRate = drv.normalRate;
+          const rateInput = tr.querySelector('input[data-field="normalRate"]');
+          if (rateInput) rateInput.value = drv.normalRate;
+        }
       }
       scheduleHoustonRowSave(found.row);
     });
@@ -2670,6 +3393,14 @@
     const fscRate = pricingSettings.fsc_rate || 0;
     const fscPayment = calcFscPayment(fscRate, totalMiles, pricingSettings);
 
+    // Delaware doesn't use the tiered Kroger-style cost lookup — every Delaware
+    // load pays $1000 flat or $4/mile, whichever is greater. Assumption: this
+    // applies to what we PAY (carrier pay / cost), not the revenue side —
+    // easy to adjust if that's wrong.
+    if (locationKey === "delaware" && totalMiles > 0) {
+      totalCost = Math.max(1000, totalMiles * 4);
+    }
+
     const accountingRow = {
       source_shift_id: row.dbId, location: locationKey, shift_date: dKey,
       aljex_load_number: row.proNumber || null,
@@ -2711,44 +3442,134 @@
 
   let accountingRecords = [];
 
+  let acctTripsByShiftId = {}; // source_shift_id -> [trips], used for the Delaware "Routes" column
+
   async function loadAccountingRecords() {
     if (!supabaseClient) return;
     const { data, error } = await supabaseClient.from(ACCOUNTING_TABLE).select("*");
     if (error) { console.error("Failed to load accounting records:", error); setDriverSyncStatus(`Couldn't load Accounting (${error.message}).`, "error"); return; }
     accountingRecords = (data || []).sort((a, b) => (a.shift_date < b.shift_date ? 1 : -1));
+
+    const shiftIds = [...new Set(accountingRecords.filter((r) => r.location === "delaware" && r.source_shift_id).map((r) => r.source_shift_id))];
+    if (shiftIds.length) {
+      const { data: trips, error: tripsErr } = await supabaseClient.from(TRIPS_TABLE).select("*").in("shift_id", shiftIds);
+      if (!tripsErr) {
+        acctTripsByShiftId = {};
+        (trips || []).forEach((t) => {
+          if (!acctTripsByShiftId[t.shift_id]) acctTripsByShiftId[t.shift_id] = [];
+          acctTripsByShiftId[t.shift_id].push(t);
+        });
+      }
+    }
+  }
+
+  function acctRoutesChipsHtml(rec) {
+    const trips = rec.source_shift_id ? acctTripsByShiftId[rec.source_shift_id] : null;
+    if (!trips || !trips.length) return `<span class="subtext" style="font-size:11px;">—</span>`;
+    return trips.map((t, i) => {
+      const label = t.trip_id || t.route_id || `Trip ${i + 1}`;
+      const cls = t.complete ? "trip-segment-done" : "";
+      return `<button type="button" class="trip-chip ${cls}" data-open-acct-load="${rec.id}" data-open-acct-trip="${t.id}" title="Open this route's details">${escapeHtml(label)}</button>`;
+    }).join(" ");
   }
 
   function fmtMoney(n) { return n == null ? "—" : `$${Number(n).toFixed(2)}`; }
 
+  const LOCATIONS_WITH_LEVELS = ["atlanta"]; // only these use Cost/Revenue Level tiers — everyone else has a set rate
+  const LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST = ["delaware"]; // flat-rate locations: show Routes, hide Total Cost/Revenue/FSC
+
+  function acctTableHeaderHtml() {
+    const loc = state.acctLocationTab || "atlanta";
+    const showLevels = LOCATIONS_WITH_LEVELS.includes(loc);
+    const showRoutesInstead = LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST.includes(loc);
+    return `<tr>
+      <th>Date</th>
+      <th>Aljex #</th>
+      <th>Driver</th>
+      <th>MC</th>
+      ${showLevels ? `<th>Cost Level</th><th>Revenue Level</th>` : ""}
+      ${showRoutesInstead ? `<th>Routes</th>` : ""}
+      <th>Total Miles</th>
+      <th>Total Stops</th>
+      ${showRoutesInstead ? "" : `<th>Total Cost</th><th>Total Revenue</th><th>FSC Payment</th>`}
+      <th>Total Carrier Pay</th>
+      <th>Status</th>
+    </tr>`;
+  }
+
   function accountingRowHtml(rec) {
+    const showLevels = LOCATIONS_WITH_LEVELS.includes(rec.location);
+    const showRoutesInstead = LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST.includes(rec.location);
     const levelOptions = (selected) => [1, 2, 3, 4].map((n) => `<option value="${n}" ${n === selected ? "selected" : ""}>${n}${n === 4 ? " (Market)" : ""}</option>`).join("");
     const statusOptions = ["active", "released"].map((s) => `<option value="${s}" ${s === rec.status ? "selected" : ""}>${s[0].toUpperCase() + s.slice(1)}</option>`).join("");
     return `<tr id="acct-${rec.id}">
       <td>${escapeHtml(rec.shift_date)}</td>
-      <td>${escapeHtml(rec.aljex_load_number || "—")}</td>
+      <td>${rec.aljex_load_number ? `<button type="button" class="cell-link-btn" style="width:auto; padding:2px 10px;" data-open-acct-load="${rec.id}">${escapeHtml(rec.aljex_load_number)} ↗</button>` : "—"}</td>
       <td>${escapeHtml(rec.driver_name_text || "—")}</td>
       <td>${escapeHtml(rec.mc_dot || "—")}</td>
+      ${showLevels ? `
       <td><select class="cell-input" data-action="acct-cost-level" data-id="${rec.id}">${levelOptions(rec.cost_level)}</select></td>
-      <td><select class="cell-input" data-action="acct-revenue-level" data-id="${rec.id}">${levelOptions(rec.revenue_level)}</select></td>
+      <td><select class="cell-input" data-action="acct-revenue-level" data-id="${rec.id}">${levelOptions(rec.revenue_level)}</select></td>` : ""}
+      ${showRoutesInstead ? `<td>${acctRoutesChipsHtml(rec)}</td>` : ""}
       <td>${escapeHtml(rec.total_miles != null ? String(rec.total_miles) : "—")}</td>
       <td>${escapeHtml(rec.total_stops != null ? String(rec.total_stops) : "—")}</td>
-      <td>${fmtMoney(rec.total_cost)}</td>
-      <td>${fmtMoney(rec.total_revenue)}</td>
-      <td>${fmtMoney(rec.fsc_payment)}</td>
+      ${showRoutesInstead ? "" : `<td>${fmtMoney(rec.total_cost)}</td><td>${fmtMoney(rec.total_revenue)}</td><td>${fmtMoney(rec.fsc_payment)}</td>`}
       <td><input class="cell-input" style="width:90px;" data-action="acct-carrier-pay" data-id="${rec.id}" value="${rec.total_carrier_pay != null ? rec.total_carrier_pay : ""}"></td>
       <td><select class="cell-input" data-action="acct-status" data-id="${rec.id}">${statusOptions}</select></td>
     </tr>`;
   }
 
-  function renderAccountingTable() {
-    const body = $("#accounting-table-body");
-    if (!body) return;
+  function getFilteredAccountingRecords() {
     const loc = state.acctLocationTab || "atlanta";
     let filtered = accountingRecords.filter((r) => r.location === loc);
     if (state.acctDateFilter) filtered = filtered.filter((r) => r.shift_date === state.acctDateFilter);
+    return filtered;
+  }
+
+  function renderAccountingTable() {
+    const body = $("#accounting-table-body");
+    if (!body) return;
+    const filtered = getFilteredAccountingRecords();
+    const loc = state.acctLocationTab || "atlanta";
+    if ($("#accounting-table-head")) $("#accounting-table-head").innerHTML = acctTableHeaderHtml();
+    const showLevels = LOCATIONS_WITH_LEVELS.includes(loc);
+    const showRoutesInstead = LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST.includes(loc);
+    const colspan = showLevels ? 13 : (showRoutesInstead ? 9 : 11);
     body.innerHTML = filtered.length
       ? filtered.map(accountingRowHtml).join("")
-      : `<tr><td colspan="13" class="subtext" style="padding:16px;">No completed loads ${state.acctDateFilter ? "for this day" : ""} here yet — mark a shift complete on the ${loc} board and it'll show up here.</td></tr>`;
+      : `<tr><td colspan="${colspan}" class="subtext" style="padding:16px;">No completed loads ${state.acctDateFilter ? "for this day" : ""} here yet — mark a shift complete on the ${loc} board and it'll show up here.</td></tr>`;
+    renderDriverStatsTable();
+  }
+
+  function renderDriverStatsTable() {
+    const body = $("#accounting-driver-table-body");
+    if (!body) return;
+    const filtered = getFilteredAccountingRecords();
+    const byDriver = {};
+    filtered.forEach((r) => {
+      const key = r.driver_name_text || "(no driver on file)";
+      if (!byDriver[key]) byDriver[key] = { name: key, loads: 0, miles: 0, stops: 0, cost: 0, revenue: 0, carrierPay: 0 };
+      const d = byDriver[key];
+      d.loads += 1;
+      d.miles += Number(r.total_miles) || 0;
+      d.stops += Number(r.total_stops) || 0;
+      d.cost += Number(r.total_cost) || 0;
+      d.revenue += Number(r.total_revenue) || 0;
+      d.carrierPay += Number(r.total_carrier_pay) || 0;
+    });
+    const rows = Object.values(byDriver).sort((a, b) => b.loads - a.loads);
+    body.innerHTML = rows.length
+      ? rows.map((d) => `<tr>
+          <td>${escapeHtml(d.name)}</td>
+          <td>${d.loads}</td>
+          <td>${d.miles.toFixed(0)}</td>
+          <td>${d.stops.toFixed(0)}</td>
+          <td>${fmtMoney(d.cost)}</td>
+          <td>${fmtMoney(d.revenue)}</td>
+          <td>${fmtMoney(d.carrierPay)}</td>
+          <td>${fmtMoney(d.loads ? d.carrierPay / d.loads : 0)}</td>
+        </tr>`).join("")
+      : `<tr><td colspan="8" class="subtext" style="padding:16px;">No completed loads here yet.</td></tr>`;
   }
 
   function switchAcctLocationTab(loc) {
@@ -2783,6 +3604,10 @@
 
     rec.total_cost = Math.round(totalCost * 100) / 100;
     rec.total_revenue = Math.round(totalRevenue * 100) / 100;
+
+    if (rec.location === "delaware" && rec.total_miles > 0) {
+      rec.total_cost = Math.round(Math.max(1000, rec.total_miles * 4) * 100) / 100;
+    }
 
     try {
       await supabaseClient.from(ACCOUNTING_TABLE).update({ cost_level: rec.cost_level, revenue_level: rec.revenue_level, total_cost: rec.total_cost, total_revenue: rec.total_revenue }).eq("id", accountingId);
@@ -2826,6 +3651,16 @@
         if (btn) switchAcctLocationTab(btn.dataset.location);
       });
       switchAcctLocationTab("atlanta");
+    }
+
+    if ($("#acct-view-toggle")) {
+      $("#acct-view-toggle").addEventListener("click", (e) => {
+        const btn = e.target.closest(".location-tab");
+        if (!btn) return;
+        $all(".location-tab", $("#acct-view-toggle")).forEach((b) => b.classList.toggle("is-active", b === btn));
+        $("#acct-byload-view").classList.toggle("hidden", btn.dataset.view !== "byload");
+        $("#acct-bydriver-view").classList.toggle("hidden", btn.dataset.view !== "bydriver");
+      });
     }
 
     on("acct-show-all", "click", () => setAcctDateFilter(null));
@@ -2884,6 +3719,40 @@
           }, SAVE_DEBOUNCE_MS);
         }
       });
+      table.addEventListener("click", (e) => {
+        const openBtn = e.target.closest("[data-open-acct-load]");
+        if (openBtn) openLoadDetailsFromAccounting(openBtn.dataset.openAcctLoad, openBtn.dataset.openAcctTrip || null);
+      });
+    }
+
+    if ($("#modal-load-details")) {
+      on("ld-close", "click", closeLoadDetailsModal);
+      on("ld-close-btn", "click", closeLoadDetailsModal);
+      $("#modal-load-details").addEventListener("click", (e) => { if (e.target.id === "modal-load-details") closeLoadDetailsModal(); });
+      $("#ld-tabs").addEventListener("click", (e) => {
+        const tabBtn = e.target.closest(".ld-tab");
+        if (tabBtn && loadDetailsState) { loadDetailsState.activeTab = tabBtn.dataset.tab; loadDetailsState.editMode = null; renderLoadDetailsTabs(); }
+      });
+      $("#ld-tab-content").addEventListener("change", (e) => {
+        if (e.target.id === "ld-file-input" && e.target.files.length) uploadTripSheetImages(Array.from(e.target.files));
+      });
+      $("#ld-tab-content").addEventListener("click", (e) => {
+        const rmBtn = e.target.closest("[data-remove-attachment]");
+        if (rmBtn) removeTripSheetImage(rmBtn.dataset.removeAttachment);
+        const editBtn = e.target.closest("[data-ld-edit]");
+        if (editBtn) startLoadDetailsEdit(editBtn.dataset.ldEdit);
+        const cancelBtn = e.target.closest("[data-ld-cancel]");
+        if (cancelBtn) cancelLoadDetailsEdit();
+        const saveBtn = e.target.closest("[data-ld-save]");
+        if (saveBtn) saveLoadDetailsEdit(saveBtn.dataset.ldSave);
+      });
+      $("#ld-tab-content").addEventListener("input", (e) => {
+        if (e.target.id === "ld-tr-stopCount" && loadDetailsState && loadDetailsState.editDraft) {
+          loadDetailsState.editDraft.stopCount = e.target.value;
+          const container = $("#ld-stop-fields");
+          if (container) container.innerHTML = stopFieldsHtml(Math.max(0, parseInt(e.target.value, 10) || 0), loadDetailsState.editDraft.stops);
+        }
+      });
     }
   }
 
@@ -2902,9 +3771,18 @@
 
   /* ---------------- init ---------------- */
 
-  function init() {
-    try { renderNav(); } catch (e) { console.error("renderNav() failed:", e); }
+  async function init() {
+    const ok = await requireAuth();
+    if (!ok) return; // requireAuth() already redirected to login.html
+
     const info = PAGE_MAP[currentFile()];
+    if (info && info.type === "accounting" && !isAccountingUser()) {
+      window.location.href = "index.html";
+      return;
+    }
+
+    try { renderNav(); } catch (e) { console.error("renderNav() failed:", e); }
+    try { startAlertScanning(); } catch (e) { console.error("startAlertScanning() failed:", e); }
     try { wireModals(); } catch (e) { console.error("wireModals() failed:", e); }
     try {
       if (info.type === "board") initBoardPage(info);

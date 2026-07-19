@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign In — DL Transport Dispatch</title>
+<link rel="stylesheet" href="loadboard.css">
+<style>
+  body { display: flex; align-items: center; justify-content: center; min-height: 100vh; background: var(--slate-100, #f1f5f9); }
+  .login-card { background: #fff; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); padding: 36px 32px; width: 100%; max-width: 360px; }
+  .login-card h1 { font-size: 19px; margin: 0 0 4px; }
+  .login-card .subtext { margin-bottom: 22px; }
+  .login-card .field { margin-bottom: 16px; }
+  .login-card label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 5px; }
+  .login-card input { width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid var(--slate-500, #cbd5e1); border-radius: 6px; font-size: 14px; }
+  .login-card .btn { width: 100%; margin-top: 6px; padding: 10px; }
+  #login-error { color: #b91c1c; font-size: 13px; margin-top: 12px; min-height: 16px; }
+</style>
+</head>
+<body>
+  <div class="login-card">
+    <h1>DL Transport Dispatch</h1>
+    <div class="subtext">Sign in to continue</div>
+    <form id="login-form">
+      <div class="field"><label for="login-username">Username</label><input type="text" id="login-username" autocomplete="username" required></div>
+      <div class="field"><label for="login-password">Password</label><input type="password" id="login-password" autocomplete="current-password" required></div>
+      <button type="submit" class="btn" id="login-submit">Sign In</button>
+      <div id="login-error"></div>
+    </form>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    const SUPABASE_URL = "https://ygsapysqzwrpcimgvaqx.supabase.co";
+    const SUPABASE_KEY = "sb_publishable_8b8bSIiYm5TzLTw0WG1pAw_5ZWW5ZPL";
+    const USERNAME_DOMAIN = "dltransport.local"; // usernames map internally to username@dltransport.local
+
+    const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+      auth: { persistSession: true, autoRefreshToken: true, storageKey: "dl-dispatch-auth" },
+    });
+
+    // Already signed in? Skip straight to the app.
+    supabaseClient.auth.getSession().then(({ data }) => {
+      if (data.session) window.location.href = "index.html";
+    });
+
+    const form = document.getElementById("login-form");
+    const errorEl = document.getElementById("login-error");
+    const submitBtn = document.getElementById("login-submit");
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errorEl.textContent = "";
+      const username = document.getElementById("login-username").value.trim();
+      const password = document.getElementById("login-password").value;
+      if (!username || !password) return;
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Signing in…";
+      const email = username.includes("@") ? username : `${username}@${USERNAME_DOMAIN}`;
+      const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Sign In";
+      if (error) {
+        errorEl.textContent = "Incorrect username or password.";
+        return;
+      }
+      window.location.href = "index.html";
+    });
+  </script>
+</body>
+</html>

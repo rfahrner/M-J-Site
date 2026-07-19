@@ -43,6 +43,28 @@
       <table class="board" id="board-table"></table>
     </div>
     <div id="board-empty-state" class="board-empty hidden">No loads yet for this day. Use &ldquo;+ Add Load&rdquo; to start filling in the sheet.</div>
+
+    <div id="available-section">
+      <h2 class="available-title">Available</h2>
+      <div class="subtext" style="margin-bottom:10px;">Drivers on standby for today &mdash; a quick list, not saved anywhere. Clears automatically the next day.</div>
+      <table class="available-table" id="available-table">
+        <thead>
+          <tr>
+            <th class="col-availDriver">Driver Name</th>
+            <th class="col-cell">Cell</th>
+            <th class="col-dispatcherPhone">Dispatcher Phone</th>
+            <th class="col-email">Email</th>
+            <th class="col-mc">MC #</th>
+            <th class="col-rating">Rating</th>
+            <th class="col-availRemove"></th>
+          </tr>
+        </thead>
+        <tbody id="available-table-body"></tbody>
+      </table>
+      <button type="button" class="quick-add-btn" id="btn-available-add-row" style="width:auto; margin-top:6px;">
+        <span class="quick-add-btn-label">+ Add Row</span>
+      </button>
+    </div>
   </div>
 
   <!-- ================= Add Driver modal ================= -->
@@ -189,7 +211,8 @@
       <div class="modal-footer">
         <button class="btn btn-ghost" id="tg-cancel">Cancel</button>
         <button class="btn" id="tg-start">Start</button>
-        <button class="btn hidden" id="tg-open-batch">Open in Outlook</button>
+        <button class="btn hidden" id="tg-send-now">Send Now</button>
+        <button class="btn btn-ghost hidden" id="tg-open-batch">Open in Outlook Instead</button>
         <button class="btn hidden" id="tg-confirm-sent">Sent — Next Batch</button>
         <button class="btn hidden" id="tg-finish">Done</button>
       </div>
@@ -211,7 +234,29 @@
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <div class="overlay hidden" id="modal-send-text">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Send Text</h3>
+        <button class="modal-close" id="send-text-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="field"><label>To</label><div class="static-text" id="send-text-phone-display"></div></div>
+        <div class="field">
+          <label>Message</label>
+          <textarea class="cell-input" id="send-text-message" rows="5" style="width:100%;" placeholder="Type your message..."></textarea>
+          <div class="subtext" id="send-text-counter" style="margin-top:4px;">0 characters — 1 text</div>
+        </div>
+        <div class="subtext" id="send-text-status" style="margin-top:8px;"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="send-text-cancel">Cancel</button>
+        <button class="btn" id="send-text-submit">Send</button>
+      </div>
+    </div>
+  </div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="loadboard.js" defer></script>
 </body>
 </html>
