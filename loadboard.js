@@ -54,29 +54,69 @@
   const BACKHAUL_MESSAGE = "This is D&L, you have a Backhaul pickup at your last stop. Please Call or text me your return info (what trailer the load is on, if anything was missing or damaged, and your ETA back) when you are done at your last stop, Also a pic of your stores in and out times.";
 
   const TRIP_SUBCOLS = [
+    { key: "nextCallTime",           label: "Next Call Time",      type: "time" },
     { key: "routeId",     label: "Route ID",         type: "text" },
     { key: "tripId",      label: "Trip ID",           type: "text" },
     { key: "trailerOut",  label: "Trailer #",         type: "text" },
     { key: "routeMiles",  label: "Rte Mi",             type: "text", small: true, inputmode: "decimal" },
     { key: "stopCount",   label: "Stops",              type: "text", small: true, inputmode: "numeric" },
     { key: "dispatchTime",label: "Dispatch/Ready",     type: "time" },
-    { key: "routeEstHours",   label: "Route Est Hours",    type: "text", small: true, inputmode: "decimal" },
-    { key: "salvage",     label: "Salvage",            type: "checkbox" },
-    { key: "backhaul",    label: "B/Haul",             type: "checkbox" },
-    { key: "backhaulType",           label: "B/Haul Type",         type: "text" },
-    { key: "backhaulLocation",       label: "B/Haul Location",     type: "text" },
-    { key: "backhaulTrailerNumber",  label: "B/Haul Trailer #",    type: "text" },
-    { key: "salvageBhaulRefusedBy",  label: "Refused By",          type: "text" },
-    { key: "nextCallTime",           label: "Next Call Time",      type: "time" },
-    { key: "etaToFinalStop",         label: "ETA to Final Stop",   type: "time" },
-    { key: "returnEtaToDc",          label: "Return ETA to DC",    type: "time" },
-    { key: "returnDropLocation",     label: "Return Drop Location",type: "text" },
-    { key: "estRouteComplete",       label: "Est Route Complete",  type: "time" },
-    { key: "ppwkReceived",           label: "Ppwk Rec'd",          type: "checkbox" },
+    { key: "salvage",     label: "Salvage",            type: "checkbox", group: "backhaul" },
+    { key: "backhaul",    label: "B/Haul",             type: "checkbox", group: "backhaul" },
+    { key: "backhaulLocation",       label: "B/Haul Location",     type: "text", group: "backhaul" },
+    { key: "salvageBhaulRefusedBy",  label: "Refused By",          type: "text", group: "backhaul" },
+    { key: "backhaulTrailerNumber",  label: "B/Haul Trailer #",    type: "text", group: "backhaul" },
+    { key: "returnEtaToDc",          label: "Return ETA to DC",    type: "time", group: "backhaul" },
+    { key: "ppwkReceived",           label: "Ppwk Rec'd",          type: "checkbox", group: "backhaul" },
+    { key: "backhaulType",           label: "B/Haul Type",         type: "text", group: "backhaul" },
+    { key: "routeEstHours",   label: "Route Est Hours",    type: "text", small: true, inputmode: "decimal", group: "estimate" },
+    { key: "etaToFinalStop",         label: "ETA to Final Stop",   type: "time", group: "estimate" },
+    { key: "estRouteComplete",       label: "Est Route Complete",  type: "time", group: "estimate" },
     { key: "etaNextDispatch", label: "ETA Next Dispatch",  type: "calc" },
     { key: "hosLeft",         label: "HOS Left",           type: "calc" },
     { key: "tripCallTime",    label: "Trip Call Time",     type: "calc" },
   ];
+
+  // Drag-to-reorder for the trip columns, persisted per-browser. Keeps
+  // TRIP_SUBCOLS itself as the source of truth for which columns exist —
+  // this is purely a display-order overlay on top of it, so adding or
+  // removing a column in code later never gets silently lost: unknown
+  // saved keys are dropped, and any column missing from a saved order
+  // (newly added since) is appended at the end rather than hidden.
+  let tripColOrder = TRIP_SUBCOLS.map((c) => c.key);
+  try {
+    const saved = JSON.parse(localStorage.getItem("dl-trip-col-order") || "null");
+    if (Array.isArray(saved)) {
+      const validKeys = new Set(TRIP_SUBCOLS.map((c) => c.key));
+      const kept = saved.filter((k) => validKeys.has(k));
+      const missing = TRIP_SUBCOLS.map((c) => c.key).filter((k) => !kept.includes(k));
+      tripColOrder = [...kept, ...missing];
+    }
+  } catch (e) { /* malformed localStorage — fall back to the default order */ }
+
+  function getOrderedTripSubcols() {
+    const byKey = {};
+    TRIP_SUBCOLS.forEach((c) => { byKey[c.key] = c; });
+    return tripColOrder.map((k) => byKey[k]).filter(Boolean);
+  }
+
+  function saveTripColOrder() {
+    try { localStorage.setItem("dl-trip-col-order", JSON.stringify(tripColOrder)); } catch (e) { /* ignore quota errors */ }
+  }
+
+  function moveTripCol(key, beforeKey) {
+    tripColOrder = tripColOrder.filter((k) => k !== key);
+    if (beforeKey == null) {
+      tripColOrder.push(key);
+    } else {
+      const idx = tripColOrder.indexOf(beforeKey);
+      tripColOrder.splice(idx === -1 ? tripColOrder.length : idx, 0, key);
+    }
+    saveTripColOrder();
+    renderBoardTable();
+    const panel = $("#columns-panel");
+    if (panel) panel.innerHTML = buildColumnsPanelHtml(); // keep the show/hide list in sync with the new order too
+  }
 
   /* ---------------- Supabase (drivers only, for now — loads aren't backed by a table yet) ---------------- */
 
@@ -93,6 +133,7 @@
     : null;
 
   let currentUserRole = null; // set by requireAuth() before any page-specific init runs
+  let currentUserLabel = null; // "username" (the @dltransport.local suffix stripped) — used for audit logging
 
   async function requireAuth() {
     if (!supabaseClient) return true; // no client configured (e.g. local test) — don't block
@@ -103,6 +144,8 @@
     }
     const { data: userData } = await supabaseClient.auth.getUser();
     currentUserRole = (userData && userData.user && userData.user.user_metadata && userData.user.user_metadata.role) || null;
+    const email = (userData && userData.user && userData.user.email) || "";
+    currentUserLabel = email.includes("@") ? email.split("@")[0] : (email || "unknown user");
     supabaseClient.auth.onAuthStateChange((event) => {
       if (event === "SIGNED_OUT") window.location.href = "login.html";
     });
@@ -176,6 +219,8 @@
       timesheet_received: !!row.timesheetReceived,
       timesheet_start_time: row.timesheetStartTime || null,
       timesheet_end_time: row.timesheetEndTime || null,
+      trailer_drop_location: row.trailerDropLocation || null,
+      pre_shift_text_sent_at: row.preShiftTextSentAt || null,
     };
   }
   function shiftFromDbRow(dbRow) {
@@ -202,6 +247,8 @@
       timesheetReceived: !!dbRow.timesheet_received,
       timesheetStartTime: dbRow.timesheet_start_time || "",
       timesheetEndTime: dbRow.timesheet_end_time || "",
+      trailerDropLocation: dbRow.trailer_drop_location || "",
+      preShiftTextSentAt: dbRow.pre_shift_text_sent_at || null,
       selected: false, // local-only UI state, not persisted — see note in chat
       createdAt: dbRow.created_at || null,
       updatedAt: dbRow.updated_at || null,
@@ -400,7 +447,7 @@
       driverId: driverId || null, driverNameText: driverNameText || "",
       proNumber: "", tonu: false, highlighted: false, shiftStart: "", shiftComplete: false, shiftCompleteAt: null, rate: "", notes: "", selected: false,
       preShiftTextSent: false, preShiftCall: false, etaShiftReport: "", actualShiftReport: "", revLevel: "",
-      timesheetReceived: false, timesheetStartTime: "", timesheetEndTime: "",
+      timesheetReceived: false, timesheetStartTime: "", timesheetEndTime: "", trailerDropLocation: "", preShiftTextSentAt: null,
       createdAt: null, updatedAt: null, addedAt: null,
       cellSnapshot: "", mcSnapshot: "", emailSnapshot: "", dispatcherPhoneSnapshot: "", ratingSnapshot: "",
       trips: [blankTrip()],
@@ -557,6 +604,31 @@
     }
   }
 
+  function labelForRow(row) {
+    const drv = row.driverId ? findDriver(row.driverId) : null;
+    return row.proNumber || (drv ? drv.name : row.driverNameText) || "(unlabeled load)";
+  }
+
+  // Generic audit-log write, reused by every tracked event (notes, route/
+  // shift completion, TONU, delete, reassignment). shift_id is set when
+  // available but load_label is always captured too, so entries stay
+  // readable even after the parent load is deleted.
+  async function logChange(shiftDbId, label, fieldName, oldValue, newValue) {
+    if (!supabaseClient) return;
+    try {
+      await supabaseClient.from("load_change_history").insert({
+        shift_id: shiftDbId || null,
+        load_label: label || null,
+        field_name: fieldName,
+        old_value: oldValue != null ? String(oldValue) : null,
+        new_value: newValue != null ? String(newValue) : null,
+        changed_by: currentUserLabel || "unknown user",
+      }).select();
+    } catch (e) {
+      console.error("logChange failed:", e); // never block the actual action over a logging failure
+    }
+  }
+
   async function minimizeTrip(rowId, tripId) {
     const found = findRowAnywhere(rowId);
     if (!found) return;
@@ -641,6 +713,7 @@
     trip.complete = true;
     trip.minimized = true;
     await saveTripNow(row, trip, row.trips.indexOf(trip) + 1);
+    logChange(row.dbId, `${labelForRow(row)} — ${trip.tripId || trip.routeId || "route"}`, "route_complete", "false", "true");
     closeStopTimesModal();
     renderBoardTable();
     flashTripGreenTint(rowId, tripId);
@@ -713,7 +786,10 @@
   /* ---------------- board alerts: bottom-right notification panel ---------------- */
 
   const ALERT_LOCATIONS = ["atlanta", "buildingc", "delaware"];
-  const IDLE_THRESHOLD_MIN = 60; // "shows up and doesn't get dispatched for an hour"
+  const IDLE_THRESHOLD_MIN = 45; // "45 minutes after check-in, if not dispatched"
+  const PRE_SHIFT_TEXT_LEAD_MIN = 60; // text needed 60 min before shift start
+  const PRE_SHIFT_CALL_FOLLOWUP_MIN = 30; // call nudge 30 min after the pre-shift text went out
+  const PAPERWORK_FOLLOWUP_MIN = 15; // reach out within 15 min if a new route starts before the last one's paperwork is in
   let boardAlerts = []; // current alerts, each with a stable key + firstSeenAt timestamp
   let alertFirstSeenAt = {}; // key -> Date, persists across scans so timestamps don't reset
   let alertScanTimer = null;
@@ -723,6 +799,15 @@
   function minsSinceMidnightNow() {
     const d = new Date();
     return d.getHours() * 60 + d.getMinutes();
+  }
+
+  function driverPhoneForShift(s) {
+    const drv = s.driver_id ? findDriver(String(s.driver_id)) : null;
+    return (drv && drv.phone) || s.driver_cell_snapshot || "";
+  }
+  function driverNameForShift(s) {
+    const drv = s.driver_id ? findDriver(String(s.driver_id)) : null;
+    return (drv && drv.name) || s.driver_name_text || "Unnamed driver";
   }
 
   async function scanForBoardAlerts() {
@@ -737,25 +822,90 @@
     const tripsByShift = {};
     (trips || []).forEach((t) => { (tripsByShift[t.shift_id] = tripsByShift[t.shift_id] || []).push(t); });
 
+    // trip_stops -- used by the missing-paperwork rule below to tell
+    // whether an open trip has any in/out times recorded at all yet.
+    const allTripIds = (trips || []).map((t) => t.id);
+    let stopsByTrip = {};
+    if (allTripIds.length) {
+      const { data: stopRows } = await supabaseClient.from("trip_stops").select("trip_id").in("trip_id", allTripIds);
+      (stopRows || []).forEach((s) => { stopsByTrip[s.trip_id] = (stopsByTrip[s.trip_id] || 0) + 1; });
+    }
+
     const nowMin = minsSinceMidnightNow();
     const alerts = [];
+    const preShiftTextNeeded = []; // collected across all shifts, then grouped by shift time below
 
     for (const s of shifts) {
       if (s.shift_complete) continue; // finished loads don't need attention
-      const rowTrips = tripsByShift[s.id] || [];
+      const rowTrips = (tripsByShift[s.id] || []).sort((a, b) => a.trip_number - b.trip_number);
       const hasRealTrip = rowTrips.some((t) => (t.route_id || "").trim() || (t.trip_id || "").trim());
       const label = s.pro_number || s.driver_name_text || `Load on ${s.location}`;
+      const driverName = driverNameForShift(s);
+      const driverPhone = driverPhoneForShift(s);
 
-      // Rule 1: idle driver — shift started over an hour ago, still nothing dispatched
+      // Rule: idle driver -- shift started 45+ min ago, still nothing dispatched
       const shiftStartMin = parseHHMM(s.shift_start);
       if (shiftStartMin != null && !hasRealTrip) {
         const idleFor = nowMin - shiftStartMin;
         if (idleFor >= IDLE_THRESHOLD_MIN) {
-          alerts.push({ key: `idle-${s.id}`, type: "idle", location: s.location, message: `${label} — no load dispatched ${Math.floor(idleFor / 60)}h ${idleFor % 60}m after shift start` });
+          alerts.push({
+            key: `idle-${s.id}`, type: "idle", location: s.location,
+            message: `${driverName} (${label}) — no load dispatched ${Math.floor(idleFor / 60)}h ${idleFor % 60}m after check-in`,
+            recipients: driverPhone ? [{ name: driverName, phone: driverPhone }] : [],
+            actionMessage: `This is D&L transportation, ${driverName}. You checked in but nothing's been dispatched yet — please call or text us for an update.`,
+          });
         }
       }
 
-      // Rules 2 & 3: per active (non-minimized) trip
+      // Rule: pre-shift text needed -- 60 min before shift start, text not yet sent.
+      // Collected here, grouped by shift time further down (drivers sharing
+      // a shift time get one combined alert with one button for all of them).
+      if (shiftStartMin != null && !s.pre_shift_text_sent) {
+        const minsUntilShift = shiftStartMin - nowMin;
+        if (minsUntilShift <= PRE_SHIFT_TEXT_LEAD_MIN && minsUntilShift > -180) { // don't keep flagging hours-old missed shifts forever
+          preShiftTextNeeded.push({ shiftStartMin, driverName, driverPhone, label });
+        }
+      }
+
+      // Rule: pre-shift call needed -- text was sent, 30+ min have passed.
+      // Framed honestly: no way to know if the driver actually replied,
+      // since replies land in TextBetter's mailbox, not this app.
+      if (s.pre_shift_text_sent && s.pre_shift_text_sent_at) {
+        const sentMinAgo = (Date.now() - new Date(s.pre_shift_text_sent_at).getTime()) / 60000;
+        if (sentMinAgo >= PRE_SHIFT_CALL_FOLLOWUP_MIN) {
+          alerts.push({
+            key: `call-${s.id}`, type: "call_followup", location: s.location,
+            message: `${driverName} (${label}) — pre-shift text sent ${Math.round(sentMinAgo)}m ago, call if there's been no reply`,
+            recipients: [], // no text action here on purpose -- a text already went out, this is a call nudge
+          });
+        }
+      }
+
+      // Rule: missing paperwork -- a later trip has started while an
+      // earlier trip is still open with no stop times recorded at all.
+      for (let i = 0; i < rowTrips.length; i++) {
+        const earlier = rowTrips[i];
+        const earlierOpen = !earlier.minimized && !earlier.complete && ((earlier.route_id || "").trim() || (earlier.trip_id || "").trim());
+        if (!earlierOpen) continue;
+        const hasStops = !!stopsByTrip[earlier.id];
+        if (hasStops) continue;
+        const laterStarted = rowTrips.slice(i + 1).find((t) => t.dispatch_time);
+        if (!laterStarted) continue;
+        const laterDispatchMin = parseHHMM(laterStarted.dispatch_time);
+        if (laterDispatchMin == null) continue;
+        const sinceLaterStarted = nowMin - laterDispatchMin;
+        if (sinceLaterStarted >= PAPERWORK_FOLLOWUP_MIN) {
+          const earlierLabel = earlier.trip_id || earlier.route_id;
+          alerts.push({
+            key: `paperwork-${earlier.id}`, type: "missing_paperwork", location: s.location,
+            message: `${driverName} (${label}) — started a new route but ${earlierLabel} is still open with no in/out times on file`,
+            recipients: driverPhone ? [{ name: driverName, phone: driverPhone }] : [],
+            actionMessage: `This is D&L transportation, ${driverName}. You've started your next route but we're still missing paperwork (in/out times) for ${earlierLabel}. Please send that over when you can.`,
+          });
+        }
+      }
+
+      // Rules: missing dispatch time / overdue return, per active (non-minimized) trip
       for (const t of rowTrips) {
         if (t.minimized || t.complete) continue;
         const hasRoute = (t.route_id || "").trim() || (t.trip_id || "").trim();
@@ -763,7 +913,11 @@
         const tripLabel = t.trip_id || t.route_id;
 
         if (!t.dispatch_time) {
-          alerts.push({ key: `noeta-${t.id}`, type: "missing_eta", location: s.location, message: `${label} (${tripLabel}) — no dispatch time entered, can't calculate ETA` });
+          alerts.push({
+            key: `noeta-${t.id}`, type: "missing_eta", location: s.location,
+            message: `${driverName} (${label}, ${tripLabel}) — no dispatch time entered, can't calculate ETA`,
+            recipients: [],
+          });
           continue; // no dispatch time means returnToDC can't be computed either — avoid a redundant second alert
         }
 
@@ -774,11 +928,33 @@
           const returnMin = dispatch + leg + leg + 15;
           if (nowMin >= returnMin) {
             const overdueBy = Math.round(nowMin - returnMin);
-            alerts.push({ key: `overdue-${t.id}`, type: "overdue_return", location: s.location, message: `${label} (${tripLabel}) — was due back ${overdueBy}m ago` });
+            alerts.push({
+              key: `overdue-${t.id}`, type: "overdue_return", location: s.location,
+              message: `${driverName} (${label}, ${tripLabel}) — was due back ${overdueBy}m ago`,
+              recipients: driverPhone ? [{ name: driverName, phone: driverPhone }] : [],
+              actionMessage: `This is D&L transportation, ${driverName}. Your route ${tripLabel} was due back a bit ago — please send an updated ETA.`,
+            });
           }
         }
       }
     }
+
+    // Group pre-shift-text-needed drivers by shift time -- same time means
+    // the same message text, so one alert with one button covers all of them.
+    const byShiftTime = {};
+    preShiftTextNeeded.forEach((d) => { (byShiftTime[d.shiftStartMin] = byShiftTime[d.shiftStartMin] || []).push(d); });
+    Object.entries(byShiftTime).forEach(([shiftStartMin, list]) => {
+      const clockLabel = minsToClock(Number(shiftStartMin));
+      const names = list.map((d) => d.driverName).join(", ");
+      const recipients = list.filter((d) => d.driverPhone).map((d) => ({ name: d.driverName, phone: d.driverPhone }));
+      alerts.push({
+        key: `preshift-${shiftStartMin}`, type: "preshift_text", location: "atlanta", // grouped alerts aren't location-specific; link falls back to Atlanta
+        message: `${list.length > 1 ? `${list.length} drivers` : names} due for a pre-shift check-in text — ${clockLabel} shift${list.length > 1 ? "s" : ""} (${names})`,
+        recipients,
+        actionMessage: `This is D&L transportation, please provide an ETA for your ${clockLabel} shift.`,
+      });
+    });
+
     return alerts;
   }
 
@@ -811,7 +987,7 @@
       body.innerHTML = `<div class="alert-empty">Nothing needs attention right now.</div>`;
       return;
     }
-    const ICONS = { idle: "⏱", overdue_return: "↩", missing_eta: "❓" };
+    const ICONS = { idle: "⏱", overdue_return: "↩", missing_eta: "❓", preshift_text: "📋", call_followup: "📞", missing_paperwork: "📄" };
     // newest first
     const sorted = [...boardAlerts].sort((a, b) => alertFirstSeenAt[b.key] - alertFirstSeenAt[a.key]);
     body.innerHTML = sorted.map((a) => `
@@ -819,6 +995,7 @@
         <span class="alert-chat-icon">${ICONS[a.type] || "•"}</span>
         <span class="alert-chat-text">${escapeHtml(a.message)}</span>
         <span class="alert-chat-time">${formatAlertTimestamp(alertFirstSeenAt[a.key] || new Date())}</span>
+        ${a.recipients && a.recipients.length ? `<button type="button" class="alert-action-btn" data-alert-action-key="${a.key}" title="Text ${a.recipients.length > 1 ? "these drivers" : "this driver"}">Text</button>` : ""}
       </a>
     `).join("");
   }
@@ -951,6 +1128,19 @@
     $("#alert-widget-close").addEventListener("click", (e) => { e.stopPropagation(); closeAlertWidget(); });
     reopenBtn.addEventListener("click", reopenAlertWidget);
     wireAlertWidgetDrag(el, $("#alert-widget-header"));
+
+    // Delegated -- alert items are re-rendered wholesale on every scan, so
+    // listeners attached directly to them would be lost each time.
+    el.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-alert-action-key]");
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const alert = boardAlerts.find((a) => a.key === btn.dataset.alertActionKey);
+      if (alert && alert.recipients && alert.recipients.length) {
+        openSendTextModal(alert.recipients, alert.actionMessage || "");
+      }
+    });
   }
 
 
@@ -988,7 +1178,7 @@
   function tripFieldCellsHtml(row, trip) {
     const calc = computeCalc(trip, row);
     const canComplete = String(trip.routeId || "").trim();
-    return TRIP_SUBCOLS.map((col) => {
+    return getOrderedTripSubcols().map((col) => {
       if (col.type === "checkbox") {
         const on = !!trip[col.key];
         const flagCls = col.key === "backhaul" ? "flag-backhaul" : "flag-yes";
@@ -1046,13 +1236,14 @@
         </div>
       </td>
       <td class="col-cell"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.phone, row.cellSnapshot))}</span></td>
-      <td class="col-dispatcherPhone"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.dispatcherPhone, row.dispatcherPhoneSnapshot))}</span></td>
       <td class="col-email"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.email, row.emailSnapshot))}</span></td>
+      <td class="col-dispatcherPhone"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.dispatcherPhone, row.dispatcherPhoneSnapshot))}</span></td>
       <td class="col-mc"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.mc, row.mcSnapshot))}</span></td>
       <td class="col-rating"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.rating, row.ratingSnapshot))}</span></td>
       <td class="col-shiftStart"${rs}><input class="cell-input small" style="width:60px;" placeholder="--:--" data-row="${row.id}" data-field="shiftStart" value="${escapeHtml(row.shiftStart)}"></td>
       <td class="col-preShiftTextSent"${rs} style="text-align:center;"><input type="checkbox" class="chk" data-row="${row.id}" data-field="preShiftTextSent" ${row.preShiftTextSent ? "checked" : ""}></td>
       <td class="col-etaShiftReport"${rs}><input class="cell-input small" style="width:60px;" placeholder="--:--" data-row="${row.id}" data-field="etaShiftReport" value="${escapeHtml(row.etaShiftReport)}"></td>
+      <td class="col-notes"${rs}><input class="cell-input" placeholder="Notes" data-row="${row.id}" data-field="notes" value="${escapeHtml(row.notes)}"></td>
       <td class="col-routes"${rs}>${routesChipsHtml(row)}</td>`;
   }
 
@@ -1168,7 +1359,10 @@
     if (!$("#board-table")) return; // this page (e.g. Accounting) has no board grid — nothing to redraw
     const rows = getSheet(state.activeLocation, state.activeDate);
     const displayRows = [...rows].sort((a, b) => (a.shiftComplete ? 1 : 0) - (b.shiftComplete ? 1 : 0)); // stable — completed shifts sink to the bottom, order preserved otherwise
-    const tripHeaderCells = TRIP_SUBCOLS.map((c) => `<th class="col-${c.key}">${c.label}</th>`).join("");
+    const tripHeaderCells = getOrderedTripSubcols().map((c) => {
+      const groupCls = c.group ? ` col-group-${c.group}` : (c.type === "calc" ? " col-group-calc" : "");
+      return `<th class="col-${c.key}${groupCls} col-draggable" draggable="true" data-col-key="${c.key}" title="Drag to reorder">${c.label}</th>`;
+    }).join("");
     const thead = `<thead>
       <tr>
         <th class="pin pin-select"><input type="checkbox" class="chk" id="select-all-rows" title="Select all"></th>
@@ -1177,19 +1371,20 @@
         <th class="pin pin-pro">PRO#</th>
         <th class="pin pin-driver">Driver</th>
         <th class="col-cell">Cell</th>
-        <th class="col-dispatcherPhone">Dispatcher Phone</th>
         <th class="col-email">Email</th>
+        <th class="col-dispatcherPhone">Dispatcher Phone</th>
         <th class="col-mc">MC #</th>
         <th class="col-rating">Rating</th>
         <th class="col-shiftStart">Shift Start</th>
         <th class="col-preShiftTextSent">Pre Shift Text Sent</th>
         <th class="col-etaShiftReport">ETA Shift Report</th>
+        <th class="col-notes">Notes</th>
         <th class="col-routes">Routes</th>
         ${tripHeaderCells}
         <th class="col-trip-actions"></th>
       </tr>
     </thead>`;
-    const totalCols = 14 + TRIP_SUBCOLS.length + 1;
+    const totalCols = 15 + TRIP_SUBCOLS.length + 1;
     const addRowHtml = `<tr class="quick-add-row"><td colspan="${totalCols}"><button type="button" class="quick-add-btn" id="btn-quick-add-row"><span class="quick-add-btn-label">+ Add Row</span></button></td></tr>`;
     const tbody = `<tbody>${displayRows.map(rowsToHtml).join("")}${addRowHtml}</tbody>`;
 
@@ -1399,6 +1594,7 @@
   function toggleTonu(rowId) {
     const found = findRowAnywhere(rowId);
     if (!found) return;
+    const wasTonu = found.row.tonu;
     found.row.tonu = !found.row.tonu;
     const tr = document.getElementById(rowId);
     if (tr) {
@@ -1407,6 +1603,7 @@
       if (btn) btn.classList.toggle("is-active", found.row.tonu);
     }
     saveShiftNow(found.row);
+    if (!wasTonu && found.row.tonu) logChange(found.row.dbId, labelForRow(found.row), "tonu", "false", "true");
   }
 
   function toggleRowPin(rowId) {
@@ -1450,11 +1647,13 @@
   }
 
   let timesheetModalState = null; // { rowId, queue: [rowId, ...] } — queue is for bulk-complete chaining
+  const focusValueSnapshots = new Map(); // "rowId:field" -> value at focus-in, for detecting a real committed change on blur
 
   async function finalizeShiftCompletion(row) {
     row.shiftComplete = true;
     row.shiftCompleteAt = new Date().toISOString();
     await saveShiftNow(row);
+    logChange(row.dbId, labelForRow(row), "shift_complete", "false", "true");
     await discardBlankTrips(row);
     await minimizeAllTrips(row);
     sendShiftToAccounting(row, row.location || state.activeLocation, row.shiftDate || state.activeDate).catch((e) => console.error("sendShiftToAccounting threw:", e));
@@ -1465,6 +1664,7 @@
     $("#tsc-received").checked = false;
     $("#tsc-start").value = "";
     $("#tsc-end").value = "";
+    $("#tsc-drop-location").value = "";
     $("#tsc-error").textContent = "";
     $("#modal-timesheet-complete").classList.remove("hidden");
   }
@@ -1486,8 +1686,9 @@
     const received = $("#tsc-received").checked;
     const start = $("#tsc-start").value.trim();
     const end = $("#tsc-end").value.trim();
-    if (!received || !start || !end) {
-      $("#tsc-error").textContent = "Time Sheet Received, Start, and Finish are all required before this shift can be marked complete.";
+    const dropLocation = $("#tsc-drop-location").value.trim();
+    if (!received || !start || !end || !dropLocation) {
+      $("#tsc-error").textContent = "Time Sheet Received, Start, Finish, and Trailer Drop Location are all required before this shift can be marked complete.";
       return;
     }
     const found = findRowAnywhere(timesheetModalState.rowId);
@@ -1496,6 +1697,7 @@
     row.timesheetReceived = received;
     row.timesheetStartTime = start;
     row.timesheetEndTime = end;
+    row.trailerDropLocation = dropLocation;
     await finalizeShiftCompletion(row);
     advanceTimesheetQueue();
   }
@@ -1600,6 +1802,8 @@
     const label = [row.proNumber, drv ? drv.name : row.driverNameText].filter(Boolean).join(" — ") || "this load";
     if (!confirm(`Delete ${label}? This can't be undone.`)) return;
 
+    logChange(row.dbId, label, "deleted", "active", "deleted"); // logged before the row goes, in case the FK doesn't outlive it
+
     const rows = getSheet(state.activeLocation, state.activeDate);
     const idx = rows.findIndex((r) => r.id === rowId);
     if (idx !== -1) rows.splice(idx, 1);
@@ -1648,19 +1852,23 @@
     el.style.color = segments > 1 ? "var(--amber-700, #b45309)" : "";
   }
 
-  function textDriverPhone(rawPhone, prefilledMessage) {
-    const addr = formatTextAddress(rawPhone);
-    if (!addr) {
+  function openSendTextModal(recipients, prefilledMessage) {
+    const withPhone = recipients.filter((r) => formatTextAddress(r.phone));
+    if (!withPhone.length) {
       setDriverSyncStatus("No phone number on file for this driver.", "error");
       return;
     }
-    sendTextModalState = { rawPhone };
-    $("#send-text-phone-display").textContent = rawPhone;
+    sendTextModalState = { recipients: withPhone };
+    $("#send-text-phone-display").textContent = withPhone.map((r) => r.name || r.phone).join(", ");
     $("#send-text-message").value = prefilledMessage || "";
     $("#send-text-status").textContent = "";
     updateSendTextCounter();
     $("#modal-send-text").classList.remove("hidden");
     $("#send-text-message").focus();
+  }
+
+  function textDriverPhone(rawPhone, prefilledMessage) {
+    openSendTextModal([{ name: null, phone: rawPhone }], prefilledMessage);
   }
 
   async function submitSendTextModal() {
@@ -1674,7 +1882,7 @@
       const res = await fetch(`${SUPABASE_URL}/functions/v1/send-text`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: sendTextModalState.rawPhone, message }),
+        body: JSON.stringify({ phones: sendTextModalState.recipients.map((r) => r.phone), message }),
       });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || `Send failed (${res.status})`);
@@ -1685,9 +1893,9 @@
       $("#send-text-status").innerHTML = `Couldn't send automatically (${escapeHtml(String(e.message || e))}). <button type="button" class="btn btn-ghost" id="send-text-fallback" style="margin-left:6px;">Open in email instead</button>`;
       const fallbackBtn = $("#send-text-fallback");
       if (fallbackBtn) fallbackBtn.addEventListener("click", () => {
-        const addr = formatTextAddress(sendTextModalState.rawPhone);
+        const addrs = sendTextModalState.recipients.map((r) => formatTextAddress(r.phone)).join(",");
         const a = document.createElement("a");
-        a.href = `mailto:${addr}?body=${encodeURIComponent(message)}`;
+        a.href = `mailto:${addrs}?body=${encodeURIComponent(message)}`;
         a.click();
         $("#modal-send-text").classList.add("hidden");
       });
@@ -2014,6 +2222,7 @@
           <div class="field"><label>Time Sheet Received</label><div class="static-text">${row.timesheetReceived ? "Yes" : "—"}</div></div>
           <div class="field"><label>Time Sheet Start</label><div class="static-text">${escapeHtml(row.timesheetStartTime || "—")}</div></div>
           <div class="field"><label>Time Sheet Finish</label><div class="static-text">${escapeHtml(row.timesheetEndTime || "—")}</div></div>
+          <div class="field"><label>Trailer Drop Location</label><div class="static-text">${escapeHtml(row.trailerDropLocation || "—")}</div></div>
           <div class="calc-note" style="margin-top:10px;">Time sheet info travels with this load — visible here and on the Accounting page once it's sent over.</div>
         `;
       } else {
@@ -2028,6 +2237,7 @@
           </div>
           <div class="field"><label>Time Sheet Start</label><input class="cell-input" id="ld-ov-timesheet-start" placeholder="--:--" value="${escapeHtml(d.timesheetStartTime)}"></div>
           <div class="field"><label>Time Sheet Finish</label><input class="cell-input" id="ld-ov-timesheet-end" placeholder="--:--" value="${escapeHtml(d.timesheetEndTime)}"></div>
+          <div class="field"><label>Trailer Drop Location</label><input class="cell-input" id="ld-ov-trailer-drop-location" value="${escapeHtml(d.trailerDropLocation)}"></div>
           <div class="ld-edit-bar">
             <button type="button" class="btn btn-ghost" data-ld-cancel="overview">Cancel</button>
             <button type="button" class="btn" data-ld-save="overview">Save</button>
@@ -2109,11 +2319,11 @@
     } else if (tab === "history") {
       const rows = loadDetailsState.history;
       body.innerHTML = `
-        <div class="calc-note" style="margin-bottom:10px;">Shows what changed and when — there's no login system yet, so it can't show who made each change.</div>
-        <div class="ld-history-row"><div>When</div><div>Field</div><div>Was</div><div>Now</div></div>
+        <div class="ld-history-row ld-history-row-5col"><div>When</div><div>By</div><div>Field</div><div>Was</div><div>Now</div></div>
         ${rows.length ? rows.map((h) => `
-          <div class="ld-history-row">
+          <div class="ld-history-row ld-history-row-5col">
             <div>${new Date(h.changed_at).toLocaleString()}</div>
+            <div>${escapeHtml(h.changed_by || "—")}</div>
             <div>${escapeHtml(h.field_name)}</div>
             <div class="ld-history-old">${escapeHtml(h.old_value || "—")}</div>
             <div class="ld-history-new">${escapeHtml(h.new_value || "—")}</div>
@@ -2133,6 +2343,7 @@
       loadDetailsState.editDraft = {
         proNumber: row.proNumber || "", driverName: drv ? drv.name : (row.driverNameText || ""), rate: row.rate || "",
         timesheetReceived: !!row.timesheetReceived, timesheetStartTime: row.timesheetStartTime || "", timesheetEndTime: row.timesheetEndTime || "",
+        trailerDropLocation: row.trailerDropLocation || "",
       };
     } else if (tabKey === "notes") {
       loadDetailsState.editDraft = { notes: row.notes || "" };
@@ -2174,6 +2385,7 @@
       row.timesheetReceived = $("#ld-ov-timesheet-received").checked;
       row.timesheetStartTime = $("#ld-ov-timesheet-start").value.trim();
       row.timesheetEndTime = $("#ld-ov-timesheet-end").value.trim();
+      row.trailerDropLocation = $("#ld-ov-trailer-drop-location").value.trim();
       await saveShiftNow(row);
       $("#ld-title").textContent = `Load ${row.proNumber || "(no PRO# yet)"}`;
     } else if (tabKey === "notes") {
@@ -2331,7 +2543,7 @@
       <div class="columns-panel-group-label">Driver info</div>
       ${DRIVER_INFO_COLS.map(item).join("")}
       <div class="columns-panel-group-label">Trip columns (applies to all 5 trips)</div>
-      ${TRIP_SUBCOLS.map(item).join("")}
+      ${getOrderedTripSubcols().map(item).join("")}
       <div class="columns-panel-footer"><button type="button" id="columns-show-all">Show all columns</button></div>
     `;
   }
@@ -2809,9 +3021,32 @@
       const openProBtn = e.target.closest('[data-open-pro]');
       if (openProBtn) openLoadDetailsModal(openProBtn.dataset.openPro, openProBtn.dataset.trip || null);
     });
+    boardTable.addEventListener("focusin", (e) => {
+      const field = e.target.dataset && e.target.dataset.field;
+      const rowId = e.target.dataset && e.target.dataset.row;
+      if (!rowId || (field !== "notes" && field !== "driverName")) return;
+      focusValueSnapshots.set(`${rowId}:${field}`, e.target.value);
+    });
     boardTable.addEventListener("focusout", (e) => {
       const t = e.target;
       const field = t.dataset && t.dataset.field;
+      const rowId = t.dataset && t.dataset.row;
+      if (rowId && (field === "notes" || field === "driverName")) {
+        const snapKey = `${rowId}:${field}`;
+        const before = focusValueSnapshots.get(snapKey);
+        focusValueSnapshots.delete(snapKey);
+        if (before !== undefined && before !== t.value) {
+          const found = findRowAnywhere(rowId);
+          if (found) {
+            if (field === "notes") {
+              logChange(found.row.dbId, labelForRow(found.row), "notes", before, t.value);
+            } else if (before.trim()) {
+              // driverName: only a REASSIGNMENT if it already had a driver — first-time entry isn't logged as a change
+              logChange(found.row.dbId, labelForRow(found.row), "driver_reassigned", before, t.value);
+            }
+          }
+        }
+      }
       if (field === "routeId") {
         const tr = t.closest("tr");
         const completeBtn = tr ? tr.querySelector('[data-action="complete-trip"]') : null;
@@ -2847,6 +3082,37 @@
       e.preventDefault();
       openRowContextMenu(tr.id, e.clientX, e.clientY);
     });
+    let draggedColKey = null;
+    boardTable.addEventListener("dragstart", (e) => {
+      const th = e.target.closest("[data-col-key]");
+      if (!th) return;
+      draggedColKey = th.dataset.colKey;
+      e.dataTransfer.effectAllowed = "move";
+    });
+    boardTable.addEventListener("dragover", (e) => {
+      const th = e.target.closest("[data-col-key]");
+      if (!th || !draggedColKey) return;
+      e.preventDefault(); // required to allow a drop
+      $all(".col-drop-target", boardTable).forEach((el) => el.classList.remove("col-drop-target"));
+      if (th.dataset.colKey !== draggedColKey) th.classList.add("col-drop-target");
+    });
+    boardTable.addEventListener("dragleave", (e) => {
+      const th = e.target.closest("[data-col-key]");
+      if (th) th.classList.remove("col-drop-target");
+    });
+    boardTable.addEventListener("drop", (e) => {
+      const th = e.target.closest("[data-col-key]");
+      $all(".col-drop-target", boardTable).forEach((el) => el.classList.remove("col-drop-target"));
+      if (!th || !draggedColKey) return;
+      e.preventDefault();
+      const targetKey = th.dataset.colKey;
+      if (targetKey !== draggedColKey) moveTripCol(draggedColKey, targetKey);
+      draggedColKey = null;
+    });
+    boardTable.addEventListener("dragend", () => {
+      draggedColKey = null;
+      $all(".col-drop-target", boardTable).forEach((el) => el.classList.remove("col-drop-target"));
+    });
     boardTable.addEventListener("input", (e) => {
       const t = e.target;
       if (t.type === "checkbox") return; // checkboxes are handled by the 'change' listener below, via .checked not .value
@@ -2880,7 +3146,7 @@
         scheduleShiftSave(found.row);
         return;
       }
-      if (t.dataset.field === "etaShiftReport" && !t.dataset.trip) {
+      if ((t.dataset.field === "etaShiftReport" || t.dataset.field === "notes") && !t.dataset.trip) {
         found.row[t.dataset.field] = t.value;
         scheduleShiftSave(found.row);
         return;
@@ -2908,6 +3174,7 @@
         const found = findRowAnywhere(t.dataset.row);
         if (!found) return;
         found.row[t.dataset.field] = t.checked;
+        found.row.preShiftTextSentAt = t.checked ? new Date().toISOString() : null;
         scheduleShiftSave(found.row);
         return;
       }

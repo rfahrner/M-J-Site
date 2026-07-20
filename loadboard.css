@@ -124,6 +124,12 @@ button {
 .alert-chat-icon { flex-shrink: 0; }
 .alert-chat-text { flex: 1; }
 .alert-chat-time { flex-shrink: 0; color: var(--slate-500, #64748b); font-size: 11px; white-space: nowrap; }
+.alert-chat-item { flex-wrap: wrap; }
+.alert-action-btn {
+  flex-shrink: 0; margin-left: 26px; margin-top: 4px; padding: 3px 10px; font-size: 11px; font-weight: 700;
+  border: none; border-radius: var(--radius-sm, 4px); background: var(--navy-900, #1e293b); color: #fff; cursor: pointer;
+}
+.alert-action-btn:hover { background: var(--navy-800, #334155); }
 
 #alert-widget.blinking .alert-widget-header { animation: alertBlink 1s ease-in-out infinite; }
 @keyframes alertBlink {
@@ -356,6 +362,20 @@ table.board thead th.group-trip.group-trip-alt {
 table.board thead th.trip-tint-b {
   background: var(--slate-700);
 }
+
+/* Column-group header tints — distinguishes clusters of related columns
+   (salvage/backhaul info, route estimates, calculated read-only fields)
+   now that the board has 35+ columns and everything was running
+   together. Darker/muted versions of the existing amber/green palette,
+   since the header itself is dark navy with light text — the lighter
+   --amber-bg/--green-bg variables are for white cell backgrounds
+   elsewhere and would be unreadable up here. */
+table.board thead th.col-group-backhaul { background: #5c4a1e; }
+table.board thead th.col-group-estimate { background: #1e5c3f; }
+table.board thead th.col-group-calc { background: var(--slate-700); }
+table.board thead th.col-draggable { cursor: grab; }
+table.board thead th.col-draggable:active { cursor: grabbing; }
+table.board thead th.col-drop-target { box-shadow: inset 3px 0 0 var(--focus); }
 
 table.board td {
   border-right: 1px solid var(--line);
@@ -905,6 +925,7 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
 .cell-link-btn:hover { background: var(--slate-100); }
 
 .ld-history-row { display: grid; grid-template-columns: 130px 140px 1fr 1fr; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+.ld-history-row-5col { grid-template-columns: 120px 90px 110px 1fr 1fr; }
 .ld-history-row:first-child { font-weight: 700; color: var(--slate-500); font-size: 10.5px; text-transform: uppercase; }
 .ld-history-old { color: var(--slate-500); text-decoration: line-through; }
 .ld-history-new { color: var(--navy-950); font-weight: 600; }
