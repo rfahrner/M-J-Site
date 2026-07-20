@@ -60,10 +60,28 @@
     { key: "routeMiles",  label: "Rte Mi",             type: "text", small: true, inputmode: "decimal" },
     { key: "stopCount",   label: "Stops",              type: "text", small: true, inputmode: "numeric" },
     { key: "dispatchTime",label: "Dispatch/Ready",     type: "time" },
+    { key: "routeEstHours",   label: "Route Est Hours",    type: "text", small: true, inputmode: "decimal" },
     { key: "salvage",     label: "Salvage",            type: "checkbox" },
     { key: "backhaul",    label: "B/Haul",             type: "checkbox" },
+    { key: "backhaulType",           label: "B/Haul Type",         type: "text" },
+    { key: "backhaulLocation",       label: "B/Haul Location",     type: "text" },
+    { key: "backhaulTrailerNumber",  label: "B/Haul Trailer #",    type: "text" },
+    { key: "salvageBhaulRefusedBy",  label: "Refused By",          type: "text" },
+    { key: "currentRouteStatus",     label: "Current Route Status",    type: "text" },
+    { key: "currentBackhaulStatus",  label: "Current B/Haul Status",   type: "text" },
+    { key: "nextCallTime",           label: "Next Call Time",      type: "time" },
+    { key: "timeToFinalStop",        label: "Time to Final Stop",  type: "text" },
+    { key: "etaToFinalStop",         label: "ETA to Final Stop",   type: "time" },
     { key: "lastStopDepart",  label: "Last Stop Depart",   type: "calc" },
     { key: "returnToDC",      label: "Return to DC",       type: "calc" },
+    { key: "returnEtaToDc",          label: "Return ETA to DC",    type: "time" },
+    { key: "returnToDcText",         label: "Return to DC Notes",  type: "text" },
+    { key: "returnDropLocation",     label: "Return Drop Location",type: "text" },
+    { key: "dropLocationText",       label: "Drop Location Notes", type: "text" },
+    { key: "estRouteComplete",       label: "Est Route Complete",  type: "time" },
+    { key: "ppwkReceived",           label: "Ppwk Rec'd",          type: "checkbox" },
+    { key: "timesheetStartTime",     label: "Time Sheet Start",    type: "time" },
+    { key: "timesheetEndTime",       label: "Time Sheet Rec'd End",type: "time" },
     { key: "etaNextDispatch", label: "ETA Next Dispatch",  type: "calc" },
     { key: "hosLeft",         label: "HOS Left",           type: "calc" },
     { key: "tripCallTime",    label: "Trip Call Time",     type: "calc" },
@@ -159,6 +177,11 @@
       shift_complete_at: row.shiftCompleteAt || null,
       rate: row.rate === "" || row.rate == null ? null : Number(row.rate),
       notes: row.notes || null,
+      pre_shift_text_sent: !!row.preShiftTextSent,
+      pre_shift_call: !!row.preShiftCall,
+      eta_shift_report: row.etaShiftReport || null,
+      actual_shift_report: row.actualShiftReport || null,
+      rev_level: row.revLevel || null,
     };
   }
   function shiftFromDbRow(dbRow) {
@@ -177,6 +200,11 @@
       shiftCompleteAt: dbRow.shift_complete_at || null,
       rate: dbRow.rate != null ? String(dbRow.rate) : "",
       notes: dbRow.notes || "",
+      preShiftTextSent: !!dbRow.pre_shift_text_sent,
+      preShiftCall: !!dbRow.pre_shift_call,
+      etaShiftReport: dbRow.eta_shift_report || "",
+      actualShiftReport: dbRow.actual_shift_report || "",
+      revLevel: dbRow.rev_level || "",
       selected: false, // local-only UI state, not persisted — see note in chat
       createdAt: dbRow.created_at || null,
       updatedAt: dbRow.updated_at || null,
@@ -208,6 +236,24 @@
       complete: !!trip.complete,
       driver_id: trip.driverId ? Number(trip.driverId) : null,
       notes: trip.notes || null,
+      current_route_status: trip.currentRouteStatus || null,
+      current_backhaul_status: trip.currentBackhaulStatus || null,
+      next_call_time: trip.nextCallTime || null,
+      backhaul_location: trip.backhaulLocation || null,
+      salvage_bhaul_refused_by: trip.salvageBhaulRefusedBy || null,
+      backhaul_trailer_number: trip.backhaulTrailerNumber || null,
+      backhaul_type: trip.backhaulType || null,
+      return_eta_to_dc: trip.returnEtaToDc || null,
+      return_drop_location: trip.returnDropLocation || null,
+      ppwk_received: !!trip.ppwkReceived,
+      timesheet_start_time: trip.timesheetStartTime || null,
+      timesheet_end_time: trip.timesheetEndTime || null,
+      drop_location_text: trip.dropLocationText || null,
+      return_to_dc_text: trip.returnToDcText || null,
+      route_est_hours: trip.routeEstHours !== "" && trip.routeEstHours != null ? Number(trip.routeEstHours) : null,
+      time_to_final_stop: trip.timeToFinalStop || null,
+      eta_to_final_stop: trip.etaToFinalStop || null,
+      est_route_complete: trip.estRouteComplete || null,
     };
   }
   function tripFromDbRow(dbRow) {
@@ -226,6 +272,24 @@
       complete: !!dbRow.complete,
       driverId: dbRow.driver_id != null ? String(dbRow.driver_id) : null,
       notes: dbRow.notes || "",
+      currentRouteStatus: dbRow.current_route_status || "",
+      currentBackhaulStatus: dbRow.current_backhaul_status || "",
+      nextCallTime: dbRow.next_call_time || "",
+      backhaulLocation: dbRow.backhaul_location || "",
+      salvageBhaulRefusedBy: dbRow.salvage_bhaul_refused_by || "",
+      backhaulTrailerNumber: dbRow.backhaul_trailer_number || "",
+      backhaulType: dbRow.backhaul_type || "",
+      returnEtaToDc: dbRow.return_eta_to_dc || "",
+      returnDropLocation: dbRow.return_drop_location || "",
+      ppwkReceived: !!dbRow.ppwk_received,
+      timesheetStartTime: dbRow.timesheet_start_time || "",
+      timesheetEndTime: dbRow.timesheet_end_time || "",
+      dropLocationText: dbRow.drop_location_text || "",
+      returnToDcText: dbRow.return_to_dc_text || "",
+      routeEstHours: dbRow.route_est_hours != null ? String(dbRow.route_est_hours) : "",
+      timeToFinalStop: dbRow.time_to_final_stop || "",
+      etaToFinalStop: dbRow.eta_to_final_stop || "",
+      estRouteComplete: dbRow.est_route_complete || "",
     };
   }
 
@@ -326,13 +390,19 @@
   }
 
   function blankTrip() {
-    return { id: uid("trip"), dbId: null, routeId: "", tripId: "", trailerOut: "", routeMiles: "", stopCount: "", dispatchTime: "", salvage: false, backhaul: false, minimized: false, complete: false, driverId: null, notes: "" };
+    return {
+      id: uid("trip"), dbId: null, routeId: "", tripId: "", trailerOut: "", routeMiles: "", stopCount: "", dispatchTime: "", salvage: false, backhaul: false, minimized: false, complete: false, driverId: null, notes: "",
+      currentRouteStatus: "", currentBackhaulStatus: "", nextCallTime: "", backhaulLocation: "", salvageBhaulRefusedBy: "", backhaulTrailerNumber: "", backhaulType: "",
+      returnEtaToDc: "", returnDropLocation: "", ppwkReceived: false, timesheetStartTime: "", timesheetEndTime: "", dropLocationText: "", returnToDcText: "",
+      routeEstHours: "", timeToFinalStop: "", etaToFinalStop: "", estRouteComplete: "",
+    };
   }
   function blankRow(driverId, driverNameText) {
     return {
       id: uid("row"), dbId: null, location: state.activeLocation || null, shiftDate: state.activeDate || null,
       driverId: driverId || null, driverNameText: driverNameText || "",
       proNumber: "", tonu: false, highlighted: false, shiftStart: "", shiftComplete: false, shiftCompleteAt: null, rate: "", notes: "", selected: false,
+      preShiftTextSent: false, preShiftCall: false, etaShiftReport: "", actualShiftReport: "", revLevel: "",
       createdAt: null, updatedAt: null, addedAt: null,
       cellSnapshot: "", mcSnapshot: "", emailSnapshot: "", dispatcherPhoneSnapshot: "", ratingSnapshot: "",
       trips: [blankTrip()],
@@ -835,7 +905,7 @@
     return TRIP_SUBCOLS.map((col) => {
       if (col.type === "checkbox") {
         const on = !!trip[col.key];
-        const flagCls = col.key === "salvage" ? "flag-yes" : "flag-backhaul";
+        const flagCls = col.key === "backhaul" ? "flag-backhaul" : "flag-yes";
         return `<td class="col-${col.key} ${on ? flagCls : ""}" style="text-align:center;">
           <input type="checkbox" class="chk" data-row="${row.id}" data-trip="${trip.id}" data-field="${col.key}" ${on ? "checked" : ""}>
         </td>`;
@@ -895,6 +965,11 @@
       <td class="col-mc"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.mc, row.mcSnapshot))}</span></td>
       <td class="col-rating"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.rating, row.ratingSnapshot))}</span></td>
       <td class="col-shiftStart"${rs}><input class="cell-input small" style="width:60px;" placeholder="--:--" data-row="${row.id}" data-field="shiftStart" value="${escapeHtml(row.shiftStart)}"></td>
+      <td class="col-preShiftCall"${rs} style="text-align:center;"><input type="checkbox" class="chk" data-row="${row.id}" data-field="preShiftCall" ${row.preShiftCall ? "checked" : ""}></td>
+      <td class="col-preShiftTextSent"${rs} style="text-align:center;"><input type="checkbox" class="chk" data-row="${row.id}" data-field="preShiftTextSent" ${row.preShiftTextSent ? "checked" : ""}></td>
+      <td class="col-etaShiftReport"${rs}><input class="cell-input small" style="width:60px;" placeholder="--:--" data-row="${row.id}" data-field="etaShiftReport" value="${escapeHtml(row.etaShiftReport)}"></td>
+      <td class="col-actualShiftReport"${rs}><input class="cell-input small" style="width:60px;" placeholder="--:--" data-row="${row.id}" data-field="actualShiftReport" value="${escapeHtml(row.actualShiftReport)}"></td>
+      <td class="col-revLevel"${rs}><input class="cell-input small" style="width:50px;" placeholder="Rev" data-row="${row.id}" data-field="revLevel" value="${escapeHtml(row.revLevel)}"></td>
       <td class="col-routes"${rs}>${routesChipsHtml(row)}</td>`;
   }
 
@@ -1024,12 +1099,17 @@
         <th class="col-mc">MC #</th>
         <th class="col-rating">Rating</th>
         <th class="col-shiftStart">Shift Start</th>
+        <th class="col-preShiftCall">Pre Shift Call</th>
+        <th class="col-preShiftTextSent">Pre Shift Text Sent</th>
+        <th class="col-etaShiftReport">ETA Shift Report</th>
+        <th class="col-actualShiftReport">Actual Shift Report</th>
+        <th class="col-revLevel">Rev Level</th>
         <th class="col-routes">Routes</th>
         ${tripHeaderCells}
         <th class="col-trip-actions"></th>
       </tr>
     </thead>`;
-    const totalCols = 12 + TRIP_SUBCOLS.length + 1;
+    const totalCols = 17 + TRIP_SUBCOLS.length + 1;
     const addRowHtml = `<tr class="quick-add-row"><td colspan="${totalCols}"><button type="button" class="quick-add-btn" id="btn-quick-add-row"><span class="quick-add-btn-label">+ Add Row</span></button></td></tr>`;
     const tbody = `<tbody>${displayRows.map(rowsToHtml).join("")}${addRowHtml}</tbody>`;
 
@@ -2652,6 +2732,11 @@
         scheduleShiftSave(found.row);
         return;
       }
+      if (["etaShiftReport", "actualShiftReport", "revLevel"].includes(t.dataset.field) && !t.dataset.trip) {
+        found.row[t.dataset.field] = t.value;
+        scheduleShiftSave(found.row);
+        return;
+      }
       if (t.dataset.trip && t.dataset.field) {
         const trip = found.row.trips.find((tr) => tr.id === t.dataset.trip);
         if (trip) {
@@ -2671,6 +2756,13 @@
         toggleRowSelected(t.dataset.row);
         return;
       }
+      if (t.type === "checkbox" && !t.dataset.trip && (t.dataset.field === "preShiftCall" || t.dataset.field === "preShiftTextSent")) {
+        const found = findRowAnywhere(t.dataset.row);
+        if (!found) return;
+        found.row[t.dataset.field] = t.checked;
+        scheduleShiftSave(found.row);
+        return;
+      }
       if (t.type === "checkbox" && t.dataset.trip) {
         const found = findRowAnywhere(t.dataset.row);
         if (!found) return;
@@ -2678,7 +2770,7 @@
         if (trip) {
           trip[t.dataset.field] = t.checked;
           const td = t.closest("td");
-          td.classList.toggle(t.dataset.field === "salvage" ? "flag-yes" : "flag-backhaul", t.checked);
+          td.classList.toggle(t.dataset.field === "backhaul" ? "flag-backhaul" : "flag-yes", t.checked);
           saveTripNow(found.row, trip, found.row.trips.indexOf(trip) + 1);
 
           if (t.checked && (t.dataset.field === "salvage" || t.dataset.field === "backhaul")) {
