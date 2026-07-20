@@ -1,59 +1,43 @@
 // Supabase Edge Function: send-text
 //
-// Sends a text message by emailing TextBetter's email-to-SMS gateway
-// (recipientnumber@textbetter.com), using Microsoft Graph API to send
-// the email as memppw@dltransport.com. Because the FROM address is
-// memppw@dltransport.com, TextBetter delivers any reply back to that
-// same inbox automatically -- no separate reply-routing config needed.
+// Sends a text via TextBetter's direct REST API -- no email involved at
+// all, which means no Microsoft 365 / Graph / admin consent requirement.
 //
 // Required secrets (set via `supabase secrets set`):
-//   MS_TENANT_ID       - Azure AD tenant ID
-//   MS_CLIENT_ID       - App registration client ID
-//   MS_CLIENT_SECRET   - App registration client secret
-//   SENDER_MAILBOX      - defaults to memppw@dltransport.com if unset
+//   TEXTBETTER_API_KEY   - from your TextBetter account settings
+//   TEXTBETTER_ENDPOINT  - the full SendOutgoingMessages URL including
+//                          the ?code=... query param, from TextBetter's
+//                          API docs/account (this is TextBetter's own
+//                          endpoint auth, separate from TEXTBETTER_API_KEY)
 //
-// The Azure AD app registration needs the Microsoft Graph APPLICATION
-// permission "Mail.Send" (admin-consented), and the sending mailbox
-// must be memppw@dltransport.com (or whatever SENDER_MAILBOX is set to).
+// TEXTBETTER_FROM_NUMBER is hardcoded below rather than a secret -- it's
+// not sensitive the way the key/endpoint are, just the number already
+// paired to memppw@dltransport.com in TextBetter (same number drivers
+// see today). Update it directly here if that pairing ever changes.
 
 import { serve } from "https://deno.land/std@0.203.0/http/server.ts";
 
-const TENANT_ID = Deno.env.get("MS_TENANT_ID") || "";
-const CLIENT_ID = Deno.env.get("MS_CLIENT_ID") || "";
-const CLIENT_SECRET = Deno.env.get("MS_CLIENT_SECRET") || "";
-const SENDER_MAILBOX = Deno.env.get("SENDER_MAILBOX") || "memppw@dltransport.com";
+const TEXTBETTER_API_KEY: string = Deno.env.get("TEXTBETTER_API_KEY") || "";
+const TEXTBETTER_ENDPOINT: string = Deno.env.get("TEXTBETTER_ENDPOINT") || "";
+const TEXTBETTER_FROM_NUMBER: string = "19133364699"; // number paired to memppw@dltransport.com in TextBetter
 
-const CORS_HEADERS = {
+const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-function normalizePhoneToTextBetter(raw: string): string | null {
-  // Matches the existing formatTextAddress() logic used elsewhere in the app
-  // for the mailto: fallback, so both paths treat phone numbers identically.
-  const digits = (raw || "").replace(/\D/g, "");
+const MAX_RECIPIENTS_PER_MESSAGE = 100; // TextBetter API v2's documented limit (the email gateway's old 9-recipient cap doesn't apply here)
+
+function normalizeToTextBetterNumber(raw: unknown): string | null {
+  // Same logic as the app's existing formatTextAddress() (minus the
+  // @textbetter.com suffix, since the API wants a bare number).
+  const digits = String(raw ?? "").replace(/\D/g, "");
   if (!digits) return null;
   const withCountryCode = digits.length === 10 ? "1" + digits : digits;
-  if (withCountryCode.length < 10) return null; // too short to be a real number
-  return `${withCountryCode}@textbetter.com`;
+  if (withCountryCode.length < 10) return null;
+  return withCountryCode;
 }
-
-async function getGraphAccessToken(): Promise<string> {
-  const url = `https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/token`;
-  const body = new URLSearchParams({
-    client_id: CLIENT_ID,
-    client_secret: CLIENT_SECRET,
-    scope: "https://graph.microsoft.com/.default",
-    grant_type: "client_credentials",
-  });
-  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
-  if (!res.ok) throw new Error(`Token request failed: ${res.status} ${await res.text()}`);
-  const data = await res.json();
-  return data.access_token;
-}
-
-const MAX_RECIPIENTS_PER_EMAIL = 9; // TextBetter's limit -- anything larger must go as separate emails
 
 function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -61,62 +45,68 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
-async function sendGraphMail(accessToken: string, toAddresses: string[], bodyText: string) {
-  const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(SENDER_MAILBOX)}/sendMail`;
-  const payload = {
-    message: {
-      subject: "", // TextBetter ignores/strips the subject line -- leaving it blank per their docs
-      body: { contentType: "Text", content: bodyText },
-      toRecipients: toAddresses.map((addr) => ({ emailAddress: { address: addr } })),
-    },
-    saveToSentItems: true,
-  };
-  const res = await fetch(url, {
+async function sendViaTextBetter(toNumbers: string[], body: string): Promise<void> {
+  const res = await fetch(TEXTBETTER_ENDPOINT, {
     method: "POST",
-    headers: { "Authorization": `Bearer ${accessToken}`, "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      fromNumber: TEXTBETTER_FROM_NUMBER,
+      toNumber: toNumbers,
+      body,
+      APIKey: TEXTBETTER_API_KEY,
+    }),
   });
-  if (!res.ok) throw new Error(`Graph sendMail failed: ${res.status} ${await res.text()}`);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`TextBetter send failed: ${res.status} ${text}`);
+  }
 }
 
-serve(async (req) => {
+function errorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  return String(e);
+}
+
+serve(async (req: Request): Promise<Response> => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS_HEADERS });
-  if (req.method !== "POST") return new Response(JSON.stringify({ error: "POST only" }), { status: 405, headers: CORS_HEADERS });
+  if (req.method !== "POST") {
+    return new Response(JSON.stringify({ error: "POST only" }), { status: 405, headers: CORS_HEADERS });
+  }
 
   try {
-    const body = await req.json();
-    const message = body.message;
-    // Accepts either a single `phone` (one recipient) or `phones` (an array,
-    // for group sends) -- both funnel into the same batched-send logic below.
-    const rawPhones: string[] = Array.isArray(body.phones) ? body.phones : (body.phone ? [body.phone] : []);
+    const payload: { message?: string; phones?: unknown[]; phone?: unknown } = await req.json();
+    const message = payload.message;
+    const rawPhones: unknown[] = Array.isArray(payload.phones)
+      ? payload.phones
+      : (payload.phone ? [payload.phone] : []);
+
     if (!rawPhones.length || !message || !String(message).trim()) {
       return new Response(JSON.stringify({ error: "phone (or phones) and message are required" }), { status: 400, headers: CORS_HEADERS });
     }
-    const gateways: string[] = [];
+
+    const numbers: string[] = [];
     const invalid: string[] = [];
     for (const p of rawPhones) {
-      const g = normalizePhoneToTextBetter(p);
-      if (g) gateways.push(g); else invalid.push(p);
+      const n = normalizeToTextBetterNumber(p);
+      if (n) numbers.push(n); else invalid.push(String(p));
     }
-    if (!gateways.length) {
+    if (!numbers.length) {
       return new Response(JSON.stringify({ error: `None of the provided numbers were valid: ${invalid.join(", ")}` }), { status: 400, headers: CORS_HEADERS });
     }
-    if (!TENANT_ID || !CLIENT_ID || !CLIENT_SECRET) {
-      return new Response(JSON.stringify({ error: "Server is missing MS_TENANT_ID / MS_CLIENT_ID / MS_CLIENT_SECRET secrets" }), { status: 500, headers: CORS_HEADERS });
+    if (!TEXTBETTER_API_KEY || !TEXTBETTER_ENDPOINT || !TEXTBETTER_FROM_NUMBER) {
+      return new Response(JSON.stringify({ error: "Server is missing TEXTBETTER_API_KEY / TEXTBETTER_ENDPOINT / TEXTBETTER_FROM_NUMBER secrets" }), { status: 500, headers: CORS_HEADERS });
     }
-    const token = await getGraphAccessToken();
-    const batches = chunk(gateways, MAX_RECIPIENTS_PER_EMAIL);
+
+    const batches = chunk(numbers, MAX_RECIPIENTS_PER_MESSAGE);
     for (const batch of batches) {
-      await sendGraphMail(token, batch, String(message).trim());
+      await sendViaTextBetter(batch, String(message).trim());
     }
-    return new Response(JSON.stringify({
-      ok: true,
-      sentTo: gateways,
-      batches: batches.length,
-      skipped: invalid,
-    }), { status: 200, headers: CORS_HEADERS });
-  } catch (e) {
+    return new Response(
+      JSON.stringify({ ok: true, sentTo: numbers, batches: batches.length, skipped: invalid }),
+      { status: 200, headers: CORS_HEADERS }
+    );
+  } catch (e: unknown) {
     console.error("send-text error:", e);
-    return new Response(JSON.stringify({ error: String(e?.message || e) }), { status: 500, headers: CORS_HEADERS });
+    return new Response(JSON.stringify({ error: errorMessage(e) }), { status: 500, headers: CORS_HEADERS });
   }
 });

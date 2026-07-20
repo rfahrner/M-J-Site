@@ -268,6 +268,29 @@
     </div>
   </div>
 
+  <div class="overlay hidden" id="modal-timesheet-complete">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Complete Shift — Time Sheet Required</h3>
+        <button class="modal-close" id="tsc-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="subtext" style="margin-bottom:12px;">A shift can't be marked complete until the time sheet is on file.</div>
+        <div class="field" style="display:flex; align-items:center; gap:8px;">
+          <input type="checkbox" id="tsc-received">
+          <label for="tsc-received" style="margin:0;">Time Sheet Received</label>
+        </div>
+        <div class="field"><label>Time Sheet Start</label><input class="cell-input" type="text" placeholder="--:--" id="tsc-start"></div>
+        <div class="field"><label>Time Sheet Finish</label><input class="cell-input" type="text" placeholder="--:--" id="tsc-end"></div>
+        <div id="tsc-error" style="color:#b91c1c; font-size:13px; margin-top:8px;"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="tsc-cancel">Cancel</button>
+        <button class="btn" id="tsc-confirm">Confirm &amp; Complete</button>
+      </div>
+    </div>
+  </div>
+
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <!-- ================= Load History modal ================= -->
   <div class="overlay hidden" id="modal-load-history">

@@ -67,21 +67,12 @@
     { key: "backhaulLocation",       label: "B/Haul Location",     type: "text" },
     { key: "backhaulTrailerNumber",  label: "B/Haul Trailer #",    type: "text" },
     { key: "salvageBhaulRefusedBy",  label: "Refused By",          type: "text" },
-    { key: "currentRouteStatus",     label: "Current Route Status",    type: "text" },
-    { key: "currentBackhaulStatus",  label: "Current B/Haul Status",   type: "text" },
     { key: "nextCallTime",           label: "Next Call Time",      type: "time" },
-    { key: "timeToFinalStop",        label: "Time to Final Stop",  type: "text" },
     { key: "etaToFinalStop",         label: "ETA to Final Stop",   type: "time" },
-    { key: "lastStopDepart",  label: "Last Stop Depart",   type: "calc" },
-    { key: "returnToDC",      label: "Return to DC",       type: "calc" },
     { key: "returnEtaToDc",          label: "Return ETA to DC",    type: "time" },
-    { key: "returnToDcText",         label: "Return to DC Notes",  type: "text" },
     { key: "returnDropLocation",     label: "Return Drop Location",type: "text" },
-    { key: "dropLocationText",       label: "Drop Location Notes", type: "text" },
     { key: "estRouteComplete",       label: "Est Route Complete",  type: "time" },
     { key: "ppwkReceived",           label: "Ppwk Rec'd",          type: "checkbox" },
-    { key: "timesheetStartTime",     label: "Time Sheet Start",    type: "time" },
-    { key: "timesheetEndTime",       label: "Time Sheet Rec'd End",type: "time" },
     { key: "etaNextDispatch", label: "ETA Next Dispatch",  type: "calc" },
     { key: "hosLeft",         label: "HOS Left",           type: "calc" },
     { key: "tripCallTime",    label: "Trip Call Time",     type: "calc" },
@@ -182,6 +173,9 @@
       eta_shift_report: row.etaShiftReport || null,
       actual_shift_report: row.actualShiftReport || null,
       rev_level: row.revLevel || null,
+      timesheet_received: !!row.timesheetReceived,
+      timesheet_start_time: row.timesheetStartTime || null,
+      timesheet_end_time: row.timesheetEndTime || null,
     };
   }
   function shiftFromDbRow(dbRow) {
@@ -205,6 +199,9 @@
       etaShiftReport: dbRow.eta_shift_report || "",
       actualShiftReport: dbRow.actual_shift_report || "",
       revLevel: dbRow.rev_level || "",
+      timesheetReceived: !!dbRow.timesheet_received,
+      timesheetStartTime: dbRow.timesheet_start_time || "",
+      timesheetEndTime: dbRow.timesheet_end_time || "",
       selected: false, // local-only UI state, not persisted — see note in chat
       createdAt: dbRow.created_at || null,
       updatedAt: dbRow.updated_at || null,
@@ -403,6 +400,7 @@
       driverId: driverId || null, driverNameText: driverNameText || "",
       proNumber: "", tonu: false, highlighted: false, shiftStart: "", shiftComplete: false, shiftCompleteAt: null, rate: "", notes: "", selected: false,
       preShiftTextSent: false, preShiftCall: false, etaShiftReport: "", actualShiftReport: "", revLevel: "",
+      timesheetReceived: false, timesheetStartTime: "", timesheetEndTime: "",
       createdAt: null, updatedAt: null, addedAt: null,
       cellSnapshot: "", mcSnapshot: "", emailSnapshot: "", dispatcherPhoneSnapshot: "", ratingSnapshot: "",
       trips: [blankTrip()],
@@ -788,6 +786,16 @@
     return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
   }
 
+  function loadAlertWidgetPrefs() {
+    try {
+      return JSON.parse(localStorage.getItem("dl-alert-widget-prefs") || "{}");
+    } catch (e) { return {}; }
+  }
+  function saveAlertWidgetPrefs(patch) {
+    const prefs = { ...loadAlertWidgetPrefs(), ...patch };
+    try { localStorage.setItem("dl-alert-widget-prefs", JSON.stringify(prefs)); } catch (e) { /* ignore quota errors */ }
+  }
+
   function renderAlertPanel() {
     const widget = $("#alert-widget");
     if (!widget) return;
@@ -796,7 +804,6 @@
     const count = boardAlerts.length;
 
     headerCount.textContent = count ? `(${count})` : "";
-    widget.classList.toggle("has-alerts", count > 0);
     widget.classList.toggle("expanded", alertPanelExpanded);
     widget.classList.toggle("blinking", alertPanelHasUnread && !alertPanelExpanded);
 
@@ -843,7 +850,65 @@
   function toggleAlertPanel() {
     alertPanelExpanded = !alertPanelExpanded;
     if (alertPanelExpanded) alertPanelHasUnread = false;
+    saveAlertWidgetPrefs({ expanded: alertPanelExpanded });
     renderAlertPanel();
+  }
+
+  function closeAlertWidget() {
+    $("#alert-widget").classList.add("hidden");
+    $("#alert-widget-reopen").classList.remove("hidden");
+    saveAlertWidgetPrefs({ closed: true });
+  }
+
+  function reopenAlertWidget() {
+    $("#alert-widget").classList.remove("hidden");
+    $("#alert-widget-reopen").classList.add("hidden");
+    saveAlertWidgetPrefs({ closed: false });
+  }
+
+  function applyAlertWidgetPosition(widget, pos) {
+    if (pos && typeof pos.left === "number" && typeof pos.top === "number") {
+      widget.style.left = pos.left + "px";
+      widget.style.top = pos.top + "px";
+      widget.style.right = "auto";
+      widget.style.bottom = "auto";
+    }
+  }
+
+  function wireAlertWidgetDrag(widget, header) {
+    let dragging = false, moved = false, startX = 0, startY = 0, origLeft = 0, origTop = 0;
+    header.addEventListener("mousedown", (e) => {
+      if (e.target.closest(".alert-widget-btn")) return; // don't start a drag from the min/close buttons
+      dragging = true;
+      moved = false;
+      const rect = widget.getBoundingClientRect();
+      origLeft = rect.left;
+      origTop = rect.top;
+      startX = e.clientX;
+      startY = e.clientY;
+      e.preventDefault();
+    });
+    document.addEventListener("mousemove", (e) => {
+      if (!dragging) return;
+      const dx = e.clientX - startX, dy = e.clientY - startY;
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
+      if (!moved) return;
+      const maxLeft = window.innerWidth - widget.offsetWidth - 4;
+      const maxTop = window.innerHeight - 40; // keep at least the header on-screen
+      const left = Math.min(Math.max(4, origLeft + dx), Math.max(4, maxLeft));
+      const top = Math.min(Math.max(4, origTop + dy), Math.max(4, maxTop));
+      applyAlertWidgetPosition(widget, { left, top });
+    });
+    document.addEventListener("mouseup", () => {
+      if (!dragging) return;
+      dragging = false;
+      if (moved) {
+        const rect = widget.getBoundingClientRect();
+        saveAlertWidgetPrefs({ left: rect.left, top: rect.top });
+      } else {
+        toggleAlertPanel(); // it was a click, not a drag — behave like clicking the header always has
+      }
+    });
   }
 
   function startAlertScanning() {
@@ -854,17 +919,38 @@
   }
 
   function injectAlertWidget() {
+    const prefs = loadAlertWidgetPrefs();
+    alertPanelExpanded = !!prefs.expanded;
+
     const el = document.createElement("div");
     el.id = "alert-widget";
+    if (prefs.closed) el.classList.add("hidden");
     el.innerHTML = `
       <div class="alert-widget-header" id="alert-widget-header">
         <span>🔔 Alerts <span id="alert-widget-count"></span></span>
-        <span class="alert-widget-toggle">▲</span>
+        <span class="alert-widget-controls">
+          <button type="button" class="alert-widget-btn" id="alert-widget-minimize" title="Minimize">&minus;</button>
+          <button type="button" class="alert-widget-btn" id="alert-widget-close" title="Close">&times;</button>
+        </span>
       </div>
       <div class="alert-widget-body" id="alert-widget-body"></div>
     `;
     document.body.appendChild(el);
-    $("#alert-widget-header").addEventListener("click", toggleAlertPanel);
+    applyAlertWidgetPosition(el, prefs);
+
+    const reopenBtn = document.createElement("button");
+    reopenBtn.id = "alert-widget-reopen";
+    reopenBtn.className = "hidden";
+    reopenBtn.type = "button";
+    reopenBtn.title = "Show alerts";
+    reopenBtn.textContent = "🔔";
+    document.body.appendChild(reopenBtn);
+    if (prefs.closed) reopenBtn.classList.remove("hidden");
+
+    $("#alert-widget-minimize").addEventListener("click", (e) => { e.stopPropagation(); toggleAlertPanel(); });
+    $("#alert-widget-close").addEventListener("click", (e) => { e.stopPropagation(); closeAlertWidget(); });
+    reopenBtn.addEventListener("click", reopenAlertWidget);
+    wireAlertWidgetDrag(el, $("#alert-widget-header"));
   }
 
 
@@ -965,11 +1051,8 @@
       <td class="col-mc"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.mc, row.mcSnapshot))}</span></td>
       <td class="col-rating"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.rating, row.ratingSnapshot))}</span></td>
       <td class="col-shiftStart"${rs}><input class="cell-input small" style="width:60px;" placeholder="--:--" data-row="${row.id}" data-field="shiftStart" value="${escapeHtml(row.shiftStart)}"></td>
-      <td class="col-preShiftCall"${rs} style="text-align:center;"><input type="checkbox" class="chk" data-row="${row.id}" data-field="preShiftCall" ${row.preShiftCall ? "checked" : ""}></td>
       <td class="col-preShiftTextSent"${rs} style="text-align:center;"><input type="checkbox" class="chk" data-row="${row.id}" data-field="preShiftTextSent" ${row.preShiftTextSent ? "checked" : ""}></td>
       <td class="col-etaShiftReport"${rs}><input class="cell-input small" style="width:60px;" placeholder="--:--" data-row="${row.id}" data-field="etaShiftReport" value="${escapeHtml(row.etaShiftReport)}"></td>
-      <td class="col-actualShiftReport"${rs}><input class="cell-input small" style="width:60px;" placeholder="--:--" data-row="${row.id}" data-field="actualShiftReport" value="${escapeHtml(row.actualShiftReport)}"></td>
-      <td class="col-revLevel"${rs}><input class="cell-input small" style="width:50px;" placeholder="Rev" data-row="${row.id}" data-field="revLevel" value="${escapeHtml(row.revLevel)}"></td>
       <td class="col-routes"${rs}>${routesChipsHtml(row)}</td>`;
   }
 
@@ -1099,17 +1182,14 @@
         <th class="col-mc">MC #</th>
         <th class="col-rating">Rating</th>
         <th class="col-shiftStart">Shift Start</th>
-        <th class="col-preShiftCall">Pre Shift Call</th>
         <th class="col-preShiftTextSent">Pre Shift Text Sent</th>
         <th class="col-etaShiftReport">ETA Shift Report</th>
-        <th class="col-actualShiftReport">Actual Shift Report</th>
-        <th class="col-revLevel">Rev Level</th>
         <th class="col-routes">Routes</th>
         ${tripHeaderCells}
         <th class="col-trip-actions"></th>
       </tr>
     </thead>`;
-    const totalCols = 17 + TRIP_SUBCOLS.length + 1;
+    const totalCols = 14 + TRIP_SUBCOLS.length + 1;
     const addRowHtml = `<tr class="quick-add-row"><td colspan="${totalCols}"><button type="button" class="quick-add-btn" id="btn-quick-add-row"><span class="quick-add-btn-label">+ Add Row</span></button></td></tr>`;
     const tbody = `<tbody>${displayRows.map(rowsToHtml).join("")}${addRowHtml}</tbody>`;
 
@@ -1369,6 +1449,62 @@
     updateBulkActionButtonsVisibility();
   }
 
+  let timesheetModalState = null; // { rowId, queue: [rowId, ...] } — queue is for bulk-complete chaining
+
+  async function finalizeShiftCompletion(row) {
+    row.shiftComplete = true;
+    row.shiftCompleteAt = new Date().toISOString();
+    await saveShiftNow(row);
+    await discardBlankTrips(row);
+    await minimizeAllTrips(row);
+    sendShiftToAccounting(row, row.location || state.activeLocation, row.shiftDate || state.activeDate).catch((e) => console.error("sendShiftToAccounting threw:", e));
+  }
+
+  function openTimesheetModal(rowId, queue) {
+    timesheetModalState = { rowId, queue: queue || [] };
+    $("#tsc-received").checked = false;
+    $("#tsc-start").value = "";
+    $("#tsc-end").value = "";
+    $("#tsc-error").textContent = "";
+    $("#modal-timesheet-complete").classList.remove("hidden");
+  }
+
+  function advanceTimesheetQueue() {
+    $("#modal-timesheet-complete").classList.add("hidden");
+    const finishedState = timesheetModalState;
+    timesheetModalState = null;
+    if (finishedState && finishedState.queue.length) {
+      const [next, ...rest] = finishedState.queue;
+      openTimesheetModal(next, rest);
+    } else {
+      renderBoardTable();
+    }
+  }
+
+  async function submitTimesheetModal() {
+    if (!timesheetModalState) return;
+    const received = $("#tsc-received").checked;
+    const start = $("#tsc-start").value.trim();
+    const end = $("#tsc-end").value.trim();
+    if (!received || !start || !end) {
+      $("#tsc-error").textContent = "Time Sheet Received, Start, and Finish are all required before this shift can be marked complete.";
+      return;
+    }
+    const found = findRowAnywhere(timesheetModalState.rowId);
+    if (!found) { advanceTimesheetQueue(); return; }
+    const row = found.row;
+    row.timesheetReceived = received;
+    row.timesheetStartTime = start;
+    row.timesheetEndTime = end;
+    await finalizeShiftCompletion(row);
+    advanceTimesheetQueue();
+  }
+
+  function skipTimesheetModal() {
+    // Cancel just skips THIS row (it stays incomplete) but continues the queue for bulk-complete
+    advanceTimesheetQueue();
+  }
+
   async function completeSelectedRows() {
     const rows = getSheet(state.activeLocation, state.activeDate).filter((r) => r.selected && !r.shiftComplete);
     if (!rows.length) { setDriverSyncStatus("No selected loads need completing — either nothing's checked, or they're already complete.", "error"); return; }
@@ -1379,15 +1515,8 @@
       if (!confirm(`${rowsWithOpenTrips.length} of these loads still have trips not closed out yet (${label}). Send all selected loads to Accounting anyway?`)) return;
     }
 
-    for (const row of rows) {
-      row.shiftComplete = true;
-      row.shiftCompleteAt = new Date().toISOString();
-      await saveShiftNow(row); // must finish first — sendShiftToAccounting needs row.dbId to be set
-      await discardBlankTrips(row);
-      await minimizeAllTrips(row);
-      sendShiftToAccounting(row, state.activeLocation, state.activeDate).catch((e) => console.error("sendShiftToAccounting threw:", e));
-    }
-    renderBoardTable();
+    const [first, ...rest] = rows.map((r) => r.id);
+    openTimesheetModal(first, rest);
   }
 
   function openTextSelectedModal() {
@@ -1453,17 +1582,14 @@
         const names = open.map((t, i) => t.tripId || t.routeId || `Trip ${i + 1}`).join(", ");
         if (!confirm(`This load still has ${open.length} trip(s) not closed out yet (${names}) — likely still waiting on paperwork. Send it to Accounting anyway?`)) return;
       }
+      openTimesheetModal(rowId, []); // required time sheet info gate — finalizeShiftCompletion runs after it's submitted
+      return;
     }
-    row.shiftComplete = !row.shiftComplete;
-    row.shiftCompleteAt = row.shiftComplete ? new Date().toISOString() : null;
+    // Un-completing stays instant — no time sheet re-check needed to walk it back
+    row.shiftComplete = false;
+    row.shiftCompleteAt = null;
     saveShiftNow(row);
-    if (row.shiftComplete) {
-      discardBlankTrips(row)
-        .then(() => minimizeAllTrips(row))
-        .then(() => renderBoardTable());
-      sendShiftToAccounting(row, state.activeLocation, state.activeDate).catch((e) => console.error("sendShiftToAccounting threw:", e));
-    }
-    renderBoardTable(); // full redraw needed — this row needs to move to the bottom (or back up)
+    renderBoardTable();
   }
 
   async function deleteRow(rowId) {
@@ -1885,6 +2011,10 @@
           <div class="field"><label>Rate</label><div class="static-text">${escapeHtml(row.rate || "—")}</div></div>
           <div class="field"><label>Status</label><div class="static-text">${row.shiftComplete ? "Complete" : "Active"}</div></div>
           <div class="field"><label>Trips on this load</label><div class="static-text">${row.trips.length} (${row.trips.filter((t) => t.minimized).length} completed)</div></div>
+          <div class="field"><label>Time Sheet Received</label><div class="static-text">${row.timesheetReceived ? "Yes" : "—"}</div></div>
+          <div class="field"><label>Time Sheet Start</label><div class="static-text">${escapeHtml(row.timesheetStartTime || "—")}</div></div>
+          <div class="field"><label>Time Sheet Finish</label><div class="static-text">${escapeHtml(row.timesheetEndTime || "—")}</div></div>
+          <div class="calc-note" style="margin-top:10px;">Time sheet info travels with this load — visible here and on the Accounting page once it's sent over.</div>
         `;
       } else {
         const d = loadDetailsState.editDraft;
@@ -1892,6 +2022,12 @@
           <div class="field"><label>PRO#</label><input class="cell-input" id="ld-ov-pro" value="${escapeHtml(d.proNumber)}"></div>
           <div class="field"><label>Driver</label><input class="cell-input" id="ld-ov-driver" list="driverNamesList" value="${escapeHtml(d.driverName)}"></div>
           <div class="field"><label>Rate</label><input class="cell-input" id="ld-ov-rate" value="${escapeHtml(d.rate)}"></div>
+          <div class="field" style="display:flex; align-items:center; gap:8px;">
+            <input type="checkbox" id="ld-ov-timesheet-received" ${d.timesheetReceived ? "checked" : ""}>
+            <label for="ld-ov-timesheet-received" style="margin:0;">Time Sheet Received</label>
+          </div>
+          <div class="field"><label>Time Sheet Start</label><input class="cell-input" id="ld-ov-timesheet-start" placeholder="--:--" value="${escapeHtml(d.timesheetStartTime)}"></div>
+          <div class="field"><label>Time Sheet Finish</label><input class="cell-input" id="ld-ov-timesheet-end" placeholder="--:--" value="${escapeHtml(d.timesheetEndTime)}"></div>
           <div class="ld-edit-bar">
             <button type="button" class="btn btn-ghost" data-ld-cancel="overview">Cancel</button>
             <button type="button" class="btn" data-ld-save="overview">Save</button>
@@ -1994,7 +2130,10 @@
     loadDetailsState.editMode = tabKey;
     if (tabKey === "overview") {
       const drv = row.driverId ? findDriver(row.driverId) : null;
-      loadDetailsState.editDraft = { proNumber: row.proNumber || "", driverName: drv ? drv.name : (row.driverNameText || ""), rate: row.rate || "" };
+      loadDetailsState.editDraft = {
+        proNumber: row.proNumber || "", driverName: drv ? drv.name : (row.driverNameText || ""), rate: row.rate || "",
+        timesheetReceived: !!row.timesheetReceived, timesheetStartTime: row.timesheetStartTime || "", timesheetEndTime: row.timesheetEndTime || "",
+      };
     } else if (tabKey === "notes") {
       loadDetailsState.editDraft = { notes: row.notes || "" };
     } else {
@@ -2032,6 +2171,9 @@
       row.driverId = null;
       const match = driversForLocation(row.location || state.activeLocation || "atlanta").find((x) => x.name.toLowerCase() === nameVal.toLowerCase());
       if (match) row.driverId = match.id;
+      row.timesheetReceived = $("#ld-ov-timesheet-received").checked;
+      row.timesheetStartTime = $("#ld-ov-timesheet-start").value.trim();
+      row.timesheetEndTime = $("#ld-ov-timesheet-end").value.trim();
       await saveShiftNow(row);
       $("#ld-title").textContent = `Load ${row.proNumber || "(no PRO# yet)"}`;
     } else if (tabKey === "notes") {
@@ -2587,6 +2729,12 @@
       if (msgInput) msgInput.addEventListener("input", updateSendTextCounter);
     }
 
+    if ($("#modal-timesheet-complete")) {
+      on("tsc-close", "click", skipTimesheetModal);
+      on("tsc-cancel", "click", skipTimesheetModal);
+      on("tsc-confirm", "click", submitTimesheetModal);
+    }
+
     if ($("#modal-load-details")) {
       on("ld-close", "click", closeLoadDetailsModal);
       on("ld-close-btn", "click", closeLoadDetailsModal);
@@ -2732,7 +2880,7 @@
         scheduleShiftSave(found.row);
         return;
       }
-      if (["etaShiftReport", "actualShiftReport", "revLevel"].includes(t.dataset.field) && !t.dataset.trip) {
+      if (t.dataset.field === "etaShiftReport" && !t.dataset.trip) {
         found.row[t.dataset.field] = t.value;
         scheduleShiftSave(found.row);
         return;
@@ -2756,7 +2904,7 @@
         toggleRowSelected(t.dataset.row);
         return;
       }
-      if (t.type === "checkbox" && !t.dataset.trip && (t.dataset.field === "preShiftCall" || t.dataset.field === "preShiftTextSent")) {
+      if (t.type === "checkbox" && !t.dataset.trip && t.dataset.field === "preShiftTextSent") {
         const found = findRowAnywhere(t.dataset.row);
         if (!found) return;
         found.row[t.dataset.field] = t.checked;
