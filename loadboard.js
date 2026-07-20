@@ -54,26 +54,28 @@
   const BACKHAUL_MESSAGE = "This is D&L, you have a Backhaul pickup at your last stop. Please Call or text me your return info (what trailer the load is on, if anything was missing or damaged, and your ETA back) when you are done at your last stop, Also a pic of your stores in and out times.";
 
   const TRIP_SUBCOLS = [
-    { key: "nextCallTime",           label: "Next Call Time",      type: "time" },
-    { key: "routeId",     label: "Route ID",         type: "text" },
-    { key: "tripId",      label: "Trip ID",           type: "text" },
-    { key: "trailerOut",  label: "Trailer #",         type: "text" },
-    { key: "routeMiles",  label: "Rte Mi",             type: "text", small: true, inputmode: "decimal" },
-    { key: "stopCount",   label: "Stops",              type: "text", small: true, inputmode: "numeric" },
-    { key: "dispatchTime",label: "Dispatch/Ready",     type: "time" },
-    { key: "salvage",     label: "Salvage",            type: "checkbox", group: "backhaul" },
-    { key: "backhaul",    label: "B/Haul",             type: "checkbox", group: "backhaul" },
-    { key: "backhaulLocation",       label: "B/Haul Location",     type: "text", group: "backhaul" },
-    { key: "salvageBhaulRefusedBy",  label: "Refused By",          type: "text", group: "backhaul" },
-    { key: "backhaulTrailerNumber",  label: "B/Haul Trailer #",    type: "text", group: "backhaul" },
-    { key: "returnEtaToDc",          label: "Return ETA to DC",    type: "time", group: "backhaul" },
-    { key: "ppwkReceived",           label: "Ppwk Rec'd",          type: "checkbox", group: "backhaul" },
-    { key: "backhaulType",           label: "B/Haul Type",         type: "text", group: "backhaul" },
+    { key: "routeId",     label: "Route ID",         type: "text", pistachio: true },
+    { key: "tripId",      label: "Trip ID",           type: "text", pistachio: true },
+    { key: "trailerOut",  label: "Trailer #",         type: "text", pistachio: true },
+    { key: "routeMiles",  label: "Miles",             type: "text", small: true, inputmode: "decimal", pistachio: true },
+    { key: "stopCount",   label: "Stops",              type: "text", small: true, inputmode: "numeric", pistachio: true },
+    { key: "dispatchTime",label: "Dispatch Time",     type: "time", pistachio: true },
+    { key: "lastStopDepart",  label: "Last Stop Depart",   type: "calc", pistachio: true },
+    { key: "returnToDC",      label: "Return to DC",       type: "calc", pistachio: true },
+    { key: "salvage",     label: "Salvage",            type: "checkbox", group: "backhaul", pistachio: true },
+    { key: "backhaul",    label: "B/Haul",             type: "checkbox", group: "backhaul", pistachio: true },
+    { key: "salvageBhaulRefusedBy",  label: "Refused By",          type: "text", group: "backhaul", pistachio: true },
+    { key: "backhaulTrailerNumber",  label: "B/Haul Trailer #",    type: "text", group: "backhaul", pistachio: true },
+    { key: "returnEtaToDc",          label: "Return ETA to DC",    type: "time", group: "backhaul", pistachio: true },
+    { key: "ppwkReceived",           label: "Ppwk Rec'd",          type: "checkbox", group: "backhaul", pistachio: true },
     { key: "routeEstHours",   label: "Route Est Hours",    type: "text", small: true, inputmode: "decimal", group: "estimate" },
+    // Not in the latest specified order -- kept available (hidden by
+    // default) rather than deleted, since removal wasn't explicit. Flagged
+    // in chat; say the word if any of these should actually go.
+    { key: "backhaulType",           label: "B/Haul Type",         type: "text", group: "backhaul" },
     { key: "etaToFinalStop",         label: "ETA to Final Stop",   type: "time", group: "estimate" },
     { key: "estRouteComplete",       label: "Est Route Complete",  type: "time", group: "estimate" },
     { key: "etaNextDispatch", label: "ETA Next Dispatch",  type: "calc" },
-    { key: "hosLeft",         label: "HOS Left",           type: "calc" },
     { key: "tripCallTime",    label: "Trip Call Time",     type: "calc" },
   ];
 
@@ -168,6 +170,7 @@
       "E mail": d.email,
       "2nd email": d.email2 || null,
       "Driver Rating": d.rating || null,
+      "Driver Preference": d.preference || null,
       "Notes": d.notes || null,
       "Interchange agreement": !!d.tia,
       "Interchange Coverage $": d.tiiAmount != null ? d.tiiAmount : null,
@@ -186,6 +189,7 @@
       email: row["E mail"] || "",
       email2: row["2nd email"] || "",
       rating: row["Driver Rating"] || null,
+      preference: row["Driver Preference"] || "",
       notes: row["Notes"] || "",
       tia: !!row["Interchange agreement"],
       tiiAmount: row["Interchange Coverage $"] != null ? Number(row["Interchange Coverage $"]) : null,
@@ -389,7 +393,11 @@
     driverSort: { key: null, dir: "asc" },
     driverListTab: "atlanta", // only meaningful on the Driver List page — its 3 tabs
     datesWithData: new Set(), // which days in the browsable range have any loads — for the date dropdown
-    hiddenCols: new Set(),
+    hiddenCols: new Set([
+      "email", "dispatcherPhone", "shiftDate", "rating", "driverPreference", "shiftHosLeft", "revLevel", // shift-level, hidden per spec
+      "routeEstHours", // trip-level, hidden per spec
+      "backhaulType", "etaToFinalStop", "estRouteComplete", "etaNextDispatch", "tripCallTime", // not in the latest spec — kept but hidden, not deleted
+    ]),
     editingDriverId: null,
   };
 
@@ -397,9 +405,14 @@
     { key: "cell", label: "Cell" },
     { key: "dispatcherPhone", label: "Dispatcher Phone" },
     { key: "email", label: "Email" },
+    { key: "shiftDate", label: "Date" },
     { key: "mc", label: "MC #" },
     { key: "rating", label: "Rating" },
+    { key: "driverPreference", label: "Driver Preference" },
     { key: "shiftStart", label: "Shift Start" },
+    { key: "etaShiftReport", label: "ETA" },
+    { key: "shiftHosLeft", label: "HOS Left" },
+    { key: "revLevel", label: "Rev Level" },
   ];
   // TRIP_SUBCOLS (defined above) doubles as the trip-column toggle list —
   // toggling one hides that column across all 5 trip blocks at once.
@@ -759,7 +772,7 @@
     out.etaNextDispatch = minsToClock(etaNextMin);
 
     const shiftStartMin = parseHHMM(row.shiftStart);
-    if (shiftStartMin != null) out.hosLeft = minsToDuration(14 * 60 - (etaNextMin - shiftStartMin));
+    if (shiftStartMin != null) out.hosLeft = minsToDuration(12 * 60 - (etaNextMin - shiftStartMin));
     return applyCalcRetention(out, row);
   }
 
@@ -774,6 +787,53 @@
       }
     }
     return out;
+  }
+
+  // Shift-level calculated column -- the earliest upcoming moment (across
+  // the same rule types the alert widget evaluates) that needs a driver
+  // contacted. Deliberately reuses the alert system's own thresholds
+  // (IDLE_THRESHOLD_MIN etc, defined further down) so the board and the
+  // alert widget never disagree about timing. Not included here: the
+  // missing-paperwork rule, since it needs trip_stops data that isn't part
+  // of the row/trip objects already loaded on the board -- pulling that in
+  // live per-row isn't practical, so this column only reflects the other
+  // four rule types.
+  function computeNextCallTimeForRow(row) {
+    if (row.shiftComplete) return "";
+    const candidates = [];
+    const shiftStartMin = parseHHMM(row.shiftStart);
+    const hasRealTrip = row.trips.some((t) => (t.routeId || "").trim() || (t.tripId || "").trim());
+
+    if (shiftStartMin != null && !hasRealTrip) candidates.push(shiftStartMin + IDLE_THRESHOLD_MIN);
+    if (shiftStartMin != null && !row.preShiftTextSent) candidates.push(shiftStartMin - PRE_SHIFT_TEXT_LEAD_MIN);
+    if (row.preShiftTextSent && row.preShiftTextSentAt) {
+      const sentDate = new Date(row.preShiftTextSentAt);
+      candidates.push(sentDate.getHours() * 60 + sentDate.getMinutes() + PRE_SHIFT_CALL_FOLLOWUP_MIN);
+    }
+    row.trips.forEach((t) => {
+      if (t.minimized || t.complete || !String(t.routeId || "").trim()) return;
+      const dispatch = parseHHMM(t.dispatchTime);
+      const miles = parseFloat(t.routeMiles);
+      if (dispatch != null && !isNaN(miles) && miles > 0) {
+        const leg = (miles / AVG_MPH) * 60;
+        candidates.push(dispatch + leg + leg + 15); // matches the overdue-return threshold used elsewhere
+      }
+    });
+
+    if (!candidates.length) return "";
+    return minsToClock(Math.min(...candidates));
+  }
+
+  // Shift-level HOS display -- a driver only has one "current" HOS status
+  // at a time, not one per trip block, so this reflects whichever trip is
+  // the most recently active (last one with dispatch+miles entered).
+  function computeShiftLevelHosLeft(row) {
+    let latest = null;
+    row.trips.forEach((t) => {
+      if (parseHHMM(t.dispatchTime) != null && parseFloat(t.routeMiles) > 0) latest = t;
+    });
+    if (!latest) return "";
+    return computeCalc(latest, row).hosLeft;
   }
 
   /* ---------------- dom helpers ---------------- */
@@ -863,7 +923,7 @@
       if (shiftStartMin != null && !s.pre_shift_text_sent) {
         const minsUntilShift = shiftStartMin - nowMin;
         if (minsUntilShift <= PRE_SHIFT_TEXT_LEAD_MIN && minsUntilShift > -180) { // don't keep flagging hours-old missed shifts forever
-          preShiftTextNeeded.push({ shiftStartMin, driverName, driverPhone, label });
+          preShiftTextNeeded.push({ shiftStartMin, driverName, driverPhone, label, shiftDbId: s.id });
         }
       }
 
@@ -946,12 +1006,14 @@
     Object.entries(byShiftTime).forEach(([shiftStartMin, list]) => {
       const clockLabel = minsToClock(Number(shiftStartMin));
       const names = list.map((d) => d.driverName).join(", ");
-      const recipients = list.filter((d) => d.driverPhone).map((d) => ({ name: d.driverName, phone: d.driverPhone }));
+      const withPhone = list.filter((d) => d.driverPhone);
+      const recipients = withPhone.map((d) => ({ name: d.driverName, phone: d.driverPhone }));
       alerts.push({
         key: `preshift-${shiftStartMin}`, type: "preshift_text", location: "atlanta", // grouped alerts aren't location-specific; link falls back to Atlanta
         message: `${list.length > 1 ? `${list.length} drivers` : names} due for a pre-shift check-in text — ${clockLabel} shift${list.length > 1 ? "s" : ""} (${names})`,
         recipients,
         actionMessage: `This is D&L transportation, please provide an ETA for your ${clockLabel} shift.`,
+        markShiftIdsOnSent: withPhone.map((d) => d.shiftDbId), // Pre Shift Text Sent gets marked automatically once this actually sends
       });
     });
 
@@ -1138,7 +1200,7 @@
       e.stopPropagation();
       const alert = boardAlerts.find((a) => a.key === btn.dataset.alertActionKey);
       if (alert && alert.recipients && alert.recipients.length) {
-        openSendTextModal(alert.recipients, alert.actionMessage || "");
+        openSendTextModal(alert.recipients, alert.actionMessage || "", alert.markShiftIdsOnSent || null);
       }
     });
   }
@@ -1179,21 +1241,22 @@
     const calc = computeCalc(trip, row);
     const canComplete = String(trip.routeId || "").trim();
     return getOrderedTripSubcols().map((col) => {
+      const pistachioCls = col.pistachio ? " col-pistachio" : "";
       if (col.type === "checkbox") {
         const on = !!trip[col.key];
         const flagCls = col.key === "backhaul" ? "flag-backhaul" : "flag-yes";
-        return `<td class="col-${col.key} ${on ? flagCls : ""}" style="text-align:center;">
+        return `<td class="col-${col.key}${pistachioCls} ${on ? flagCls : ""}" style="text-align:center;">
           <input type="checkbox" class="chk" data-row="${row.id}" data-trip="${trip.id}" data-field="${col.key}" ${on ? "checked" : ""}>
         </td>`;
       }
       if (col.type === "calc") {
-        return `<td class="col-${col.key}"><input class="cell-input calc" value="${escapeHtml(calc[col.key])}" readonly tabindex="-1"></td>`;
+        return `<td class="col-${col.key}${pistachioCls}"><input class="cell-input calc" data-row="${row.id}" data-trip="${trip.id}" data-field="${col.key}" value="${escapeHtml(calc[col.key])}" readonly tabindex="-1"></td>`;
       }
       const placeholder = col.type === "time" ? "--:--" : "";
       const inputmode = col.inputmode ? ` inputmode="${col.inputmode}"` : "";
       const linkBtn = (col.key === "tripId" && trip.tripId)
         ? `<button type="button" class="cell-link-btn" data-open-pro="${row.id}" data-trip="${trip.id}" title="Open trip details">↗</button>` : "";
-      return `<td class="col-${col.key}"><div class="cell-with-link">
+      return `<td class="col-${col.key}${pistachioCls}"><div class="cell-with-link">
         <input class="cell-input ${col.small ? "small" : ""}" type="text" placeholder="${placeholder}"${inputmode}
         data-row="${row.id}" data-trip="${trip.id}" data-field="${col.key}" value="${escapeHtml(trip[col.key])}">${linkBtn}</div></td>`;
     }).join("") + `<td class="col-trip-actions">
@@ -1222,13 +1285,19 @@
         <button class="text-btn" data-action="text-driver" data-row="${row.id}" title="Text this driver">Text</button>
       </td>
       <td class="pin pin-rate"${rs}>
-        <input class="cell-input small" style="width:60px;" placeholder="Rate" data-row="${row.id}" data-field="rate" value="${escapeHtml(row.rate)}">
+        <input class="cell-input small" style="width:46px;" placeholder="Rate" data-row="${row.id}" data-field="rate" value="${escapeHtml(row.rate)}">
       </td>
+      <td class="col-email"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.email, row.emailSnapshot))}</span></td>
+      <td class="col-dispatcherPhone"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.dispatcherPhone, row.dispatcherPhoneSnapshot))}</span></td>
       <td class="pin pin-pro${row.shiftComplete ? " shift-complete-tint" : ""}"${rs}>
         <div class="cell-with-link">
           <input class="cell-input" placeholder="PRO#" data-row="${row.id}" data-field="proNumber" value="${escapeHtml(row.proNumber)}">${proLinkBtn}
         </div>
       </td>
+      <td class="col-shiftDate"${rs}><span class="static-text">${escapeHtml(row.shiftDate || "")}</span></td>
+      <td class="col-mc"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.mc, row.mcSnapshot))}</span></td>
+      <td class="col-rating"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.rating, row.ratingSnapshot))}</span></td>
+      <td class="col-driverPreference"${rs}><span class="static-text">${escapeHtml((drv && drv.preference) || "")}</span></td>
       <td class="pin pin-driver"${rs}>
         <div class="driver-name-wrap">
           <input class="cell-input" list="driverNamesList" placeholder="Type driver name…"
@@ -1236,13 +1305,11 @@
         </div>
       </td>
       <td class="col-cell"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.phone, row.cellSnapshot))}</span></td>
-      <td class="col-email"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.email, row.emailSnapshot))}</span></td>
-      <td class="col-dispatcherPhone"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.dispatcherPhone, row.dispatcherPhoneSnapshot))}</span></td>
-      <td class="col-mc"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.mc, row.mcSnapshot))}</span></td>
-      <td class="col-rating"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.rating, row.ratingSnapshot))}</span></td>
-      <td class="col-shiftStart"${rs}><input class="cell-input small" style="width:60px;" placeholder="--:--" data-row="${row.id}" data-field="shiftStart" value="${escapeHtml(row.shiftStart)}"></td>
-      <td class="col-preShiftTextSent"${rs} style="text-align:center;"><input type="checkbox" class="chk" data-row="${row.id}" data-field="preShiftTextSent" ${row.preShiftTextSent ? "checked" : ""}></td>
-      <td class="col-etaShiftReport"${rs}><input class="cell-input small" style="width:60px;" placeholder="--:--" data-row="${row.id}" data-field="etaShiftReport" value="${escapeHtml(row.etaShiftReport)}"></td>
+      <td class="col-shiftStart"${rs}><input class="cell-input small" style="width:46px;" placeholder="--:--" data-row="${row.id}" data-field="shiftStart" value="${escapeHtml(row.shiftStart)}"></td>
+      <td class="col-etaShiftReport"${rs}><input class="cell-input small" style="width:46px;" placeholder="--:--" data-row="${row.id}" data-field="etaShiftReport" value="${escapeHtml(row.etaShiftReport)}"></td>
+      <td class="col-shiftHosLeft"${rs}><input class="cell-input calc" data-row="${row.id}" data-field="shiftHosLeft" value="${escapeHtml(computeShiftLevelHosLeft(row))}" readonly tabindex="-1"></td>
+      <td class="col-nextCallTimeCalc"${rs}><input class="cell-input calc" data-row="${row.id}" data-field="nextCallTimeCalc" value="${escapeHtml(computeNextCallTimeForRow(row))}" readonly tabindex="-1"></td>
+      <td class="col-revLevel"${rs}><input class="cell-input small" style="width:42px;" placeholder="Rev" data-row="${row.id}" data-field="revLevel" value="${escapeHtml(row.revLevel)}"></td>
       <td class="col-notes"${rs}><input class="cell-input" placeholder="Notes" data-row="${row.id}" data-field="notes" value="${escapeHtml(row.notes)}"></td>
       <td class="col-routes"${rs}>${routesChipsHtml(row)}</td>`;
   }
@@ -1360,31 +1427,35 @@
     const rows = getSheet(state.activeLocation, state.activeDate);
     const displayRows = [...rows].sort((a, b) => (a.shiftComplete ? 1 : 0) - (b.shiftComplete ? 1 : 0)); // stable — completed shifts sink to the bottom, order preserved otherwise
     const tripHeaderCells = getOrderedTripSubcols().map((c) => {
-      const groupCls = c.group ? ` col-group-${c.group}` : (c.type === "calc" ? " col-group-calc" : "");
-      return `<th class="col-${c.key}${groupCls} col-draggable" draggable="true" data-col-key="${c.key}" title="Drag to reorder">${c.label}</th>`;
+      const pistachioCls = c.pistachio ? " col-pistachio" : "";
+      return `<th class="col-${c.key}${pistachioCls} col-draggable" draggable="true" data-col-key="${c.key}" title="Drag to reorder">${c.label}</th>`;
     }).join("");
     const thead = `<thead>
       <tr>
         <th class="pin pin-select"><input type="checkbox" class="chk" id="select-all-rows" title="Select all"></th>
         <th class="pin pin-text"></th>
         <th class="pin pin-rate">Rate</th>
-        <th class="pin pin-pro">PRO#</th>
-        <th class="pin pin-driver">Driver</th>
-        <th class="col-cell">Cell</th>
         <th class="col-email">Email</th>
         <th class="col-dispatcherPhone">Dispatcher Phone</th>
+        <th class="pin pin-pro">PRO#</th>
+        <th class="col-shiftDate">Date</th>
         <th class="col-mc">MC #</th>
         <th class="col-rating">Rating</th>
+        <th class="col-driverPreference">Driver Preference</th>
+        <th class="pin pin-driver">Driver</th>
+        <th class="col-cell">Cell</th>
         <th class="col-shiftStart">Shift Start</th>
-        <th class="col-preShiftTextSent">Pre Shift Text Sent</th>
-        <th class="col-etaShiftReport">ETA Shift Report</th>
+        <th class="col-etaShiftReport">ETA</th>
+        <th class="col-shiftHosLeft">HOS Left</th>
+        <th class="col-nextCallTimeCalc">Next Call Time</th>
+        <th class="col-revLevel">Rev Level</th>
         <th class="col-notes">Notes</th>
         <th class="col-routes">Routes</th>
         ${tripHeaderCells}
         <th class="col-trip-actions"></th>
       </tr>
     </thead>`;
-    const totalCols = 15 + TRIP_SUBCOLS.length + 1;
+    const totalCols = 19 + TRIP_SUBCOLS.length + 1;
     const addRowHtml = `<tr class="quick-add-row"><td colspan="${totalCols}"><button type="button" class="quick-add-btn" id="btn-quick-add-row"><span class="quick-add-btn-label">+ Add Row</span></button></td></tr>`;
     const tbody = `<tbody>${displayRows.map(rowsToHtml).join("")}${addRowHtml}</tbody>`;
 
@@ -1421,6 +1492,7 @@
     setText(".col-email .static-text", pick(drv && drv.email, row.emailSnapshot));
     setText(".col-mc .static-text", pick(drv && drv.mc, row.mcSnapshot));
     setText(".col-rating .static-text", pick(drv && drv.rating, row.ratingSnapshot));
+    setText(".col-driverPreference .static-text", (drv && drv.preference) || "");
     if (drv && drv.normalRate && !String(row.rate || "").trim()) {
       row.rate = drv.normalRate;
       const rateInput = tr.querySelector('input[data-field="rate"]');
@@ -1444,6 +1516,10 @@
         if (el) el.value = calc[col.key]; // readonly calc fields — safe to set directly, never focused/typed into
       });
     });
+    const nextCallEl = document.querySelector(`input[data-row="${rowId}"][data-field="nextCallTimeCalc"]`);
+    if (nextCallEl) nextCallEl.value = computeNextCallTimeForRow(row);
+    const hosEl = document.querySelector(`input[data-row="${rowId}"][data-field="shiftHosLeft"]`);
+    if (hosEl) hosEl.value = computeShiftLevelHosLeft(row);
   }
 
   /* ---------------- realtime: live sync with other users ---------------- */
@@ -1852,13 +1928,13 @@
     el.style.color = segments > 1 ? "var(--amber-700, #b45309)" : "";
   }
 
-  function openSendTextModal(recipients, prefilledMessage) {
+  function openSendTextModal(recipients, prefilledMessage, markShiftIdsOnSent) {
     const withPhone = recipients.filter((r) => formatTextAddress(r.phone));
     if (!withPhone.length) {
       setDriverSyncStatus("No phone number on file for this driver.", "error");
       return;
     }
-    sendTextModalState = { recipients: withPhone };
+    sendTextModalState = { recipients: withPhone, markShiftIdsOnSent: markShiftIdsOnSent || null };
     $("#send-text-phone-display").textContent = withPhone.map((r) => r.name || r.phone).join(", ");
     $("#send-text-message").value = prefilledMessage || "";
     $("#send-text-status").textContent = "";
@@ -1869,6 +1945,30 @@
 
   function textDriverPhone(rawPhone, prefilledMessage) {
     openSendTextModal([{ name: null, phone: rawPhone }], prefilledMessage);
+  }
+
+  // Marks Pre Shift Text Sent (+ timestamp) on the given shifts, both in the
+  // DB and in any matching rows already loaded in this tab, so the alert
+  // scanner won't immediately re-flag them on its next pass.
+  async function markPreShiftTextSent(shiftDbIds) {
+    if (!shiftDbIds || !shiftDbIds.length || !supabaseClient) return;
+    const nowIso = new Date().toISOString();
+    try {
+      await supabaseClient.from(SHIFTS_TABLE)
+        .update({ pre_shift_text_sent: true, pre_shift_text_sent_at: nowIso })
+        .in("id", shiftDbIds);
+    } catch (e) {
+      console.error("markPreShiftTextSent failed:", e);
+    }
+    const idSet = new Set(shiftDbIds.map(String));
+    for (const k in state.sheets) {
+      state.sheets[k].forEach((r) => {
+        if (idSet.has(String(r.dbId))) {
+          r.preShiftTextSent = true;
+          r.preShiftTextSentAt = nowIso;
+        }
+      });
+    }
   }
 
   async function submitSendTextModal() {
@@ -1886,17 +1986,23 @@
       });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || `Send failed (${res.status})`);
+      if (sendTextModalState.markShiftIdsOnSent) await markPreShiftTextSent(sendTextModalState.markShiftIdsOnSent);
       $("#modal-send-text").classList.add("hidden");
       setDriverSyncStatus("Text sent.", "success");
     } catch (e) {
       console.error("send-text failed, falling back to email client:", e);
       $("#send-text-status").innerHTML = `Couldn't send automatically (${escapeHtml(String(e.message || e))}). <button type="button" class="btn btn-ghost" id="send-text-fallback" style="margin-left:6px;">Open in email instead</button>`;
       const fallbackBtn = $("#send-text-fallback");
-      if (fallbackBtn) fallbackBtn.addEventListener("click", () => {
+      if (fallbackBtn) fallbackBtn.addEventListener("click", async () => {
         const addrs = sendTextModalState.recipients.map((r) => formatTextAddress(r.phone)).join(",");
         const a = document.createElement("a");
         a.href = `mailto:${addrs}?body=${encodeURIComponent(message)}`;
         a.click();
+        // Falling back to the Outlook draft still counts as "sent" for
+        // tracking purposes -- the dispatcher still has to actually hit
+        // send in Outlook, but there's no way to detect that from here,
+        // so this marks it the moment they choose the fallback path.
+        if (sendTextModalState.markShiftIdsOnSent) await markPreShiftTextSent(sendTextModalState.markShiftIdsOnSent);
         $("#modal-send-text").classList.add("hidden");
       });
     } finally {
@@ -2567,7 +2673,7 @@
     state.addDriverNestedFromLoad = !!nestedFromLoad;
     state.editingDriverId = null;
     modalEl.classList.remove("hidden"); // open first — a missing field below should never block this
-    ["ad-name", "ad-phone", "ad-mc", "ad-dispatcher-phone", "ad-email", "ad-email2", "ad-rating", "ad-carrier", "ad-rate-booking", "ad-notes", "ad-tii-amount"]
+    ["ad-name", "ad-phone", "ad-mc", "ad-dispatcher-phone", "ad-email", "ad-email2", "ad-rating", "ad-preference", "ad-carrier", "ad-rate-booking", "ad-notes", "ad-tii-amount"]
       .forEach((id) => setVal(id, ""));
     $all('input[name="ad-tia"]').forEach((r) => (r.checked = r.value === "no"));
     $all(".field", modalEl).forEach((f) => f.classList.remove("has-error"));
@@ -2593,6 +2699,7 @@
     setVal("ad-email", d.email || "");
     setVal("ad-email2", d.email2 || "");
     setVal("ad-rating", d.rating || "");
+    setVal("ad-preference", d.preference || "");
     setVal("ad-carrier", d.carrier || "");
     setVal("ad-rate-booking", d.rateBooking || "");
     setVal("ad-notes", d.notes || "");
@@ -2630,6 +2737,7 @@
       dispatcherPhone: $("#ad-dispatcher-phone").value.trim(),
       email2: $("#ad-email2").value.trim(),
       rating: $("#ad-rating").value.trim() || null,
+      preference: $("#ad-preference").value || null,
       notes: $("#ad-notes").value.trim(),
       carrier: $("#ad-carrier").value.trim(),
       rateBooking: $("#ad-rate-booking").value.trim(),
@@ -3146,7 +3254,7 @@
         scheduleShiftSave(found.row);
         return;
       }
-      if ((t.dataset.field === "etaShiftReport" || t.dataset.field === "notes") && !t.dataset.trip) {
+      if (["etaShiftReport", "notes", "revLevel"].includes(t.dataset.field) && !t.dataset.trip) {
         found.row[t.dataset.field] = t.value;
         scheduleShiftSave(found.row);
         return;
@@ -3380,7 +3488,7 @@
       <td class="pin pin-select"><input type="checkbox" class="chk" data-action="toggle-row-select" data-row="${row.id}" ${row.selected ? "checked" : ""} title="Select"></td>
       <td class="pin pin-text"><button class="text-btn" data-action="text-driver" data-row="${row.id}" title="Text this driver">Text</button></td>
       <td class="pin pin-rate">
-        <input class="cell-input small" style="width:60px;" placeholder="Rate" data-row="${row.id}" data-field="normalRate" value="${escapeHtml(row.normalRate)}">
+        <input class="cell-input small" style="width:46px;" placeholder="Rate" data-row="${row.id}" data-field="normalRate" value="${escapeHtml(row.normalRate)}">
       </td>
       <td class="pin pin-pro${row.shiftComplete ? " shift-complete-tint" : ""}">
         <input class="cell-input" placeholder="Aljex#" data-row="${row.id}" data-field="aljexNumber" value="${escapeHtml(row.aljexNumber)}">
@@ -3395,9 +3503,9 @@
       <td class="col-hou-carrier"><span class="static-text">${escapeHtml(pick(drv && drv.carrier, row.carrier))}</span></td>
       <td class="col-mc"><span class="static-text">${escapeHtml(pick(drv && drv.mc, row.mc))}</span></td>
       <td class="col-rating"><span class="static-text">${escapeHtml(pick(drv && drv.rating, row.rating))}</span></td>
-      <td class="col-shiftStart"><input class="cell-input small" style="width:60px;" placeholder="--:--" data-row="${row.id}" data-field="time" value="${escapeHtml(row.time)}"></td>
-      <td class="col-hou-ttc"><input class="cell-input small" style="width:60px;" data-row="${row.id}" data-field="ttc" value="${escapeHtml(row.ttc)}"></td>
-      <td class="col-hou-ttt"><input class="cell-input small" style="width:60px;" data-row="${row.id}" data-field="ttt" value="${escapeHtml(row.ttt)}"></td>
+      <td class="col-shiftStart"><input class="cell-input small" style="width:46px;" placeholder="--:--" data-row="${row.id}" data-field="time" value="${escapeHtml(row.time)}"></td>
+      <td class="col-hou-ttc"><input class="cell-input small" style="width:46px;" data-row="${row.id}" data-field="ttc" value="${escapeHtml(row.ttc)}"></td>
+      <td class="col-hou-ttt"><input class="cell-input small" style="width:46px;" data-row="${row.id}" data-field="ttt" value="${escapeHtml(row.ttt)}"></td>
       <td class="col-hou-comments"><input class="cell-input" data-row="${row.id}" data-field="comments" value="${escapeHtml(row.comments)}"></td>
       <td class="col-hou-timeout"><input class="cell-input" data-row="${row.id}" data-field="timeOutRemarks" value="${escapeHtml(row.timeOutRemarks)}"></td>
     </tr>`;

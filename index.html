@@ -116,6 +116,16 @@
           <input type="text" id="ad-rating" placeholder="e.g. A1">
         </div>
         <div class="field">
+          <label for="ad-preference">Driver preference</label>
+          <select id="ad-preference">
+            <option value="">-- none set --</option>
+            <option value="long">Long</option>
+            <option value="early">Early</option>
+            <option value="late">Late</option>
+            <option value="last minute">Last minute</option>
+          </select>
+        </div>
+        <div class="field">
           <label for="ad-carrier">Carrier</label>
           <input type="text" id="ad-carrier">
         </div>
@@ -282,6 +292,7 @@
         </div>
         <div class="field"><label>Time Sheet Start</label><input class="cell-input" type="text" placeholder="--:--" id="tsc-start"></div>
         <div class="field"><label>Time Sheet Finish</label><input class="cell-input" type="text" placeholder="--:--" id="tsc-end"></div>
+        <div class="field"><label>Trailer Drop Location</label><input class="cell-input" type="text" placeholder="Where the trailer was dropped" id="tsc-drop-location"></div>
         <div id="tsc-error" style="color:#b91c1c; font-size:13px; margin-top:8px;"></div>
       </div>
       <div class="modal-footer">
