@@ -1,0 +1,18 @@
+import { defineConfig } from 'vite';
+import { resolve } from 'path';
+
+export default defineConfig({
+  build: {
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        delaware: resolve(__dirname, 'dalaware.html'),
+        buildingc: resolve(__dirname, 'buildingc.html'),
+        houston: resolve(__dirname, 'houston.html'),
+        accounting: resolve(__dirname, 'accounting.html'),
+        driverlist: resolve(__dirname, 'driverlist.html'),
+        historics: resolve(__dirname, 'historics.html')
+      }
+    }
+  }
+});

@@ -213,7 +213,7 @@
       shift_start: row.shiftStart || null,
       shift_complete: !!row.shiftComplete,
       shift_complete_at: row.shiftCompleteAt || null,
-      rate: row.rate === "" || row.rate == null ? null : Number(row.rate),
+      carrier_rate: row.rate === "" || row.rate == null ? null : Number(row.rate),
       notes: row.notes || null,
       pre_shift_text_sent: !!row.preShiftTextSent,
       pre_shift_call: !!row.preShiftCall,
@@ -241,7 +241,7 @@
       shiftStart: dbRow.shift_start || "",
       shiftComplete: !!dbRow.shift_complete,
       shiftCompleteAt: dbRow.shift_complete_at || null,
-      rate: dbRow.rate != null ? String(dbRow.rate) : "",
+      rate: dbRow.carrier_rate != null ? String(dbRow.carrier_rate) : "",
       notes: dbRow.notes || "",
       preShiftTextSent: !!dbRow.pre_shift_text_sent,
       preShiftCall: !!dbRow.pre_shift_call,
@@ -3117,7 +3117,7 @@
     boardTable.addEventListener("click", (e) => {
       const textBtn = e.target.closest('[data-action="text-driver"]');
       if (textBtn) textDriverForRow(textBtn.dataset.row);
-      if (e.target.id === "btn-quick-add-row") quickAddBlankRow();
+      if (e.target.closest("#btn-quick-add-row")) quickAddBlankRow();
       const minimizeBtn = e.target.closest('[data-action="minimize-trip"]');
       if (minimizeBtn) minimizeTrip(minimizeBtn.dataset.row, minimizeBtn.dataset.trip);
       const restoreBtn = e.target.closest('[data-action="restore-trip"]');
@@ -3844,7 +3844,7 @@
     boardTable.addEventListener("click", (e) => {
       const textBtn = e.target.closest('[data-action="text-driver"]');
       if (textBtn) textHoustonDriverForRow(textBtn.dataset.row);
-      if (e.target.id === "btn-quick-add-row") quickAddHoustonBlankRow();
+      if (e.target.closest("#btn-quick-add-row")) quickAddHoustonBlankRow();
     });
     boardTable.addEventListener("contextmenu", (e) => {
       const tr = e.target.closest("tr");
