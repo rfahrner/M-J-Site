@@ -3,9 +3,6 @@
   "version": "1.0.0",
   "description": "name: Deploy Jekyll with GitHub Pages dependencies preinstalled",
   "main": "loadboard.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/rfahrner/M-J-Site.git"
@@ -18,6 +15,12 @@
     "url": "https://github.com/rfahrner/M-J-Site/issues"
   },
   "homepage": "https://github.com/rfahrner/M-J-Site#readme",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
   "devDependencies": {
     "vite": "^8.1.5"
   },

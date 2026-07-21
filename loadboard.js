@@ -13,6 +13,7 @@
      page load / navigation. That still needs its own Supabase
      table — not built yet.
    ============================================================ */
+import { createClient } from '@supabase/supabase-js';
 
 (function () {
   "use strict";
