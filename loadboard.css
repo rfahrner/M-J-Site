@@ -322,9 +322,17 @@ button {
 
 /* ---------------- Grid ---------------- */
 
+
+#board-view {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 52px); /* 52px = .topbar height */
+}
+
 .grid-scroll {
+  flex: 1;
+  min-height: 0; /* required so a flex child can actually shrink and scroll internally */
   overflow: auto;
-  max-height: calc(100vh - 145px);
   border-top: 1px solid var(--line);
 }
 
@@ -393,12 +401,13 @@ table.board td.col-pistachio { background: var(--pistachio) !important; }
   position: sticky;
   z-index: 3;
   background: #fff;
+  will-change: transform;
+  isolation: isolate;
 }
 .pin-select { left: 0; width: 26px; min-width: 26px; text-align: center; }
 .pin-text { left: 26px; width: 46px; min-width: 46px; }
-.pin-rate { left: 72px; width: 62px; min-width: 62px; }
-.pin-pro { left: 134px; width: 92px; min-width: 92px; }
-.pin-driver { left: 226px; width: 160px; min-width: 160px; }
+.pin-pro { left: 72px; width: 92px; min-width: 92px; }
+.pin-driver { left: 164px; width: 160px; min-width: 160px; }
 table.board tbody tr:nth-child(even) td.pin { background: #fbfcfe; }
 table.board tbody tr.is-row-pinned td.pin { background: rgba(234, 179, 8, 0.22); }
 table.board tbody tr.is-row-selected td.pin { background: rgba(59, 130, 246, 0.22); }
@@ -740,21 +749,33 @@ tr.is-new td.pin { background-color: rgba(192,54,44,0.22) !important; }
 table.board.hide-col-cell .col-cell,
 table.board.hide-col-dispatcherPhone .col-dispatcherPhone,
 table.board.hide-col-email .col-email,
+table.board.hide-col-shiftDate .col-shiftDate,
 table.board.hide-col-mc .col-mc,
 table.board.hide-col-rating .col-rating,
+table.board.hide-col-driverPreference .col-driverPreference,
 table.board.hide-col-shiftStart .col-shiftStart,
+table.board.hide-col-etaShiftReport .col-etaShiftReport,
+table.board.hide-col-shiftHosLeft .col-shiftHosLeft,
+table.board.hide-col-revLevel .col-revLevel,
 table.board.hide-col-routeId .col-routeId,
 table.board.hide-col-tripId .col-tripId,
 table.board.hide-col-trailerOut .col-trailerOut,
 table.board.hide-col-routeMiles .col-routeMiles,
 table.board.hide-col-stopCount .col-stopCount,
 table.board.hide-col-dispatchTime .col-dispatchTime,
-table.board.hide-col-salvage .col-salvage,
-table.board.hide-col-backhaul .col-backhaul,
 table.board.hide-col-lastStopDepart .col-lastStopDepart,
 table.board.hide-col-returnToDC .col-returnToDC,
+table.board.hide-col-salvage .col-salvage,
+table.board.hide-col-backhaul .col-backhaul,
+table.board.hide-col-salvageBhaulRefusedBy .col-salvageBhaulRefusedBy,
+table.board.hide-col-backhaulTrailerNumber .col-backhaulTrailerNumber,
+table.board.hide-col-returnEtaToDc .col-returnEtaToDc,
+table.board.hide-col-ppwkReceived .col-ppwkReceived,
+table.board.hide-col-routeEstHours .col-routeEstHours,
+table.board.hide-col-backhaulType .col-backhaulType,
+table.board.hide-col-etaToFinalStop .col-etaToFinalStop,
+table.board.hide-col-estRouteComplete .col-estRouteComplete,
 table.board.hide-col-etaNextDispatch .col-etaNextDispatch,
-table.board.hide-col-hosLeft .col-hosLeft,
 table.board.hide-col-tripCallTime .col-tripCallTime {
   display: none;
 }
@@ -1050,3 +1071,4 @@ table.available-table tbody tr:nth-child(even) { background: #fbfcfe; }
   align-self: stretch;
 }
 .trip-add-btn:hover { background: var(--slate-100); border-style: solid; }
+.col-rate { width: 62px; min-width: 62px; }
