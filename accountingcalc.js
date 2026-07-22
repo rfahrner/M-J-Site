@@ -104,12 +104,24 @@ import { supabaseClient, SHIFTS_TABLE, findDriver, setDriverSyncStatus } from '.
     const fscRate = pricingSettings.fsc_rate || 0;
     const fscPayment = calcFscPayment(fscRate, totalMiles, pricingSettings);
 
-    // Delaware doesn't use the tiered Kroger-style cost lookup — every Delaware
-    // load pays $1000 flat or $4/mile, whichever is greater. Assumption: this
-    // applies to what we PAY (carrier pay / cost), not the revenue side —
-    // easy to adjust if that's wrong.
-    if (locationKey === "delaware" && totalMiles > 0) {
-      totalCost = Math.max(1000, totalMiles * 4);
+    // Delaware and Building C's driver pay is now owned by the board's own
+    // rate engine (boardrates.js), computed live per-route right on the
+    // board and already reflected in row.rate — including any manual
+    // override the dispatcher typed in. Delaware needs this because that
+    // engine prices each route separately ($1000-or-$4/mi per route),
+    // while summing this shift's total miles first (the old approach here)
+    // gives a different number once a load has more than one route.
+    // Building C needs this because it doesn't fit a mileage-tier shape at
+    // all (BIRM flat / Hostler hourly) — there's no sensible cost-tier
+    // fallback to compute here in the first place. Rather than re-deriving
+    // either and risking the two numbers drifting apart, this just takes
+    // what the board already worked out. total_cost / total_revenue /
+    // fsc_payment are untouched — those aren't driver pay, and weren't
+    // part of what changed.
+    let carrierPay = totalCost;
+    if (locationKey === "delaware" || locationKey === "buildingc") {
+      const boardRate = Number(row.rate);
+      if (!isNaN(boardRate) && boardRate > 0) carrierPay = boardRate;
     }
 
     const accountingRow = {
@@ -121,7 +133,7 @@ import { supabaseClient, SHIFTS_TABLE, findDriver, setDriverSyncStatus } from '.
       driver_cell: drv ? (drv.phone || null) : null,
       carrier_email: drv ? (drv.email || null) : null,
       cost_level: costLevel, revenue_level: revenueLevel,
-      total_carrier_pay: totalCost, // starting suggestion — editable afterward
+      total_carrier_pay: carrierPay, // starting suggestion — editable afterward
       fsc_rate_snapshot: fscRate, fsc_payment: fscPayment,
       total_cost: Math.round(totalCost * 100) / 100, total_revenue: Math.round(totalRevenue * 100) / 100,
       total_miles: totalMiles, total_stops: totalStops,

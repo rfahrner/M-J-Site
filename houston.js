@@ -4,15 +4,25 @@
      split) with entirely different columns. See chat for why this
      isn't just another branch in the existing board code.
      ================================================================ */
-import { state, supabaseClient, uid, findDriver, driversForLocation, setDriverSyncStatus, SAVE_DEBOUNCE_MS, escapeHtml, $, $all, addDays, keyToDate, dateKey, on, refreshDriverDatalist, renderBoardChrome, beginTextBatchFlow, textDriverPhone, openAddDriverModal, openAddLoadModal, closeAddLoadModal, closeDateDropdown, renderCalendarGrid, closeContextMenu, sendCurrentGroupBatchDirect, openCurrentGroupBatch, confirmGroupBatchSent, pick, handleRealtimeDriverChange, initAvailableSection, resetCalendarViewMonth, resetGroupTextState } from './loadboard.js';  
+import { state, supabaseClient, uid, findDriver, driversForLocation, setDriverSyncStatus, SAVE_DEBOUNCE_MS, escapeHtml, $, $all, addDays, keyToDate, dateKey, on, refreshDriverDatalist, renderBoardChrome, beginTextBatchFlow, textDriverPhone, openAddDriverModal, openAddLoadModal, closeAddLoadModal, closeDateDropdown, renderCalendarGrid, closeContextMenu, sendCurrentGroupBatchDirect, openCurrentGroupBatch, confirmGroupBatchSent, pick, handleRealtimeDriverChange, initAvailableSection, resetCalendarViewMonth, resetGroupTextState, refreshAvailableSection } from './loadboard.js';
+import { getBoardRateSettings } from './boardrates.js';
 export const HOUSTON_TABLE = "loads_houston";
   export const houstonState = { sheets: {}, datesWithData: new Set() };
+
+  // Houston has no per-route breakdown (flat table, no trips concept), so
+  // unlike the other three locations, this is just a starting default —
+  // dispatchers can still freely overtype it, same as always.
+  function defaultHoustonRate() {
+    const settings = getBoardRateSettings();
+    const flat = settings && settings.houston && settings.houston.flat_rate;
+    return flat != null ? String(flat) : "";
+  }
 
   export function blankHoustonRow(driverId, driverName) {
     return {
       id: uid("hrow"), dbId: null, driverId: driverId || null, driverName: driverName || "",
       aljexNumber: "", comments: "", ttc: "", ttt: "", rating: "", time: "",
-      driverPhone: "", timeOutRemarks: "", dispatcherPhone: "", carrier: "", mc: "", normalRate: "",
+      driverPhone: "", timeOutRemarks: "", dispatcherPhone: "", carrier: "", mc: "", normalRate: defaultHoustonRate(),
       tonu: false, highlighted: false, shiftComplete: false, selected: false,
       createdAt: null, updatedAt: null, addedAt: null,
     };
@@ -172,6 +182,7 @@ export const HOUSTON_TABLE = "loads_houston";
     await ensureHoustonSheetLoaded(state.activeDate);
     renderBoardChrome();
     renderHoustonBoardTable();
+    refreshAvailableSection();
   }
 
   export function toggleHoustonTonu(rowId) {

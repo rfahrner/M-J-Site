@@ -17,6 +17,7 @@ import { initAccountingPage, getAccountingRecordById } from './accounting.js';
 import { sendShiftToAccounting } from './accountingcalc.js';
 import { initHoustonBoardPage } from './houston.js';
 import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_MIN, PRE_SHIFT_CALL_FOLLOWUP_MIN } from './alerts.js';
+import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, computeHoursWorked, effectiveTierRate, effectiveSetting, isTierOverridden, isSettingOverridden } from './boardrates.js';
 
   /* ---------------- page map (single source of truth for nav) ---------------- */
 
@@ -61,8 +62,8 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     { key: "routeMiles",  label: "Miles",             type: "text", small: true, inputmode: "decimal", pistachio: true },
     { key: "stopCount",   label: "Stops",              type: "text", small: true, inputmode: "numeric", pistachio: true },
     { key: "dispatchTime",label: "Dispatch Time",     type: "time", pistachio: true },
-    { key: "lastStopDepart",  label: "Last Stop Depart",   type: "calc", pistachio: true },
-    { key: "returnToDC",      label: "Return to DC",       type: "calc", pistachio: true },
+    { key: "lastStopDepart",  label: "Last Stop Depart",   type: "time", pistachio: true },
+    { key: "returnToDC",      label: "Return to DC",       type: "time", pistachio: true },
     { key: "salvage",     label: "Salvage",            type: "checkbox", group: "backhaul", pistachio: true },
     { key: "backhaul",    label: "B/Haul",             type: "checkbox", group: "backhaul", pistachio: true },
     { key: "salvageBhaulRefusedBy",  label: "Refused By",          type: "text", group: "backhaul", pistachio: true },
@@ -228,6 +229,9 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
       timesheet_end_time: row.timesheetEndTime || null,
       trailer_drop_location: row.trailerDropLocation || null,
       pre_shift_text_sent_at: row.preShiftTextSentAt || null,
+      birm: !!row.birm,
+      rate_manual: !!row.rateManual,
+      rate_overrides: (row.rateOverrides && (Object.keys(row.rateOverrides.tiers || {}).length || Object.keys(row.rateOverrides.settings || {}).length)) ? row.rateOverrides : null,
     };
   }
   function shiftFromDbRow(dbRow) {
@@ -256,6 +260,9 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
       timesheetEndTime: dbRow.timesheet_end_time || "",
       trailerDropLocation: dbRow.trailer_drop_location || "",
       preShiftTextSentAt: dbRow.pre_shift_text_sent_at || null,
+      birm: !!dbRow.birm,
+      rateManual: !!dbRow.rate_manual,
+      rateOverrides: dbRow.rate_overrides ? { tiers: dbRow.rate_overrides.tiers || {}, settings: dbRow.rate_overrides.settings || {} } : { tiers: {}, settings: {} },
       selected: false, // local-only UI state, not persisted — see note in chat
       createdAt: dbRow.created_at || null,
       updatedAt: dbRow.updated_at || null,
@@ -281,6 +288,8 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
       route_miles: trip.routeMiles !== "" && trip.routeMiles != null ? Number(trip.routeMiles) : null,
       stop_count: trip.stopCount !== "" && trip.stopCount != null ? Number(trip.stopCount) : null,
       dispatch_time: trip.dispatchTime || null,
+      last_stop_depart: trip.lastStopDepart || null,
+      return_to_dc: trip.returnToDC || null,
       salvage: !!trip.salvage,
       backhaul: !!trip.backhaul,
       minimized: !!trip.minimized,
@@ -317,6 +326,8 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
       routeMiles: dbRow.route_miles != null ? String(dbRow.route_miles) : "",
       stopCount: dbRow.stop_count != null ? String(dbRow.stop_count) : "",
       dispatchTime: dbRow.dispatch_time || "",
+      lastStopDepart: dbRow.last_stop_depart || "",
+      returnToDC: dbRow.return_to_dc || "",
       salvage: !!dbRow.salvage,
       backhaul: !!dbRow.backhaul,
       minimized: !!dbRow.minimized,
@@ -354,6 +365,8 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
       "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
     }[c]));
 
+  function fmtRateMoney(n) { return n == null || isNaN(n) ? "—" : `$${Number(n).toFixed(2)}`; }
+
   export function todayDate() { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }
   export function dateKey(d) {
     const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0"), day = String(d.getDate()).padStart(2, "0");
@@ -388,6 +401,7 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     activeDate: dateKey(todayDate()),
     drivers: [],
     sheets: {},              // `${locationKey}__${dateKey}` -> Row[]
+    availableSheets: {},     // `${locationKey}__${dateKey}` -> AvailableRow[]
     minDate: dateKey(addDays(todayDate(), -HISTORY_DAYS)),
     maxDate: dateKey(addDays(todayDate(), FUTURE_DAYS)),
     todayKey: dateKey(todayDate()),
@@ -452,6 +466,7 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
   function blankTrip() {
     return {
       id: uid("trip"), dbId: null, routeId: "", tripId: "", trailerOut: "", routeMiles: "", stopCount: "", dispatchTime: "", salvage: false, backhaul: false, minimized: false, complete: false, driverId: null, notes: "",
+      lastStopDepart: "", returnToDC: "",
       currentRouteStatus: "", currentBackhaulStatus: "", nextCallTime: "", backhaulLocation: "", salvageBhaulRefusedBy: "", backhaulTrailerNumber: "", backhaulType: "",
       returnEtaToDc: "", returnDropLocation: "", ppwkReceived: false, timesheetStartTime: "", timesheetEndTime: "", dropLocationText: "", returnToDcText: "",
       routeEstHours: "", timeToFinalStop: "", etaToFinalStop: "", estRouteComplete: "",
@@ -466,6 +481,7 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
       timesheetReceived: false, timesheetStartTime: "", timesheetEndTime: "", trailerDropLocation: "", preShiftTextSentAt: null,
       createdAt: null, updatedAt: null, addedAt: null,
       cellSnapshot: "", mcSnapshot: "", emailSnapshot: "", dispatcherPhoneSnapshot: "", ratingSnapshot: "",
+      birm: false, rateManual: false, rateOverrides: { tiers: {}, settings: {} },
       trips: [blankTrip()],
     };
   }
@@ -729,7 +745,7 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     trip.complete = true;
     trip.minimized = true;
     await saveTripNow(row, trip, row.trips.indexOf(trip) + 1);
-    logChange(row.dbId, `${labelForRow(row)} — ${trip.tripId || trip.routeId || "route"}`, "route_complete", "false", "true");
+    logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "route_complete", "false", "true");
     closeStopTimesModal();
     renderBoardTable();
     flashTripGreenTint(rowId, tripId);
@@ -758,20 +774,28 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
 
   const CALC_FIELD_RETENTION_MS = 3 * 60 * 60 * 1000; // 3 hours
 
+  // Last Stop Depart and Return to DC are editable trip fields now
+  // (trip.lastStopDepart / trip.returnToDC), not pure calculations — see
+  // autoFillCalcTimes() below for how they get their initial 45mph-based
+  // value. What's left here is just ETA Next Dispatch / HOS Left / Trip
+  // Call Time, which key off whichever Return to DC time is actually
+  // showing (a manual entry if there is one, otherwise the same 45mph
+  // estimate) so a correction to the real return time flows through
+  // instead of getting silently ignored.
   function computeCalc(trip, row) {
     const dispatch = parseHHMM(trip.dispatchTime);
     const miles = parseFloat(trip.routeMiles);
-    const out = { lastStopDepart: "", returnToDC: "", etaNextDispatch: "", hosLeft: "", tripCallTime: "" };
+    const out = { etaNextDispatch: "", hosLeft: "", tripCallTime: "" };
     if (dispatch != null) out.tripCallTime = minsToClock(dispatch - 30);
-    if (dispatch == null || isNaN(miles) || miles <= 0) return applyCalcRetention(out, row);
 
-    const leg = (miles / AVG_MPH) * 60;
-    const lastStopDepartMin = dispatch + leg;
-    const returnMin = lastStopDepartMin + leg + 15;
+    let returnMin = parseHHMM(trip.returnToDC);
+    if (returnMin == null && dispatch != null && !isNaN(miles) && miles > 0) {
+      const leg = (miles / AVG_MPH) * 60;
+      returnMin = dispatch + leg + leg + 15;
+    }
+    if (returnMin == null) return applyCalcRetention(out, row);
+
     const etaNextMin = returnMin + 30;
-
-    out.lastStopDepart = minsToClock(lastStopDepartMin);
-    out.returnToDC = minsToClock(returnMin);
     out.etaNextDispatch = minsToClock(etaNextMin);
 
     const shiftStartMin = parseHHMM(row.shiftStart);
@@ -779,14 +803,15 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     return applyCalcRetention(out, row);
   }
 
-  // 3 hours after a shift is marked complete, these 4 fields specifically
-  // are cleared — they won't be needed again. Return to DC isn't on this
-  // list and stays visible.
+  // 3 hours after a shift is marked complete, these fields are cleared —
+  // they won't be needed again. Last Stop Depart / Return to DC are real
+  // entries now rather than calculations, so they're not touched here —
+  // same as Return to DC already worked before this change.
   function applyCalcRetention(out, row) {
     if (row && row.shiftComplete && row.shiftCompleteAt) {
       const elapsed = Date.now() - new Date(row.shiftCompleteAt).getTime();
       if (elapsed > CALC_FIELD_RETENTION_MS) {
-        return { ...out, lastStopDepart: "", etaNextDispatch: "", hosLeft: "", tripCallTime: "" };
+        return { ...out, etaNextDispatch: "", hosLeft: "", tripCallTime: "" };
       }
     }
     return out;
@@ -827,6 +852,34 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     return minsToClock(Math.min(...candidates));
   }
 
+  // Give Last Stop Depart / Return to DC a starting value once Dispatch
+  // Time and Route Miles are both known, using the same 45mph estimate as
+  // before — but only while the field is still blank. Once a dispatcher
+  // has anything in there (typed manually or from a previous auto-fill),
+  // this leaves it alone; it never overwrites what's already showing.
+  function autoFillCalcTimes(rowId, trip) {
+    const dispatch = parseHHMM(trip.dispatchTime);
+    const miles = parseFloat(trip.routeMiles);
+    if (dispatch == null || isNaN(miles) || miles <= 0) return;
+    const leg = (miles / AVG_MPH) * 60;
+    let changed = false;
+    if (!String(trip.lastStopDepart || "").trim()) {
+      trip.lastStopDepart = minsToClock(dispatch + leg);
+      changed = true;
+    }
+    if (!String(trip.returnToDC || "").trim()) {
+      const lastDepartMin = parseHHMM(trip.lastStopDepart);
+      trip.returnToDC = minsToClock((lastDepartMin != null ? lastDepartMin : dispatch + leg) + leg + 15);
+      changed = true;
+    }
+    if (!changed) return;
+    const lsdEl = document.querySelector(`input[data-row="${rowId}"][data-trip="${trip.id}"][data-field="lastStopDepart"]`);
+    if (lsdEl) lsdEl.value = trip.lastStopDepart;
+    const rtdEl = document.querySelector(`input[data-row="${rowId}"][data-trip="${trip.id}"][data-field="returnToDC"]`);
+    if (rtdEl) rtdEl.value = trip.returnToDC;
+  }
+
+
   // Shift-level HOS display -- a driver only has one "current" HOS status
   // at a time, not one per trip block, so this reflects whichever trip is
   // the most recently active (last one with dispatch+miles entered).
@@ -837,6 +890,24 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     });
     if (!latest) return "";
     return computeCalc(latest, row).hosLeft;
+  }
+
+  // Recomputes the Rate column from the board rate engine (mileage tiers /
+  // flat-per-route / TONU / BIRM / Hostler, depending on location) and
+  // writes it into row.rate — unless the dispatcher has typed a manual
+  // override into that field, in which case this is a no-op so we never
+  // silently clobber what they typed. Updates the live DOM cell in place
+  // when present, rather than forcing a full board redraw.
+  function recomputeRowRate(row) {
+    if (row.rateManual) return;
+    const locationKey = row.location || state.activeLocation || "atlanta";
+    const breakdown = calcLoadRateBreakdown(locationKey, row);
+    const nextRate = breakdown.total ? String(breakdown.total) : "";
+    if (row.rate === nextRate) return;
+    row.rate = nextRate;
+    scheduleShiftSave(row);
+    const rateInput = document.querySelector(`input[data-row="${row.id}"][data-field="rate"]`);
+    if (rateInput && document.activeElement !== rateInput) rateInput.value = row.rate;
   }
 
   /* ---------------- dom helpers ---------------- */
@@ -860,7 +931,7 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     return done.map((t, i) => {
       const statusCls = t.complete ? "trip-segment-done" : "";
       const title = t.complete ? "Closed out — click to view" : "Click to view or edit";
-      return `<button type="button" class="trip-chip ${statusCls}" data-action="restore-trip" data-row="${row.id}" data-trip="${t.id}" title="${title}">${escapeHtml(t.tripId || t.routeId || `Trip ${i + 1}`)}</button>`;
+      return `<button type="button" class="trip-chip ${statusCls}" data-action="restore-trip" data-row="${row.id}" data-trip="${t.id}" title="${title}">${escapeHtml(t.routeId || t.tripId || `Route ${i + 1}`)}</button>`;
     }).join(" ");
   }
 
@@ -881,8 +952,8 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
       }
       const placeholder = col.type === "time" ? "--:--" : "";
       const inputmode = col.inputmode ? ` inputmode="${col.inputmode}"` : "";
-      const linkBtn = (col.key === "tripId" && trip.tripId)
-        ? `<button type="button" class="cell-link-btn" data-open-pro="${row.id}" data-trip="${trip.id}" title="Open trip details">↗</button>` : "";
+      const linkBtn = (col.key === "routeId" && trip.routeId)
+        ? `<button type="button" class="cell-link-btn" data-open-pro="${row.id}" data-trip="${trip.id}" title="Open route details">↗</button>` : "";
       return `<td class="col-${col.key}${pistachioCls}"><div class="cell-with-link">
         <input class="cell-input ${col.small ? "small" : ""}" type="text" placeholder="${placeholder}"${inputmode}
         data-row="${row.id}" data-trip="${trip.id}" data-field="${col.key}" value="${escapeHtml(trip[col.key])}">${linkBtn}</div></td>`;
@@ -937,6 +1008,9 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
       <td class="col-shiftHosLeft"${rs}><input class="cell-input calc" data-row="${row.id}" data-field="shiftHosLeft" value="${escapeHtml(computeShiftLevelHosLeft(row))}" readonly tabindex="-1"></td>
       <td class="col-nextCallTimeCalc"${rs}><input class="cell-input calc" data-row="${row.id}" data-field="nextCallTimeCalc" value="${escapeHtml(computeNextCallTimeForRow(row))}" readonly tabindex="-1"></td>
       <td class="col-revLevel"${rs}><input class="cell-input small" style="width:42px;" placeholder="Rev" data-row="${row.id}" data-field="revLevel" value="${escapeHtml(row.revLevel)}"></td>
+      <td class="col-birm"${rs} style="text-align:center;" title="Building C only — flat BIRM rate instead of Hostler hourly">
+        <input type="checkbox" class="chk" data-action="toggle-birm" data-row="${row.id}" ${row.birm ? "checked" : ""}>
+      </td>
       <td class="col-notes"${rs}><input class="cell-input" placeholder="Notes" data-row="${row.id}" data-field="notes" value="${escapeHtml(row.notes)}"></td>
       <td class="col-routes"${rs}>${routesChipsHtml(row)}</td>`;
   }
@@ -1081,13 +1155,14 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
         <th class="col-shiftHosLeft">HOS Left</th>
         <th class="col-nextCallTimeCalc">Next Call Time</th>
         <th class="col-revLevel">Rev Level</th>
+        <th class="col-birm" title="Building C only">BIRM</th>
         <th class="col-notes">Notes</th>
         <th class="col-routes">Routes</th>
         ${tripHeaderCells}
         <th class="col-trip-actions"></th>
       </tr>
     </thead>`;
-    const totalCols = 19 + TRIP_SUBCOLS.length + 1;
+    const totalCols = 20 + TRIP_SUBCOLS.length + 1;
     const addRowHtml = `<tr class="quick-add-row"><td colspan="${totalCols}"><button type="button" class="quick-add-btn" id="btn-quick-add-row"><span class="quick-add-btn-label">+ Add Row</span></button></td></tr>`;
     const tbody = `<tbody>${displayRows.map(rowsToHtml).join("")}${addRowHtml}</tbody>`;
 
@@ -1110,6 +1185,7 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     await ensureSheetLoaded(state.activeLocation, state.activeDate);
     if (myToken !== boardRenderToken) return; // superseded by a newer navigation
     renderBoardTable();
+    refreshAvailableSection();
   }
 
   function updateDriverLinkedCellsInPlace(rowId) {
@@ -1125,11 +1201,6 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     setText(".col-mc .static-text", pick(drv && drv.mc, row.mcSnapshot));
     setText(".col-rating .static-text", pick(drv && drv.rating, row.ratingSnapshot));
     setText(".col-driverPreference .static-text", (drv && drv.preference) || "");
-    if (drv && drv.normalRate && !String(row.rate || "").trim()) {
-      row.rate = drv.normalRate;
-      const rateInput = tr.querySelector('input[data-field="rate"]');
-      if (rateInput) rateInput.value = drv.normalRate;
-    }
   }
 
   function recalcRowCalcCellsInPlace(rowId) {
@@ -1311,6 +1382,7 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
       if (btn) btn.classList.toggle("is-active", found.row.tonu);
     }
     saveShiftNow(found.row);
+    recomputeRowRate(found.row);
     if (!wasTonu && found.row.tonu) logChange(found.row.dbId, labelForRow(found.row), "tonu", "false", "true");
   }
 
@@ -1321,6 +1393,20 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     const tr = document.getElementById(rowId);
     if (tr) tr.classList.toggle("is-row-pinned", found.row.highlighted);
     saveShiftNow(found.row);
+  }
+
+  // Building C only in practice — flips between the flat BIRM rate and the
+  // hourly Hostler rate for this load. Logged since it changes what the
+  // driver gets paid.
+  export function toggleBirm(rowId) {
+    const found = findRowAnywhere(rowId);
+    if (!found) return;
+    const before = found.row.birm;
+    found.row.birm = !found.row.birm;
+    saveShiftNow(found.row);
+    recomputeRowRate(found.row);
+    logChange(found.row.dbId, labelForRow(found.row), "birm", String(before), String(found.row.birm));
+    if (loadDetailsState && loadDetailsState.rowId === rowId) renderLoadDetailsTabContent();
   }
 
   // Local-only, not persisted to Supabase — this is a per-user selection
@@ -1364,6 +1450,7 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     logChange(row.dbId, labelForRow(row), "shift_complete", "false", "true");
     await discardBlankTrips(row);
     await minimizeAllTrips(row);
+    recomputeRowRate(row);
     sendShiftToAccounting(row, row.location || state.activeLocation, row.shiftDate || state.activeDate).catch((e) => console.error("sendShiftToAccounting threw:", e));
   }
 
@@ -1489,7 +1576,7 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     if (!row.shiftComplete) {
       const open = openTripsForRow(row);
       if (open.length) {
-        const names = open.map((t, i) => t.tripId || t.routeId || `Trip ${i + 1}`).join(", ");
+        const names = open.map((t, i) => t.routeId || t.tripId || `Route ${i + 1}`).join(", ");
         if (!confirm(`This load still has ${open.length} trip(s) not closed out yet (${names}) — likely still waiting on paperwork. Send it to Accounting anyway?`)) return;
       }
       openTimesheetModal(rowId, []); // required time sheet info gate — finalizeShiftCompletion runs after it's submitted
@@ -1914,7 +2001,7 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     return [
       { key: "overview", label: "Overview" },
       { key: "notes", label: "Notes" },
-      ...realTrips.map((t, i) => ({ key: `trip-${t.id}`, label: t.tripId || t.routeId || `Trip ${i + 1}` })),
+      ...realTrips.map((t, i) => ({ key: `trip-${t.id}`, label: t.routeId || t.tripId || `Route ${i + 1}` })),
       { key: "images", label: "Trip Sheet Images" },
       { key: "history", label: "Change History" },
     ];
@@ -1943,6 +2030,88 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     return rows || `<div class="subtext">Set a stop count above to add time fields.</div>`;
   }
 
+  // Renders the whole Rate block, styled as a boxed card for the Overview
+  // tab's right-side sidebar: this location's editable default rates
+  // (mileage tiers for Atlanta, flat/hourly figures elsewhere) each drawn
+  // as its own titled box per the sketch, the total-rate box (overridable),
+  // and a line-by-line breakdown of how that total was reached. One
+  // generic renderer for all four locations — calcLoadRateBreakdown()
+  // normalizes the shape so this doesn't need to branch much.
+  function rateTierBox(label, inputHtml, overridden) {
+    return `<fieldset class="rate-tier-box${overridden ? " is-overridden" : ""}"><legend>${label}${overridden ? ' <span class="rate-override-dot" title="Different from the default for this location">●</span>' : ""}</legend>${inputHtml}</fieldset>`;
+  }
+
+  function rateSectionHtml(row) {
+    const locationKey = row.location || state.activeLocation || "atlanta";
+    const tiers = (getBoardRateTiers() && getBoardRateTiers()[locationKey]) || [];
+    const breakdown = calcLoadRateBreakdown(locationKey, row);
+    const val = (key, fallback) => effectiveSetting(row, locationKey, key, fallback);
+    const isOv = (key) => isSettingOverridden(row, key);
+
+    let defaultsHtml;
+    if (locationKey === "atlanta") {
+      const overMax = tiers.length ? tiers[tiers.length - 1].max : 187;
+      defaultsHtml = `
+        <div class="rate-tier-grid">
+          ${tiers.map((t) => rateTierBox(
+            `${t.min}-${t.max}MI`,
+            `<input type="number" step="0.01" data-rate-tier-id="${t.id}" value="${effectiveTierRate(row, t)}">`,
+            isTierOverridden(row, t.id)
+          )).join("")}
+          ${rateTierBox(`Over ${overMax}MI ($/mi)`, `<input type="number" step="0.01" data-rate-setting-key="over_tier_per_mile" value="${val("over_tier_per_mile", 2.4)}">`, isOv("over_tier_per_mile"))}
+          ${rateTierBox("Stops", `<input type="number" step="1" data-rate-setting-key="stop_charge_free_stops" value="${val("stop_charge_free_stops", 2)}">`, isOv("stop_charge_free_stops"))}
+          ${rateTierBox("$/extra stop", `<input type="number" step="0.01" data-rate-setting-key="stop_charge_per_stop" value="${val("stop_charge_per_stop", 20)}">`, isOv("stop_charge_per_stop"))}
+          ${rateTierBox("TONU flat", `<input type="number" step="0.01" data-rate-setting-key="tonu_flat" value="${val("tonu_flat", 150)}">`, isOv("tonu_flat"))}
+        </div>`;
+    } else if (locationKey === "delaware") {
+      defaultsHtml = `
+        <div class="rate-tier-grid">
+          ${rateTierBox("Flat minimum", `<input type="number" step="0.01" data-rate-setting-key="flat_minimum" value="${val("flat_minimum", 1000)}">`, isOv("flat_minimum"))}
+          ${rateTierBox("$/mile", `<input type="number" step="0.01" data-rate-setting-key="per_mile" value="${val("per_mile", 4)}">`, isOv("per_mile"))}
+        </div>`;
+    } else if (locationKey === "buildingc") {
+      defaultsHtml = `
+        <div class="rate-tier-grid">
+          ${rateTierBox("BIRM flat", `<input type="number" step="0.01" data-rate-setting-key="birm_flat" value="${val("birm_flat", 800)}">`, isOv("birm_flat"))}
+          ${rateTierBox("Hostler $/hr", `<input type="number" step="0.01" data-rate-setting-key="hostler_hourly" value="${val("hostler_hourly", 100)}">`, isOv("hostler_hourly"))}
+        </div>
+        <div class="field" style="display:flex; align-items:center; gap:8px; margin-top:4px;">
+          <input type="checkbox" id="ld-birm-toggle" ${row.birm ? "checked" : ""}>
+          <label for="ld-birm-toggle" style="margin:0;">This load is BIRM (unchecked = Hostler hourly)</label>
+        </div>`;
+    } else {
+      defaultsHtml = `<div class="subtext">No editable rate defaults for this location yet.</div>`;
+    }
+
+    const linesHtml = breakdown.lines.length
+      ? breakdown.lines.map((l) => `
+          <div class="rate-breakdown-row">
+            <span>${escapeHtml(l.label)}</span>
+            <span class="subtext">${escapeHtml(l.detail || "")}</span>
+            <span>${fmtRateMoney(l.amount)}</span>
+          </div>`).join("")
+      : `<div class="subtext" style="padding:6px 0;">${escapeHtml(breakdown.note || "Nothing to calculate yet.")}</div>`;
+
+    return `
+      <fieldset class="rate-section">
+        <legend class="rate-section-header">Rate</legend>
+        <div class="subtext" style="margin: -4px 0 10px;">These boxes apply to this load only — a dot means it's different from the ${escapeHtml(locationKey)} default.</div>
+        ${defaultsHtml}
+
+        <div class="rate-total-box">
+          <label>Total Rate for this load${row.rateManual ? ' <span class="subtext">(manually overridden)</span>' : ""}</label>
+          <input class="cell-input" id="ld-rate-total" type="text" value="${escapeHtml(row.rate || "")}" placeholder="${fmtRateMoney(breakdown.total)}">
+          ${row.rateManual ? `<button type="button" class="inline-add-driver" id="ld-rate-reset">Reset to calculated</button>` : ""}
+        </div>
+
+        <div class="rate-breakdown">
+          <div class="rate-section-subheader">How this was calculated</div>
+          ${linesHtml}
+          ${breakdown.lines.length ? `<div class="rate-breakdown-row rate-breakdown-total"><span>Total</span><span></span><span>${fmtRateMoney(breakdown.total)}</span></div>` : ""}
+        </div>
+      </fieldset>`;
+  }
+
   function renderLoadDetailsTabContent() {
     if (!loadDetailsState) return;
     const found = findRowAnywhere(loadDetailsState.rowId);
@@ -1954,39 +2123,55 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
 
     if (tab === "overview") {
       const editing = loadDetailsState.editMode === "overview";
+      let mainHtml;
       if (!editing) {
-        body.innerHTML = `
+        mainHtml = `
           <div class="ld-edit-bar"><button type="button" class="btn btn-ghost" data-ld-edit="overview">Edit</button></div>
-          <div class="field"><label>PRO#</label><div class="static-text">${escapeHtml(row.proNumber || "—")}</div></div>
-          <div class="field"><label>Driver</label><div class="static-text">${escapeHtml(drv ? drv.name : (row.driverNameText || "—"))}</div></div>
-          <div class="field"><label>Rate</label><div class="static-text">${escapeHtml(row.rate || "—")}</div></div>
-          <div class="field"><label>Status</label><div class="static-text">${row.shiftComplete ? "Complete" : "Active"}</div></div>
-          <div class="field"><label>Trips on this load</label><div class="static-text">${row.trips.length} (${row.trips.filter((t) => t.minimized).length} completed)</div></div>
-          <div class="field"><label>Time Sheet Received</label><div class="static-text">${row.timesheetReceived ? "Yes" : "—"}</div></div>
-          <div class="field"><label>Time Sheet Start</label><div class="static-text">${escapeHtml(row.timesheetStartTime || "—")}</div></div>
-          <div class="field"><label>Time Sheet Finish</label><div class="static-text">${escapeHtml(row.timesheetEndTime || "—")}</div></div>
-          <div class="field"><label>Trailer Drop Location</label><div class="static-text">${escapeHtml(row.trailerDropLocation || "—")}</div></div>
+          <div class="field-box-grid">
+            <fieldset class="field-box"><legend>Driver</legend><div class="static-text">${escapeHtml(drv ? drv.name : (row.driverNameText || "—"))}</div></fieldset>
+            <fieldset class="field-box"><legend>Status</legend><div class="static-text">${row.shiftComplete ? "Complete" : "Active"}</div></fieldset>
+            <fieldset class="field-box"><legend>Trips</legend><div class="static-text">${row.trips.length}</div></fieldset>
+            <fieldset class="field-box" style="grid-column: span 2;">
+              <legend>Time Sheet</legend>
+              <div class="ov-timesheet-row">
+                <div><label>Received</label><div class="static-text">${row.timesheetReceived ? "Yes" : "—"}</div></div>
+                <div><label>Start</label><div class="static-text">${escapeHtml(row.timesheetStartTime || "—")}</div></div>
+                <div><label>Finish</label><div class="static-text">${escapeHtml(row.timesheetEndTime || "—")}</div></div>
+              </div>
+            </fieldset>
+            <fieldset class="field-box"><legend>Trailer Drop Location</legend><div class="static-text">${escapeHtml(row.trailerDropLocation || "—")}</div></fieldset>
+          </div>
           <div class="calc-note" style="margin-top:10px;">Time sheet info travels with this load — visible here and on the Accounting page once it's sent over.</div>
         `;
       } else {
         const d = loadDetailsState.editDraft;
-        body.innerHTML = `
-          <div class="field"><label>PRO#</label><input class="cell-input" id="ld-ov-pro" value="${escapeHtml(d.proNumber)}"></div>
-          <div class="field"><label>Driver</label><input class="cell-input" id="ld-ov-driver" list="driverNamesList" value="${escapeHtml(d.driverName)}"></div>
-          <div class="field"><label>Rate</label><input class="cell-input" id="ld-ov-rate" value="${escapeHtml(d.rate)}"></div>
-          <div class="field" style="display:flex; align-items:center; gap:8px;">
-            <input type="checkbox" id="ld-ov-timesheet-received" ${d.timesheetReceived ? "checked" : ""}>
-            <label for="ld-ov-timesheet-received" style="margin:0;">Time Sheet Received</label>
+        mainHtml = `
+          <div class="field-box-grid">
+            <fieldset class="field-box"><legend>Driver</legend><input class="cell-input" id="ld-ov-driver" list="driverNamesList" value="${escapeHtml(d.driverName)}"></fieldset>
+            <fieldset class="field-box" style="grid-column: span 2;">
+              <legend>Time Sheet</legend>
+              <div class="ov-timesheet-row">
+                <div style="display:flex; align-items:center; gap:6px;">
+                  <input type="checkbox" id="ld-ov-timesheet-received" ${d.timesheetReceived ? "checked" : ""}>
+                  <label for="ld-ov-timesheet-received" style="margin:0;">Received</label>
+                </div>
+                <div><label>Start</label><input class="cell-input" id="ld-ov-timesheet-start" placeholder="--:--" value="${escapeHtml(d.timesheetStartTime)}"></div>
+                <div><label>Finish</label><input class="cell-input" id="ld-ov-timesheet-end" placeholder="--:--" value="${escapeHtml(d.timesheetEndTime)}"></div>
+              </div>
+            </fieldset>
+            <fieldset class="field-box"><legend>Trailer Drop Location</legend><input class="cell-input" id="ld-ov-trailer-drop-location" value="${escapeHtml(d.trailerDropLocation)}"></fieldset>
           </div>
-          <div class="field"><label>Time Sheet Start</label><input class="cell-input" id="ld-ov-timesheet-start" placeholder="--:--" value="${escapeHtml(d.timesheetStartTime)}"></div>
-          <div class="field"><label>Time Sheet Finish</label><input class="cell-input" id="ld-ov-timesheet-end" placeholder="--:--" value="${escapeHtml(d.timesheetEndTime)}"></div>
-          <div class="field"><label>Trailer Drop Location</label><input class="cell-input" id="ld-ov-trailer-drop-location" value="${escapeHtml(d.trailerDropLocation)}"></div>
           <div class="ld-edit-bar">
             <button type="button" class="btn btn-ghost" data-ld-cancel="overview">Cancel</button>
             <button type="button" class="btn" data-ld-save="overview">Save</button>
           </div>
         `;
       }
+      body.innerHTML = `
+        <div class="ld-overview-grid">
+          <div class="ld-overview-main">${mainHtml}</div>
+          <div class="ld-overview-side">${rateSectionHtml(row)}</div>
+        </div>`;
     } else if (tab === "notes") {
       const editing = loadDetailsState.editMode === "notes";
       if (!editing) {
@@ -2019,28 +2204,32 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
           : `<div class="subtext">No stop times recorded yet.</div>`;
         body.innerHTML = `
           <div class="ld-edit-bar"><button type="button" class="btn btn-ghost" data-ld-edit="${tripLocalId}">Edit</button></div>
-          <div class="field"><label>Route ID</label><div class="static-text">${escapeHtml(trip.routeId || "—")}</div></div>
-          <div class="field"><label>Trip ID</label><div class="static-text">${escapeHtml(trip.tripId || "—")}</div></div>
-          <div class="field"><label>Trailer #</label><div class="static-text">${escapeHtml(trip.trailerOut || "—")}</div></div>
-          <div class="field"><label>Route Miles</label><div class="static-text">${escapeHtml(trip.routeMiles || "—")}</div></div>
-          <div class="field"><label>Stops</label><div class="static-text">${escapeHtml(trip.stopCount || "—")}</div></div>
-          <div class="field"><label>Driver on this trip</label><div class="static-text">${escapeHtml(tripDrv ? tripDrv.name : "— (same as load driver)")}</div></div>
-          <div class="field"><label>Status</label><div class="static-text">${trip.minimized ? "Completed" : "Active"}</div></div>
-          <div class="field"><label>Notes on this route</label><div class="static-text" style="white-space:pre-wrap;">${escapeHtml(trip.notes || "—")}</div></div>
-          <div class="field"><label>Stop In/Out Times</label>${stopsHtml}</div>
+          <div class="field-box-grid">
+            <fieldset class="field-box"><legend>Route ID</legend><div class="static-text">${escapeHtml(trip.routeId || "—")}</div></fieldset>
+            <fieldset class="field-box"><legend>Trip ID</legend><div class="static-text">${escapeHtml(trip.tripId || "—")}</div></fieldset>
+            <fieldset class="field-box"><legend>Trailer #</legend><div class="static-text">${escapeHtml(trip.trailerOut || "—")}</div></fieldset>
+            <fieldset class="field-box"><legend>Route Miles</legend><div class="static-text">${escapeHtml(trip.routeMiles || "—")}</div></fieldset>
+            <fieldset class="field-box"><legend>Stops</legend><div class="static-text">${escapeHtml(trip.stopCount || "—")}</div></fieldset>
+            <fieldset class="field-box"><legend>Status</legend><div class="static-text">${trip.minimized ? "Completed" : "Active"}</div></fieldset>
+            <fieldset class="field-box" style="grid-column: span 2;"><legend>Driver on this trip</legend><div class="static-text">${escapeHtml(tripDrv ? tripDrv.name : (drv ? drv.name : (row.driverNameText || "—")))}</div></fieldset>
+            <fieldset class="field-box" style="grid-column: span 2;"><legend>Notes on this route</legend><div class="static-text" style="white-space:pre-wrap;">${escapeHtml(trip.notes || "—")}</div></fieldset>
+            <fieldset class="field-box" style="grid-column: span 2;"><legend>Stop In/Out Times</legend>${stopsHtml}</fieldset>
+          </div>
         `;
       } else {
         const d = loadDetailsState.editDraft;
         const stopCount = Math.max(0, parseInt(d.stopCount, 10) || 0);
         body.innerHTML = `
-          <div class="field"><label>Route ID</label><input class="cell-input" id="ld-tr-routeId" value="${escapeHtml(d.routeId)}"></div>
-          <div class="field"><label>Trip ID</label><input class="cell-input" id="ld-tr-tripId" value="${escapeHtml(d.tripId)}"></div>
-          <div class="field"><label>Trailer #</label><input class="cell-input" id="ld-tr-trailerOut" value="${escapeHtml(d.trailerOut)}"></div>
-          <div class="field"><label>Route Miles</label><input class="cell-input" id="ld-tr-routeMiles" value="${escapeHtml(d.routeMiles)}"></div>
-          <div class="field"><label>Stops</label><input class="cell-input" id="ld-tr-stopCount" value="${escapeHtml(d.stopCount)}"></div>
-          <div class="field"><label>Reassign Driver <span class="subtext">(leave blank to keep the load's driver)</span></label><input class="cell-input" id="ld-tr-driver" list="driverNamesList" value="${escapeHtml(d.driverName)}"></div>
-          <div class="field"><label>Notes on this route</label><textarea class="cell-input" id="ld-tr-notes" rows="3" style="width:100%;">${escapeHtml(d.notes)}</textarea></div>
-          <div class="field"><label>Stop In/Out Times</label><div id="ld-stop-fields">${stopFieldsHtml(stopCount, d.stops)}</div></div>
+          <div class="field-box-grid">
+            <fieldset class="field-box"><legend>Route ID</legend><input class="cell-input" id="ld-tr-routeId" value="${escapeHtml(d.routeId)}"></fieldset>
+            <fieldset class="field-box"><legend>Trip ID</legend><input class="cell-input" id="ld-tr-tripId" value="${escapeHtml(d.tripId)}"></fieldset>
+            <fieldset class="field-box"><legend>Trailer #</legend><input class="cell-input" id="ld-tr-trailerOut" value="${escapeHtml(d.trailerOut)}"></fieldset>
+            <fieldset class="field-box"><legend>Route Miles</legend><input class="cell-input" id="ld-tr-routeMiles" value="${escapeHtml(d.routeMiles)}"></fieldset>
+            <fieldset class="field-box"><legend>Stops</legend><input class="cell-input" id="ld-tr-stopCount" value="${escapeHtml(d.stopCount)}"></fieldset>
+            <fieldset class="field-box"><legend>Reassign Driver</legend><input class="cell-input" id="ld-tr-driver" list="driverNamesList" value="${escapeHtml(d.driverName)}"><div class="subtext" style="margin-top:4px;">Leave blank to keep the load's driver</div></fieldset>
+            <fieldset class="field-box" style="grid-column: span 2;"><legend>Notes on this route</legend><textarea class="cell-input" id="ld-tr-notes" rows="3" style="width:100%;">${escapeHtml(d.notes)}</textarea></fieldset>
+            <fieldset class="field-box" style="grid-column: span 2;"><legend>Stop In/Out Times</legend><div id="ld-stop-fields">${stopFieldsHtml(stopCount, d.stops)}</div></fieldset>
+          </div>
           <div class="ld-edit-bar">
             <button type="button" class="btn btn-ghost" data-ld-cancel="${tripLocalId}">Cancel</button>
             <button type="button" class="btn" data-ld-save="${tripLocalId}">Save</button>
@@ -2084,7 +2273,7 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     if (tabKey === "overview") {
       const drv = row.driverId ? findDriver(row.driverId) : null;
       loadDetailsState.editDraft = {
-        proNumber: row.proNumber || "", driverName: drv ? drv.name : (row.driverNameText || ""), rate: row.rate || "",
+        driverName: drv ? drv.name : (row.driverNameText || ""),
         timesheetReceived: !!row.timesheetReceived, timesheetStartTime: row.timesheetStartTime || "", timesheetEndTime: row.timesheetEndTime || "",
         trailerDropLocation: row.trailerDropLocation || "",
       };
@@ -2110,6 +2299,82 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     renderLoadDetailsTabContent();
   }
 
+  // Global default-rate edits happen directly in Supabase now (rare
+  // enough — once a year or so — that a UI for it wasn't worth the extra
+  // surface area). Per-load tweaks go through commitRateBoxOverride()
+  // below, which never touches the shared board_rate_tiers /
+  // board_rate_settings tables.
+
+  // Everyday path: type a different number into any tier/setting box and
+  // it's saved as an override scoped to THIS load only (row.rateOverrides,
+  // persisted as the rate_overrides jsonb column) — the shared
+  // board_rate_tiers / board_rate_settings tables are never touched.
+  // Clearing a box back to empty removes the override, reverting that one
+  // figure back to the location's normal default.
+  export async function commitRateBoxOverride(kind, idOrKey, rawValue) {
+    if (!loadDetailsState) return;
+    const found = findRowAnywhere(loadDetailsState.rowId);
+    if (!found) return;
+    const row = found.row;
+    if (!row.rateOverrides) row.rateOverrides = { tiers: {}, settings: {} };
+    const bucket = kind === "tier" ? row.rateOverrides.tiers : row.rateOverrides.settings;
+    const before = bucket[idOrKey];
+
+    if (String(rawValue).trim() === "") {
+      if (before == null) return; // nothing to clear
+      delete bucket[idOrKey];
+    } else {
+      const num = Number(rawValue);
+      if (isNaN(num)) return;
+      if (before === num) return;
+      bucket[idOrKey] = num;
+    }
+
+    await saveShiftNow(row);
+    recomputeRowRate(row);
+    logChange(
+      row.dbId, labelForRow(row), `rate_override_${kind}_${idOrKey}`,
+      before != null ? String(before) : "(default)",
+      bucket[idOrKey] != null ? String(bucket[idOrKey]) : "(default)"
+    );
+    renderLoadDetailsTabContent();
+    renderBoardTable();
+  }
+
+  export async function commitRateOverride(newValue) {
+    if (!loadDetailsState) return;
+    const found = findRowAnywhere(loadDetailsState.rowId);
+    if (!found) return;
+    const row = found.row;
+    const before = row.rate;
+    if (String(newValue).trim() === "") {
+      row.rate = "";
+      row.rateManual = false;
+      await saveShiftNow(row);
+      recomputeRowRate(row);
+    } else {
+      row.rate = String(newValue).trim();
+      row.rateManual = true;
+      await saveShiftNow(row);
+    }
+    if (before !== row.rate) logChange(row.dbId, labelForRow(row), "rate", before, row.rate);
+    renderLoadDetailsTabContent();
+    renderBoardTable();
+  }
+
+  export function resetRateToCalculated() {
+    if (!loadDetailsState) return;
+    const found = findRowAnywhere(loadDetailsState.rowId);
+    if (!found) return;
+    const row = found.row;
+    const before = row.rate;
+    row.rateManual = false;
+    recomputeRowRate(row);
+    if (before !== row.rate) logChange(row.dbId, labelForRow(row), "rate", before, row.rate);
+    renderLoadDetailsTabContent();
+    renderBoardTable();
+  }
+
   export async function saveLoadDetailsEdit(tabKey) {
     if (!loadDetailsState) return;
     const found = findRowAnywhere(loadDetailsState.rowId);
@@ -2118,8 +2383,6 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     const d = loadDetailsState.editDraft;
 
     if (tabKey === "overview") {
-      row.proNumber = $("#ld-ov-pro").value.trim();
-      row.rate = $("#ld-ov-rate").value.trim();
       const nameVal = $("#ld-ov-driver").value.trim();
       row.driverNameText = nameVal;
       row.driverId = null;
@@ -2130,7 +2393,6 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
       row.timesheetEndTime = $("#ld-ov-timesheet-end").value.trim();
       row.trailerDropLocation = $("#ld-ov-trailer-drop-location").value.trim();
       await saveShiftNow(row);
-      $("#ld-title").textContent = `Load ${row.proNumber || "(no PRO# yet)"}`;
     } else if (tabKey === "notes") {
       row.notes = $("#ld-notes-text").value.trim();
       await saveShiftNow(row);
@@ -2507,14 +2769,89 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     });
   }
 
-  /* ---------------- midnight rollover (client-side stand-in, board pages only) ---------------- */
+  /* ---------------- midnight rollover (board pages only) ---------------- */
 
-  /* ---------------- "Available" list — session-only scratchpad, never saved, always today's ---------------- */
+  /* ---------------- "Available" list — persisted, scoped to whichever
+     location + date is currently on screen. A name entered against a
+     given day stays on that day permanently (through midnight and
+     beyond) and simply never shows up on any other day — no active
+     clearing needed, the date scoping does that on its own. ---------------- */
 
-  let availableRows = [];
+  export const AVAILABLE_TABLE = "board_available_drivers";
 
   function blankAvailableRow() {
-    return { id: uid("avail"), driverId: null, driverName: "" };
+    return { id: uid("avail"), dbId: null, driverId: null, driverName: "" };
+  }
+
+  function availableRowToDbRow(row, locationKey, dKey) {
+    return {
+      location: locationKey,
+      shift_date: dKey,
+      driver_id: row.driverId ? Number(row.driverId) : null,
+      driver_name: row.driverName || null,
+    };
+  }
+  function availableRowFromDbRow(dbRow) {
+    return {
+      id: uid("avail"),
+      dbId: dbRow.id,
+      driverId: dbRow.driver_id != null ? String(dbRow.driver_id) : null,
+      driverName: dbRow.driver_name || "",
+    };
+  }
+
+  function availableSheetKey(locationKey, dKey) { return `${locationKey}__${dKey}`; }
+  function getAvailableSheet(locationKey, dKey) {
+    const k = availableSheetKey(locationKey, dKey);
+    if (!state.availableSheets[k]) state.availableSheets[k] = [];
+    return state.availableSheets[k];
+  }
+
+  // Fetches this location+date's Available rows the first time it's
+  // viewed this session, same caching pattern as ensureSheetLoaded(). An
+  // empty result still gets one blank row so there's always something
+  // ready to type into.
+  async function ensureAvailableSheetLoaded(locationKey, dKey) {
+    const k = availableSheetKey(locationKey, dKey);
+    if (state.availableSheets[k]) return;
+    if (!supabaseClient) {
+      state.availableSheets[k] = [blankAvailableRow()];
+      return;
+    }
+    const { data, error } = await supabaseClient
+      .from(AVAILABLE_TABLE).select("*").eq("location", locationKey).eq("shift_date", dKey);
+    if (error) {
+      console.error("Failed to load Available list:", error);
+      state.availableSheets[k] = [blankAvailableRow()];
+      return;
+    }
+    const rows = (data || []).map(availableRowFromDbRow);
+    state.availableSheets[k] = rows.length ? rows : [blankAvailableRow()];
+  }
+
+  async function saveAvailableRowNow(row, locationKey, dKey) {
+    if (!supabaseClient) return null;
+    try {
+      const payload = availableRowToDbRow(row, locationKey, dKey);
+      if (row.dbId) {
+        const { error } = await supabaseClient.from(AVAILABLE_TABLE).update(payload).eq("id", row.dbId);
+        if (error) { console.error("Failed to save Available row:", error); return null; }
+        return row.dbId;
+      }
+      const { data, error } = await supabaseClient.from(AVAILABLE_TABLE).insert(payload).select();
+      if (error) { console.error("Failed to create Available row:", error); return null; }
+      row.dbId = data[0].id;
+      return row.dbId;
+    } catch (e) {
+      console.error("saveAvailableRowNow threw:", e);
+      return null;
+    }
+  }
+
+  const availableSaveTimers = new Map();
+  function scheduleAvailableRowSave(row, locationKey, dKey) {
+    clearTimeout(availableSaveTimers.get(row.id));
+    availableSaveTimers.set(row.id, setTimeout(() => saveAvailableRowNow(row, locationKey, dKey), SAVE_DEBOUNCE_MS));
   }
 
   function availableRowHtml(row) {
@@ -2536,23 +2873,44 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
   function renderAvailableTable() {
     const body = $("#available-table-body");
     if (!body) return;
-    body.innerHTML = availableRows.map(availableRowHtml).join("");
+    body.innerHTML = getAvailableSheet(state.activeLocation, state.activeDate).map(availableRowHtml).join("");
+    const titleEl = $(".available-title");
+    if (titleEl) {
+      const isToday = state.activeDate === state.todayKey;
+      titleEl.textContent = `Available — ${humanDate(keyToDate(state.activeDate))}${isToday ? " (today)" : ""}`;
+    }
   }
 
   function addAvailableRow() {
-    availableRows.push(blankAvailableRow());
+    getAvailableSheet(state.activeLocation, state.activeDate).push(blankAvailableRow());
     renderAvailableTable();
   }
 
-  function removeAvailableRow(rowId) {
-    availableRows = availableRows.filter((r) => r.id !== rowId);
+  async function removeAvailableRow(rowId) {
+    const sheet = getAvailableSheet(state.activeLocation, state.activeDate);
+    const row = sheet.find((r) => r.id === rowId);
+    const idx = sheet.findIndex((r) => r.id === rowId);
+    if (idx !== -1) sheet.splice(idx, 1);
+    renderAvailableTable();
+    if (row && row.dbId && supabaseClient) {
+      try { await supabaseClient.from(AVAILABLE_TABLE).delete().eq("id", row.dbId); }
+      catch (e) { console.error("Failed to delete Available row:", e); }
+    }
+  }
+
+  // Called whenever the board switches to a different day (or on first
+  // load) — loads that day's Available rows if they aren't cached yet and
+  // redraws the section. Exported so houston.js's own date navigation can
+  // trigger the same refresh.
+  export async function refreshAvailableSection() {
+    if (!$("#available-table-body")) return; // not every page has this section
+    await ensureAvailableSheetLoaded(state.activeLocation, state.activeDate);
     renderAvailableTable();
   }
 
   export function initAvailableSection() {
     if (!$("#available-table-body")) return; // not every page has this section
-    availableRows = [blankAvailableRow()];
-    renderAvailableTable();
+    refreshAvailableSection();
 
     on("btn-available-add-row", "click", addAvailableRow);
 
@@ -2564,12 +2922,13 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     table.addEventListener("input", (e) => {
       const t = e.target;
       if (!t.dataset.availRow) return;
-      const row = availableRows.find((r) => r.id === t.dataset.availRow);
+      const row = getAvailableSheet(state.activeLocation, state.activeDate).find((r) => r.id === t.dataset.availRow);
       if (!row) return;
       row.driverName = t.value;
       row.driverId = null;
       const match = driversForLocation(state.activeLocation || "atlanta").find((d) => d.name.toLowerCase() === t.value.trim().toLowerCase());
       if (match) row.driverId = match.id;
+      scheduleAvailableRowSave(row, state.activeLocation, state.activeDate);
     });
     table.addEventListener("focusout", (e) => {
       const t = e.target;
@@ -2586,8 +2945,6 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
       state.maxDate = dateKey(addDays(todayDate(), FUTURE_DAYS));
       state.minDate = dateKey(addDays(todayDate(), -HISTORY_DAYS));
       if (wasOnToday) setActiveDate(newToday);
-      availableRows = [blankAvailableRow()]; // a new day — the "Available" list doesn't carry over
-      renderAvailableTable();
     }
   }
 
@@ -2702,6 +3059,10 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
       });
       $("#ld-tab-content").addEventListener("change", (e) => {
         if (e.target.id === "ld-file-input" && e.target.files.length) uploadTripSheetImages(Array.from(e.target.files));
+        if (e.target.id === "ld-rate-total") commitRateOverride(e.target.value);
+        if (e.target.id === "ld-birm-toggle" && loadDetailsState) toggleBirm(loadDetailsState.rowId);
+        if (e.target.dataset.rateTierId != null && e.target.dataset.rateTierId !== "") commitRateBoxOverride("tier", Number(e.target.dataset.rateTierId), e.target.value);
+        if (e.target.dataset.rateSettingKey) commitRateBoxOverride("setting", e.target.dataset.rateSettingKey, e.target.value);
       });
       $("#ld-tab-content").addEventListener("click", (e) => {
         const rmBtn = e.target.closest("[data-remove-attachment]");
@@ -2712,6 +3073,7 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
         if (cancelBtn) cancelLoadDetailsEdit();
         const saveBtn = e.target.closest("[data-ld-save]");
         if (saveBtn) saveLoadDetailsEdit(saveBtn.dataset.ldSave);
+        if (e.target.id === "ld-rate-reset") resetRateToCalculated();
       });
       $("#ld-tab-content").addEventListener("input", (e) => {
         if (e.target.id === "ld-tr-stopCount" && loadDetailsState && loadDetailsState.editDraft) {
@@ -2800,9 +3162,9 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
           completeBtn.disabled = !hasRoute;
           completeBtn.title = hasRoute ? "Mark closed out" : "Enter a Route ID first";
         }
-        return;
+        // fall through — routeId also owns the open-details link button now
       }
-      if (field !== "proNumber" && field !== "tripId") return;
+      if (field !== "proNumber" && field !== "routeId") return;
       const wrap = t.closest(".cell-with-link");
       if (!wrap) return;
       let btn = wrap.querySelector(".cell-link-btn");
@@ -2811,10 +3173,10 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
           btn = document.createElement("button");
           btn.type = "button";
           btn.className = "cell-link-btn";
-          btn.title = field === "proNumber" ? "Open load details" : "Open trip details";
+          btn.title = field === "proNumber" ? "Open load details" : "Open route details";
           btn.textContent = "↗";
           btn.dataset.openPro = t.dataset.row;
-          if (field === "tripId") btn.dataset.trip = t.dataset.trip;
+          if (field === "routeId") btn.dataset.trip = t.dataset.trip;
           wrap.appendChild(btn);
         }
       } else if (btn) {
@@ -2873,7 +3235,13 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
       }
       if (t.dataset.field === "rate") {
         found.row.rate = t.value;
-        scheduleShiftSave(found.row);
+        if (t.value.trim() === "") {
+          found.row.rateManual = false;
+          recomputeRowRate(found.row);
+        } else {
+          found.row.rateManual = true;
+          scheduleShiftSave(found.row);
+        }
         return;
       }
       if (t.dataset.field === "driverName") {
@@ -2900,8 +3268,10 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
         const trip = found.row.trips.find((tr) => tr.id === t.dataset.trip);
         if (trip) {
           trip[t.dataset.field] = t.value;
+          if (t.dataset.field === "dispatchTime" || t.dataset.field === "routeMiles") autoFillCalcTimes(rowId, trip);
           recalcRowCalcCellsInPlace(rowId);
           scheduleTripSave(found.row, trip, found.row.trips.indexOf(trip) + 1);
+          if (t.dataset.field === "routeMiles" || t.dataset.field === "stopCount") recomputeRowRate(found.row);
         }
       }
     });
@@ -2913,6 +3283,10 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
       }
       if (t.dataset.action === "toggle-row-select") {
         toggleRowSelected(t.dataset.row);
+        return;
+      }
+      if (t.dataset.action === "toggle-birm") {
+        toggleBirm(t.dataset.row);
         return;
       }
       if (t.type === "checkbox" && !t.dataset.trip && t.dataset.field === "preShiftTextSent") {
@@ -3027,6 +3401,7 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     try { renderNav(); } catch (e) { console.error("renderNav() failed:", e); }
     try { startAlertScanning(); } catch (e) { console.error("startAlertScanning() failed:", e); }
     try { wireModals(); } catch (e) { console.error("wireModals() failed:", e); }
+    try { await loadBoardRateData(); } catch (e) { console.error("loadBoardRateData() failed:", e); }
     try {
       if (info.type === "board") initBoardPage(info);
       else if (info.type === "houston-board") initHoustonBoardPage(info);

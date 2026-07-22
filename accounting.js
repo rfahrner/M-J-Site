@@ -5,6 +5,7 @@ import {
   SAVE_DEBOUNCE_MS, closeLoadDetailsModal, loadDetailsState, renderLoadDetailsTabs,
   uploadTripSheetImages, removeTripSheetImage, startLoadDetailsEdit, cancelLoadDetailsEdit,
   saveLoadDetailsEdit, stopFieldsHtml, openLoadDetailsFromAccounting,
+  commitRateOverride, resetRateToCalculated, toggleBirm, commitRateBoxOverride,
 } from './loadboard.js';
 import { ACCOUNTING_TABLE, ACCOUNTING_ROUTES_TABLE, loadPricingData, calcRoute, getPricingTiers, getPricingSettings } from './accountingcalc.js';
 
@@ -43,7 +44,7 @@ let accountingRecords = [];
     const trips = rec.source_shift_id ? acctTripsByShiftId[rec.source_shift_id] : null;
     if (!trips || !trips.length) return `<span class="subtext" style="font-size:11px;">—</span>`;
     return trips.map((t, i) => {
-      const label = t.trip_id || t.route_id || `Trip ${i + 1}`;
+      const label = t.route_id || t.trip_id || `Route ${i + 1}`;
       const cls = t.complete ? "trip-segment-done" : "";
       return `<button type="button" class="trip-chip ${cls}" data-open-acct-load="${rec.id}" data-open-acct-trip="${t.id}" title="Open this route's details">${escapeHtml(label)}</button>`;
     }).join(" ");
@@ -311,6 +312,10 @@ let accountingRecords = [];
       });
       $("#ld-tab-content").addEventListener("change", (e) => {
         if (e.target.id === "ld-file-input" && e.target.files.length) uploadTripSheetImages(Array.from(e.target.files));
+        if (e.target.id === "ld-rate-total") commitRateOverride(e.target.value);
+        if (e.target.id === "ld-birm-toggle" && loadDetailsState) toggleBirm(loadDetailsState.rowId);
+        if (e.target.dataset.rateTierId != null && e.target.dataset.rateTierId !== "") commitRateBoxOverride("tier", Number(e.target.dataset.rateTierId), e.target.value);
+        if (e.target.dataset.rateSettingKey) commitRateBoxOverride("setting", e.target.dataset.rateSettingKey, e.target.value);
       });
       $("#ld-tab-content").addEventListener("click", (e) => {
         const rmBtn = e.target.closest("[data-remove-attachment]");
@@ -321,6 +326,7 @@ let accountingRecords = [];
         if (cancelBtn) cancelLoadDetailsEdit();
         const saveBtn = e.target.closest("[data-ld-save]");
         if (saveBtn) saveLoadDetailsEdit(saveBtn.dataset.ldSave);
+        if (e.target.id === "ld-rate-reset") resetRateToCalculated();
       });
       $("#ld-tab-content").addEventListener("input", (e) => {
         if (e.target.id === "ld-tr-stopCount" && loadDetailsState && loadDetailsState.editDraft) {

@@ -1,0 +1,165 @@
+/* ==== Rate engine additions — append to loadboard.css ==== */
+/* This whole file replaces any earlier rate-engine-additions.css you may
+   have already pasted in — don't append both, or the later one just wins
+   anyway, but easiest to swap the whole block. */
+
+/* Modal needs a bit more room now that Overview is two columns */
+.modal-large { width: 900px; }
+
+/* BIRM checkbox column on the board grid (Building C only in practice) */
+.col-birm { width: 46px; min-width: 46px; }
+
+/* Narrower columns, per request — roughly half their previous auto width */
+table.board td.col-routeId, table.board th.col-routeId,
+table.board td.col-tripId, table.board th.col-tripId,
+table.board td.col-trailerOut, table.board th.col-trailerOut,
+table.board td.col-nextCallTimeCalc, table.board th.col-nextCallTimeCalc,
+table.board td.col-dispatchTime, table.board th.col-dispatchTime,
+table.board td.col-lastStopDepart, table.board th.col-lastStopDepart,
+table.board td.col-returnToDC, table.board th.col-returnToDC,
+table.board td.col-salvageBhaulRefusedBy, table.board th.col-salvageBhaulRefusedBy,
+table.board td.col-backhaulTrailerNumber, table.board th.col-backhaulTrailerNumber,
+table.board td.col-returnEtaToDc, table.board th.col-returnEtaToDc {
+  width: 55px;
+}
+
+/* Overview tab: existing fields on the left, Rate panel as a narrow
+   column on the right, top-aligned so it starts level with PRO#. */
+.ld-overview-grid {
+  display: grid;
+  grid-template-columns: 1fr 250px;
+  gap: 20px;
+  align-items: start;
+}
+.ld-overview-main { min-width: 0; }
+.ld-overview-side { min-width: 0; }
+
+/* The big outer "Rate" box — a real <fieldset> so the title notches into
+   the border on its own, same as the hand-drawn example */
+fieldset.rate-section {
+  border: 2px solid var(--navy-950);
+  border-radius: 18px;
+  padding: 4px 14px 14px;
+  margin: 0;
+  min-width: 0;
+}
+.rate-section-header {
+  padding: 0 8px;
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--navy-950);
+}
+.rate-section-subheader {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--slate-500);
+  margin-bottom: 6px;
+}
+
+/* Each individual tier/rate figure — its own small titled box, matching
+   the "61-140MI / $400" boxes in the sketch. Single column since the
+   sidebar itself is narrow now. */
+.rate-tier-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+fieldset.rate-tier-box {
+  border: 2px solid var(--navy-950);
+  border-radius: 12px;
+  padding: 2px 10px 7px;
+  margin: 0;
+  background: #fff;
+  text-align: left;
+  min-width: 0;
+}
+fieldset.rate-tier-box legend {
+  padding: 0 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--navy-950);
+  white-space: nowrap;
+}
+fieldset.rate-tier-box input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: left;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--navy-950);
+  padding: 2px 0;
+}
+fieldset.rate-tier-box input:focus {
+  outline: none;
+  background: var(--slate-100);
+  border-radius: 6px;
+}
+
+/* Per-load override indicator — this figure differs from the location's
+   normal default, scoped to just this one load */
+fieldset.rate-tier-box.is-overridden {
+  border-color: #b45309;
+  background: var(--amber-bg);
+}
+.rate-override-dot {
+  color: #b45309;
+  font-size: 8px;
+  vertical-align: middle;
+}
+
+.rate-total-box {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--slate-700);
+  border-radius: var(--radius-md);
+  background: var(--slate-100);
+}
+.rate-total-box label {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--slate-700);
+  margin-bottom: 5px;
+}
+.rate-total-box input {
+  width: 100%;
+  border: 1px solid var(--slate-500);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 16px;
+  font-weight: 800;
+  background: #fff;
+}
+.rate-total-box #ld-rate-reset {
+  margin-top: 6px;
+  font-size: 11.5px;
+}
+
+.rate-breakdown { margin-top: 14px; }
+.rate-breakdown-row {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--slate-100);
+  font-size: 12px;
+}
+.rate-breakdown-row span:first-child { font-weight: 700; }
+.rate-breakdown-row span:last-child { font-weight: 700; }
+.rate-breakdown-row:last-child { border-bottom: none; }
+.rate-breakdown-total {
+  font-weight: 800;
+  border-top: 2px solid var(--slate-700);
+  border-bottom: none;
+  margin-top: 4px;
+  padding-top: 8px;
+}
+
+/* Stack to one column on narrower viewports so the sidebar never gets crushed */
+@media (max-width: 720px) {
+  .ld-overview-grid { grid-template-columns: 1fr; }
+}
