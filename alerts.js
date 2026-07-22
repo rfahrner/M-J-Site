@@ -1,11 +1,11 @@
 /* ---------------- board alerts: bottom-right notification panel ---------------- */
 
-import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, parseHHMM, AVG_MPH, minsToClock, escapeHtml, $, openSendTextModal} from './loadboard.js';
+import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, parseHHMM, AVG_MPH, minsToClock, escapeHtml, $, openSendTextModal, currentFile, NAV_ORDER, PAGE_MAP, isAccountingUser, signOut} from './loadboard.js';
 
   const ALERT_LOCATIONS = ["atlanta", "buildingc", "delaware"];
-  const IDLE_THRESHOLD_MIN = 45; // "45 minutes after check-in, if not dispatched"
-  const PRE_SHIFT_TEXT_LEAD_MIN = 60; // text needed 60 min before shift start
-  const PRE_SHIFT_CALL_FOLLOWUP_MIN = 30; // call nudge 30 min after the pre-shift text went out
+  export const IDLE_THRESHOLD_MIN = 45; // "45 minutes after check-in, if not dispatched"
+  export const PRE_SHIFT_TEXT_LEAD_MIN = 60; // text needed 60 min before shift start
+  export const PRE_SHIFT_CALL_FOLLOWUP_MIN = 30; // call nudge 30 min after the pre-shift text went out
   const PAPERWORK_FOLLOWUP_MIN = 15; // reach out within 15 min if a new route starts before the last one's paperwork is in
   let boardAlerts = []; // current alerts, each with a stable key + firstSeenAt timestamp
   let alertFirstSeenAt = {}; // key -> Date, persists across scans so timestamps don't reset

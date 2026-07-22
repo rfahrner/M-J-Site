@@ -5,6 +5,7 @@
      and settings are fetched live from Supabase so they stay editable
      without a code change.
      ================================================================ */
+import { supabaseClient, SHIFTS_TABLE, findDriver, setDriverSyncStatus } from './loadboard.js';
 
   export const ACCOUNTING_TABLE = "loads_accounting";
   export const ACCOUNTING_ROUTES_TABLE = "loads_accounting_routes";
@@ -28,6 +29,8 @@
     pricingSettings = {};
     (settings || []).forEach((s) => { pricingSettings[s.key] = Number(s.value); });
   }
+  export function getPricingTiers() { return pricingTiers; }
+  export function getPricingSettings() { return pricingSettings; }
 
   export function tierLookup(tableRows, miles) {
     if (!tableRows) return null;
@@ -142,7 +145,7 @@
       await supabaseClient.from(SHIFTS_TABLE).update({ sent_to_accounting: true }).eq("id", row.dbId);
     } catch (e) {
       console.error("sendShiftToAccounting failed:", e);
-      
+
       setDriverSyncStatus(`Marked complete, but couldn't send to Accounting (${e.message || e}).`, "error");
     }
   }

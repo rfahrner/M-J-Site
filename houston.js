@@ -4,8 +4,7 @@
      split) with entirely different columns. See chat for why this
      isn't just another branch in the existing board code.
      ================================================================ */
-import { state, supabaseClient, uid, findDriver, driversForLocation, setDriverSyncStatus, SAVE_DEBOUNCE_MS, escapeHtml, $, $all, addDays, keyToDate, dateKey } from './loadboard.js';
-  
+import { state, supabaseClient, uid, findDriver, driversForLocation, setDriverSyncStatus, SAVE_DEBOUNCE_MS, escapeHtml, $, $all, addDays, keyToDate, dateKey, on, refreshDriverDatalist, renderBoardChrome, beginTextBatchFlow, textDriverPhone, openAddDriverModal, openAddLoadModal, closeAddLoadModal, closeDateDropdown, renderCalendarGrid, closeContextMenu, sendCurrentGroupBatchDirect, openCurrentGroupBatch, confirmGroupBatchSent, pick, handleRealtimeDriverChange, initAvailableSection, resetCalendarViewMonth, resetGroupTextState } from './loadboard.js';  
 export const HOUSTON_TABLE = "loads_houston";
   export const houstonState = { sheets: {}, datesWithData: new Set() };
 
@@ -228,7 +227,7 @@ export const HOUSTON_TABLE = "loads_houston";
     if (!rows.length) { setDriverSyncStatus("Nothing's checked yet — select some loads first.", "error"); return; }
     const modal = $("#modal-text-group");
     if (!modal) return;
-    groupTextState = null;
+    resetGroupTextState();
     if ($("#tg-group-tabs-wrap")) $("#tg-group-tabs-wrap").classList.add("hidden");
     $("#tg-message").value = "";
     $("#tg-setup-step").classList.remove("hidden");
@@ -353,7 +352,7 @@ export const HOUSTON_TABLE = "loads_houston";
   }
 
   export function openHoustonDateDropdown() {
-    calendarViewMonth = null;
+    resetCalendarViewMonth();
     renderCalendarGrid(houstonState.datesWithData);
     $("#date-dropdown").classList.remove("hidden");
   }

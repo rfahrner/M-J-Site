@@ -13,20 +13,14 @@
      page load / navigation. That still needs its own Supabase
      table — not built yet.
    ============================================================ */
-import { createClient } from '@supabase/supabase-js';
-import { 
-    loadAccountingRecords, 
-    renderAccountingTable, 
-    recalcAccountingRecord, 
-    initAccountingPage, 
-    setupAccountingRealtimeSync 
-} from './accounting.js';
-import { loadPricingData, calcRoute, calcFscPayment } from './accountingcalc.js';
+import { initAccountingPage, getAccountingRecordById } from './accounting.js';
+import { sendShiftToAccounting } from './accountingcalc.js';
 import { initHoustonBoardPage } from './houston.js';
+import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_MIN, PRE_SHIFT_CALL_FOLLOWUP_MIN } from './alerts.js';
 
   /* ---------------- page map (single source of truth for nav) ---------------- */
 
-  const PAGE_MAP = {
+  export const PAGE_MAP = {
     "index.html":      { type: "board",       key: "atlanta",   label: "Atlanta",    title: "Atlanta Spreadsheet"    },
     "dalaware.html":   { type: "board",       key: "delaware",  label: "Delaware",   title: "Delaware Spreadsheet"   },
     "buildingc.html":  { type: "board",       key: "buildingc", label: "Building C", title: "Building C Spreadsheet" },
@@ -35,12 +29,12 @@ import { initHoustonBoardPage } from './houston.js';
     "driverlist.html": { type: "driverlist",  label: "Driver List" },
     "historics.html":  { type: "historics",   label: "Historics" },
   };
-  const NAV_ORDER = ["index.html", "dalaware.html", "buildingc.html", "houston.html", "accounting.html", "driverlist.html", "historics.html"];
+  export const NAV_ORDER = ["index.html", "dalaware.html", "buildingc.html", "houston.html", "accounting.html", "driverlist.html", "historics.html"];
   const LOCATIONS = NAV_ORDER
     .filter((f) => PAGE_MAP[f].type === "board" || PAGE_MAP[f].type === "houston-board")
     .map((f) => ({ file: f, ...PAGE_MAP[f] }));
 
-  function currentFile() {
+  export function currentFile() {
     const p = location.pathname.split("/").pop();
     return p && PAGE_MAP[p] ? p : "index.html";
   }
@@ -137,7 +131,7 @@ import { initHoustonBoardPage } from './houston.js';
   export const ACCOUNTING_TABLE = "loads_accounting";
   export const ACCOUNTING_ROUTES_TABLE = "loads_accounting_routes";
 
-  const supabaseClient = (typeof window !== "undefined" && window.supabase)
+  export const supabaseClient = (typeof window !== "undefined" && window.supabase)
     ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
         auth: { persistSession: true, autoRefreshToken: true, storageKey: "dl-dispatch-auth" },
       })
@@ -163,9 +157,9 @@ import { initHoustonBoardPage } from './houston.js';
     return true;
   }
 
-  function isAccountingUser() { return currentUserRole === "accounting"; }
+  export function isAccountingUser() { return currentUserRole === "accounting"; }
 
-  async function signOut() {
+  export async function signOut() {
     if (supabaseClient) await supabaseClient.auth.signOut();
     window.location.href = "login.html";
   }
@@ -353,30 +347,30 @@ import { initHoustonBoardPage } from './houston.js';
   /* ---------------- tiny helpers ---------------- */
 
   let uidCounter = 1000;
-  const uid = (prefix) => `${prefix}_${uidCounter++}`;
+  export const uid = (prefix) => `${prefix}_${uidCounter++}`;
 
-  const escapeHtml = (s) =>
+  export const escapeHtml = (s) =>
     String(s ?? "").replace(/[&<>"']/g, (c) => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
     }[c]));
 
   export function todayDate() { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }
-  function dateKey(d) {
+  export function dateKey(d) {
     const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0"), day = String(d.getDate()).padStart(2, "0");
     return `${y}-${m}-${day}`;
   }
-  function keyToDate(k) { const [y, m, d] = k.split("-").map(Number); return new Date(y, m - 1, d); }
-  function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
+  export function keyToDate(k) { const [y, m, d] = k.split("-").map(Number); return new Date(y, m - 1, d); }
+  export function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
   function humanDate(d) { return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" }); }
   function shortHumanDate(d) { return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }); }
 
-  function parseHHMM(str) {
+  export function parseHHMM(str) {
     if (!str) return null;
     const m = /^(\d{1,2}):(\d{2})$/.exec(str.trim());
     if (!m) return null;
     return Number(m[1]) * 60 + Number(m[2]);
   }
-  function minsToClock(mins) {
+  export function minsToClock(mins) {
     if (mins == null || isNaN(mins)) return "";
     mins = ((Math.round(mins) % 1440) + 1440) % 1440;
     return `${Math.floor(mins / 60)}:${String(mins % 60).padStart(2, "0")}`;
@@ -443,7 +437,7 @@ import { initHoustonBoardPage } from './houston.js';
     if (locationKey === "buildingc") return ["atlanta"]; // shares Atlanta's pool
     return [locationKey];
   }
-  function driversForLocation(locationKey) {
+  export function driversForLocation(locationKey) {
     const group = locationGroupFor(locationKey);
     return state.drivers.filter((d) => group.includes(d.location));
   }
@@ -488,7 +482,7 @@ import { initHoustonBoardPage } from './houston.js';
   // first time it's visited this session, then pads up to 5 rows so there's
   // always something ready to fill in. Cached after that — doesn't re-fetch
   // on every render, only the first time a given day is opened.
-  async function ensureSheetLoaded(locationKey, dKey) {
+  export async function ensureSheetLoaded(locationKey, dKey) {
     const k = sheetKey(locationKey, dKey);
     if (state.sheets[k]) return;
     if (!supabaseClient) {
@@ -522,7 +516,7 @@ import { initHoustonBoardPage } from './houston.js';
     }
     state.sheets[k] = rows;
   }
-  function findDriver(id) { return state.drivers.find((d) => String(d.id) === String(id)) || null; }
+  export function findDriver(id) { return state.drivers.find((d) => String(d.id) === String(id)) || null; }
   const standaloneLoadedRows = {}; // row.id -> row, for modal access from pages that don't have state.sheets (e.g. Accounting)
 
   function findRowAnywhere(rowId) {
@@ -536,7 +530,7 @@ import { initHoustonBoardPage } from './houston.js';
 
   /* ---------------- driver sync status banner ---------------- */
 
-  function setDriverSyncStatus(message, kind) {
+  export function setDriverSyncStatus(message, kind) {
     $all('#driver-sync-status').forEach((el) => {
       el.textContent = message || "";
       el.classList.toggle("sync-error", kind === "error");
@@ -578,7 +572,7 @@ import { initHoustonBoardPage } from './houston.js';
 
   /* ---------------- saving loads to Supabase ---------------- */
 
-  const SAVE_DEBOUNCE_MS = 700;
+  export const SAVE_DEBOUNCE_MS = 700;
   const shiftSaveTimers = new Map();
   const tripSaveTimers = new Map();
 
@@ -899,7 +893,7 @@ import { initHoustonBoardPage } from './houston.js';
       </td>`;
   }
 
-  function pick(driverVal, snapshotVal) {
+  export function pick(driverVal, snapshotVal) {
     if (driverVal && String(driverVal).trim()) return driverVal;
     if (snapshotVal && String(snapshotVal).trim()) return snapshotVal;
     return "—";
@@ -962,7 +956,7 @@ import { initHoustonBoardPage } from './houston.js';
     }).join("");
   }
 
-  function renderBoardChrome() {
+  export function renderBoardChrome() {
     const loc = LOCATIONS.find((l) => l.key === state.activeLocation);
     if (!loc) return;
     $("#sheet-title").textContent = loc.title;
@@ -989,7 +983,12 @@ import { initHoustonBoardPage } from './houston.js';
 
   let calendarViewMonth = null; // { year, month } — which month the open popup is showing
 
-  function renderCalendarGrid(datesWithDataSet) {
+  // houston.js needs to reset this before opening its own date dropdown,
+  // but an imported `let` binding can't be reassigned from outside this
+  // module — so this setter is the sanctioned way to do that from elsewhere.
+  export function resetCalendarViewMonth() { calendarViewMonth = null; }
+
+  export function renderCalendarGrid(datesWithDataSet) {
     const box = $("#date-dropdown");
     if (!box) return;
     if (!calendarViewMonth) {
@@ -1042,12 +1041,12 @@ import { initHoustonBoardPage } from './houston.js';
     });
   }
 
-  function openDateDropdown() {
+  export function openDateDropdown() {
     calendarViewMonth = null; // re-focus on the active date's month each time it's opened fresh
     renderCalendarGrid(state.datesWithData);
     $("#date-dropdown").classList.remove("hidden");
   }
-  function closeDateDropdown() {
+  export function closeDateDropdown() {
     const el = $("#date-dropdown");
     if (el) el.classList.add("hidden");
   }
@@ -1219,7 +1218,7 @@ import { initHoustonBoardPage } from './houston.js';
     recalcRowCalcCellsInPlace(parentRow.id);
   }
 
-  function handleRealtimeDriverChange(payload) {
+  export function handleRealtimeDriverChange(payload) {
     if (payload.eventType === "DELETE") return;
     const dbDriver = payload.new;
     if (!dbDriver) return;
@@ -1254,7 +1253,7 @@ import { initHoustonBoardPage } from './houston.js';
 
   /* ---------------- rendering: driver list ---------------- */
 
-  function refreshDriverDatalist() {
+  export function refreshDriverDatalist() {
     let dl = document.getElementById("driverNamesList");
     if (!dl) { dl = document.createElement("datalist"); dl.id = "driverNamesList"; document.body.appendChild(dl); }
     const contextLocation = state.activeLocation || state.driverListTab || "atlanta";
@@ -1561,7 +1560,7 @@ import { initHoustonBoardPage } from './houston.js';
     el.style.color = segments > 1 ? "var(--amber-700, #b45309)" : "";
   }
 
-  function openSendTextModal(recipients, prefilledMessage, markShiftIdsOnSent) {
+  export function openSendTextModal(recipients, prefilledMessage, markShiftIdsOnSent) {
     const withPhone = recipients.filter((r) => formatTextAddress(r.phone));
     if (!withPhone.length) {
       setDriverSyncStatus("No phone number on file for this driver.", "error");
@@ -1576,7 +1575,7 @@ import { initHoustonBoardPage } from './houston.js';
     $("#send-text-message").focus();
   }
 
-  function textDriverPhone(rawPhone, prefilledMessage) {
+  export function textDriverPhone(rawPhone, prefilledMessage) {
     openSendTextModal([{ name: null, phone: rawPhone }], prefilledMessage);
   }
 
@@ -1647,6 +1646,11 @@ import { initHoustonBoardPage } from './houston.js';
   const GROUP_BATCH_SIZE = 9;
   let groupTextState = null; // { groupKey, message, batches: [[driver,...],...], batchIndex, skipped, totalSent }
 
+  // Same reasoning as resetCalendarViewMonth() above — houston.js needs to
+  // clear this before opening its own text-selected modal, but can't
+  // reassign an imported `let` binding directly.
+  export function resetGroupTextState() { groupTextState = null; }
+
   function driverGroupKey(drv) {
     const m = /^[A-Za-z]/.exec(drv.rating || "");
     return m ? m[0].toUpperCase() : null;
@@ -1685,7 +1689,7 @@ import { initHoustonBoardPage } from './houston.js';
     $("#tg-setup-step").dataset.selectedGroup = groupKey;
   }
 
-  function beginTextBatchFlow(members, label, message) {
+  export function beginTextBatchFlow(members, label, message) {
     const errEl = $("#tg-error");
     const withPhone = [];
     const skipped = [];
@@ -1751,7 +1755,7 @@ import { initHoustonBoardPage } from './houston.js';
     $("#tg-finish").classList.add("hidden");
   }
 
-  async function sendCurrentGroupBatchDirect() {
+  export async function sendCurrentGroupBatchDirect() {
     const s = groupTextState;
     if (!s) return;
     const batch = s.batches[s.batchIndex];
@@ -1777,7 +1781,7 @@ import { initHoustonBoardPage } from './houston.js';
     }
   }
 
-  function openCurrentGroupBatch() {
+  export function openCurrentGroupBatch() {
     const s = groupTextState;
     if (!s) return;
     const batch = s.batches[s.batchIndex];
@@ -1789,7 +1793,7 @@ import { initHoustonBoardPage } from './houston.js';
     $("#tg-confirm-sent").classList.remove("hidden");
   }
 
-  function confirmGroupBatchSent() {
+  export function confirmGroupBatchSent() {
     const s = groupTextState;
     if (!s) return;
     s.totalSent += s.batches[s.batchIndex].length;
@@ -1799,7 +1803,7 @@ import { initHoustonBoardPage } from './houston.js';
 
   /* ---------------- right-click context menu ---------------- */
 
-  function closeContextMenu() {
+  export function closeContextMenu() {
     const existing = document.getElementById("row-context-menu");
     if (existing) existing.remove();
   }
@@ -1836,10 +1840,10 @@ import { initHoustonBoardPage } from './houston.js';
 
   /* ---------------- Load Details modal (PRO#/Trip ID popup) ---------------- */
 
-  let loadDetailsState = null; // { rowId, activeTab, attachments, history }
+  export let loadDetailsState = null; // { rowId, activeTab, attachments, history }
 
-  async function openLoadDetailsFromAccounting(accountingRecordId, tripDbId) {
-    const acctRec = accountingRecords.find((r) => r.id == accountingRecordId);
+  export async function openLoadDetailsFromAccounting(accountingRecordId, tripDbId) {
+    const acctRec = getAccountingRecordById(accountingRecordId);
     if (!acctRec) return;
     if (!acctRec.source_shift_id) { setDriverSyncStatus("This load doesn't have a linked board record to open (likely a Houston load).", "error"); return; }
     if (!supabaseClient) return;
@@ -1900,7 +1904,7 @@ import { initHoustonBoardPage } from './houston.js';
     }
   }
 
-  function closeLoadDetailsModal() {
+  export function closeLoadDetailsModal() {
     $("#modal-load-details").classList.add("hidden");
     loadDetailsState = null;
   }
@@ -1916,7 +1920,7 @@ import { initHoustonBoardPage } from './houston.js';
     ];
   }
 
-  function renderLoadDetailsTabs() {
+  export function renderLoadDetailsTabs() {
     if (!loadDetailsState) return;
     const found = findRowAnywhere(loadDetailsState.rowId);
     if (!found) return;
@@ -1927,7 +1931,7 @@ import { initHoustonBoardPage } from './houston.js';
     renderLoadDetailsTabContent();
   }
 
-  function stopFieldsHtml(stopCount, existingStops) {
+  export function stopFieldsHtml(stopCount, existingStops) {
     const rows = Array.from({ length: stopCount }, (_, i) => {
       const s = existingStops[i] || { stopNumber: i + 1, timeIn: "", timeOut: "" };
       return `<div class="ld-stop-edit-row">
@@ -2071,7 +2075,7 @@ import { initHoustonBoardPage } from './houston.js';
     }
   }
 
-  function startLoadDetailsEdit(tabKey) {
+  export function startLoadDetailsEdit(tabKey) {
     if (!loadDetailsState) return;
     const found = findRowAnywhere(loadDetailsState.rowId);
     if (!found) return;
@@ -2099,14 +2103,14 @@ import { initHoustonBoardPage } from './houston.js';
     renderLoadDetailsTabContent();
   }
 
-  function cancelLoadDetailsEdit() {
+  export function cancelLoadDetailsEdit() {
     if (!loadDetailsState) return;
     loadDetailsState.editMode = null;
     loadDetailsState.editDraft = null;
     renderLoadDetailsTabContent();
   }
 
-  async function saveLoadDetailsEdit(tabKey) {
+  export async function saveLoadDetailsEdit(tabKey) {
     if (!loadDetailsState) return;
     const found = findRowAnywhere(loadDetailsState.rowId);
     if (!found) return;
@@ -2180,7 +2184,7 @@ import { initHoustonBoardPage } from './houston.js';
     renderBoardTable();
   }
 
-  async function uploadTripSheetImages(fileList) {
+  export async function uploadTripSheetImages(fileList) {
     const found = findRowAnywhere(loadDetailsState.rowId);
     if (!found || !supabaseClient) return;
     const row = found.row;
@@ -2203,7 +2207,7 @@ import { initHoustonBoardPage } from './houston.js';
     renderLoadDetailsTabContent();
   }
 
-  async function removeTripSheetImage(attachmentId) {
+  export async function removeTripSheetImage(attachmentId) {
     const att = loadDetailsState.attachments.find((a) => String(a.id) === String(attachmentId));
     if (!att || !confirm(`Remove ${att.file_name}?`)) return;
     try {
@@ -2300,7 +2304,7 @@ import { initHoustonBoardPage } from './houston.js';
   function setVal(id, val) { const el = $("#" + id); if (el) el.value = val; }
   function setText(id, text) { const el = $("#" + id); if (el) el.textContent = text; }
 
-  function openAddDriverModal(nestedFromLoad) {
+  export function openAddDriverModal(nestedFromLoad) {
     const modalEl = $("#modal-add-driver");
     if (!modalEl) { console.error('openAddDriverModal: #modal-add-driver not found on this page.'); return; }
     state.addDriverNestedFromLoad = !!nestedFromLoad;
@@ -2426,7 +2430,7 @@ import { initHoustonBoardPage } from './houston.js';
 
   /* ---------------- Add Load modal (guarded — only wired if present) ---------------- */
 
-  function openAddLoadModal() {
+  export function openAddLoadModal() {
     $("#al-pro").value = "";
     $("#al-shift-start").value = "";
     $("#al-driver-dropdown").innerHTML = "";
@@ -2445,7 +2449,7 @@ import { initHoustonBoardPage } from './houston.js';
     $("#modal-add-load").classList.remove("hidden");
     $("#al-driver-input").focus();
   }
-  function closeAddLoadModal() { $("#modal-add-load").classList.add("hidden"); }
+  export function closeAddLoadModal() { $("#modal-add-load").classList.add("hidden"); }
 
   function renderDriverDropdown(query) {
     const box = $("#al-driver-dropdown");
@@ -2545,7 +2549,7 @@ import { initHoustonBoardPage } from './houston.js';
     renderAvailableTable();
   }
 
-  function initAvailableSection() {
+  export function initAvailableSection() {
     if (!$("#available-table-body")) return; // not every page has this section
     availableRows = [blankAvailableRow()];
     renderAvailableTable();
@@ -2589,7 +2593,7 @@ import { initHoustonBoardPage } from './houston.js';
 
   /* ---------------- per-page init ---------------- */
 
-  function on(id, event, handler) {
+  export function on(id, event, handler) {
     const el = $("#" + id);
     if (el) el.addEventListener(event, handler);
     else console.error(`on(): #${id} not found on this page — that control won't work until the HTML matches loadboard.js.`);

@@ -1,8 +1,23 @@
 /* ---------------- Accounting page ---------------- */
-import { supabaseClient, ACCOUNTING_TABLE, ACCOUNTING_ROUTES_TABLE, TRIPS_TABLE, loadPricingData, pricingTiers, pricingSettings, calcRoute, escapeHtml, $, $all, on, setDriverSyncStatus } from './loadboard.js';
+import {
+  supabaseClient, TRIPS_TABLE, escapeHtml, $, $all, on, setDriverSyncStatus,
+  state, dateKey, addDays, todayDate, keyToDate, openDateDropdown, closeDateDropdown,
+  SAVE_DEBOUNCE_MS, closeLoadDetailsModal, loadDetailsState, renderLoadDetailsTabs,
+  uploadTripSheetImages, removeTripSheetImage, startLoadDetailsEdit, cancelLoadDetailsEdit,
+  saveLoadDetailsEdit, stopFieldsHtml, openLoadDetailsFromAccounting,
+} from './loadboard.js';
+import { ACCOUNTING_TABLE, ACCOUNTING_ROUTES_TABLE, loadPricingData, calcRoute, getPricingTiers, getPricingSettings } from './accountingcalc.js';
+
 let accountingRecords = [];
 
   let acctTripsByShiftId = {}; // source_shift_id -> [trips], used for the Delaware "Routes" column
+
+  // loadboard.js's openLoadDetailsFromAccounting() needs to look up a
+  // record from this module-private array — this is the sanctioned way
+  // in, rather than exporting the array itself.
+  export function getAccountingRecordById(id) {
+    return accountingRecords.find((r) => r.id == id) || null;
+  }
 
   export async function loadAccountingRecords() {
     if (!supabaseClient) return;
@@ -150,15 +165,14 @@ let accountingRecords = [];
     const rec = accountingRecords.find((r) => Number(r.id) === accountingId);
     if (!rec) return;
     Object.assign(rec, patch);
-    if (!pricingTiers || !pricingSettings) await loadPricingData();
+      if (!getPricingTiers() || !getPricingSettings()) await loadPricingData();
 
     const { data: routes, error } = await supabaseClient.from(ACCOUNTING_ROUTES_TABLE).select("*").eq("accounting_id", accountingId);
     if (error) { console.error("Failed to load routes for recalc:", error); return; }
 
     let totalCost = 0, totalRevenue = 0;
     const routeUpdates = (routes || []).map((r) => {
-      const calc = calcRoute({ costLevel: rec.cost_level, revenueLevel: rec.revenue_level, miles: Number(r.miles) || 0, stops: Number(r.stops) || 0, contractRate: rec.contract_rate }, pricingTiers, pricingSettings);
-      totalCost += calc.totalCost; totalRevenue += calc.totalRevenue;
+    const calc = calcRoute({ costLevel: rec.cost_level, revenueLevel: rec.revenue_level, miles: Number(r.miles) || 0, stops: Number(r.stops) || 0, contractRate: rec.contract_rate }, getPricingTiers(), getPricingSettings());      totalCost += calc.totalCost; totalRevenue += calc.totalRevenue;
       return { id: r.id, linehaul_cost: calc.linehaulCost, stop_charge: calc.stopCharge, total_cost: calc.totalCost, revenue: calc.revenue, stop_charge_revenue: calc.stopChargeRevenue, total_revenue: calc.totalRevenue };
     });
 
@@ -200,7 +214,8 @@ let accountingRecords = [];
     state.acctDateFilter = null;
 
     await loadPricingData();
-    if (pricingSettings && $("#fsc-rate-input")) $("#fsc-rate-input").value = pricingSettings.fsc_rate || "";
+    const initialSettings = getPricingSettings();
+    if (initialSettings && $("#fsc-rate-input")) $("#fsc-rate-input").value = initialSettings.fsc_rate || "";
     await loadAccountingRecords();
     renderAccountingTable();
     setupAccountingRealtimeSync();
@@ -244,7 +259,8 @@ let accountingRecords = [];
       if (!val || val <= 0) { setDriverSyncStatus("Enter a valid FSC rate first.", "error"); return; }
       try {
         await supabaseClient.from("pricing_settings").update({ value: val }).eq("key", "fsc_rate");
-        pricingSettings.fsc_rate = val;
+        const settings = getPricingSettings();
+        if (settings) settings.fsc_rate = val;
         setDriverSyncStatus("FSC rate saved — used for every load completed from now on.", "success");
       } catch (e) {
         setDriverSyncStatus(`Couldn't save FSC rate (${e.message || e}).`, "error");
