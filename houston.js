@@ -362,8 +362,9 @@ export const HOUSTON_TABLE = "loads_houston";
     });
   }
 
-  export function openHoustonDateDropdown() {
+  export async function openHoustonDateDropdown() {
     resetCalendarViewMonth();
+    await loadHoustonDatesWithData();
     renderCalendarGrid(houstonState.datesWithData);
     $("#date-dropdown").classList.remove("hidden");
   }

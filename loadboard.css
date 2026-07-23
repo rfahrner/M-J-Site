@@ -1078,7 +1078,8 @@ table.available-table tbody tr:nth-child(even) { background: #fbfcfe; }
    ============================================================ */
 
 /* BIRM checkbox column on the board grid (Building C only in practice) */
-.col-birm { width: 46px; min-width: 46px; }
+.col-birm { width: 92px; min-width: 92px; }
+.col-birm select.cell-input { font-size: 10.5px; padding: 3px 2px; }
 
 /* Route ID / Trip ID need more room than the rest — widened by hand */
 table.board td.col-routeId, table.board th.col-routeId,
@@ -1276,3 +1277,19 @@ fieldset.rate-tier-box.is-overridden {
 @media (max-width: 720px) {
   .ld-overview-grid { grid-template-columns: 1fr; }
 }
+
+/* ============================================================
+   Mondelez board
+   ============================================================ */
+.col-mdz-location { min-width: 110px; }
+.col-mdz-group { min-width: 110px; }
+.col-mdz-driverapp { width: 80px; min-width: 80px; }
+.col-mdz-trailer { width: 80px; min-width: 80px; }
+.col-mdz-miles { width: 56px; min-width: 56px; }
+.col-mdz-stops { width: 46px; min-width: 46px; }
+.col-mdz-carrierpay { width: 76px; min-width: 76px; }
+.col-mdz-fsc { width: 56px; min-width: 56px; }
+.col-mdz-additional { width: 70px; min-width: 70px; }
+.col-mdz-revenue { width: 80px; min-width: 80px; }
+.col-mdz-notes { min-width: 150px; }
+.col-mdz-image { width: 90px; min-width: 90px; text-align: center; }

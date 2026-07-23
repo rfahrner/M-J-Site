@@ -16,8 +16,9 @@
 import { initAccountingPage, getAccountingRecordById } from './accounting.js';
 import { sendShiftToAccounting } from './accountingcalc.js';
 import { initHoustonBoardPage } from './houston.js';
+import { initMondelezPage } from './mondelez.js';
 import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_MIN, PRE_SHIFT_CALL_FOLLOWUP_MIN } from './alerts.js';
-import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, computeHoursWorked, effectiveTierRate, effectiveSetting, isTierOverridden, isSettingOverridden } from './boardrates.js';
+import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveTierRate, effectiveSetting, isTierOverridden, isSettingOverridden } from './boardrates.js';
 
   /* ---------------- page map (single source of truth for nav) ---------------- */
 
@@ -26,11 +27,12 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, computeHou
     "dalaware.html":   { type: "board",       key: "delaware",  label: "Delaware",   title: "Delaware Spreadsheet"   },
     "buildingc.html":  { type: "board",       key: "buildingc", label: "Building C", title: "Building C Spreadsheet" },
     "houston.html":    { type: "houston-board", key: "houston",   label: "Houston",    title: "Houston Spreadsheet"    },
+    "mondelez.html":   { type: "mondelez",    label: "Mondelez" },
     "accounting.html": { type: "accounting",  label: "Accounting" },
     "driverlist.html": { type: "driverlist",  label: "Driver List" },
     "historics.html":  { type: "historics",   label: "Historics" },
   };
-  export const NAV_ORDER = ["index.html", "dalaware.html", "buildingc.html", "houston.html", "accounting.html", "driverlist.html", "historics.html"];
+  export const NAV_ORDER = ["index.html", "dalaware.html", "buildingc.html", "houston.html", "mondelez.html", "accounting.html", "driverlist.html", "historics.html"];
   const LOCATIONS = NAV_ORDER
     .filter((f) => PAGE_MAP[f].type === "board" || PAGE_MAP[f].type === "houston-board")
     .map((f) => ({ file: f, ...PAGE_MAP[f] }));
@@ -132,8 +134,25 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, computeHou
   export const ACCOUNTING_TABLE = "loads_accounting";
   export const ACCOUNTING_ROUTES_TABLE = "loads_accounting_routes";
 
-  export const supabaseClient = (typeof window !== "undefined" && window.supabase)
-    ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+  // The Supabase CDN <script> tag should always finish before this module
+  // (module scripts are deferred by the browser regardless of the defer
+  // attribute), but a slow network or a flaky CDN edge can occasionally
+  // still win the race. Rather than giving up forever the instant
+  // window.supabase isn't there yet, wait briefly for it to show up —
+  // this uses top-level await, so nothing that imports from this module
+  // (which is everything) runs until this resolves one way or the other.
+  async function waitForSupabaseGlobal(maxWaitMs) {
+    if (typeof window === "undefined") return null;
+    const start = Date.now();
+    while (!window.supabase && Date.now() - start < maxWaitMs) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return window.supabase || null;
+  }
+
+  const supabaseGlobal = await waitForSupabaseGlobal(4000);
+  export const supabaseClient = supabaseGlobal
+    ? supabaseGlobal.createClient(SUPABASE_URL, SUPABASE_KEY, {
         auth: { persistSession: true, autoRefreshToken: true, storageKey: "dl-dispatch-auth" },
       })
     : null;
@@ -230,6 +249,8 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, computeHou
       trailer_drop_location: row.trailerDropLocation || null,
       pre_shift_text_sent_at: row.preShiftTextSentAt || null,
       birm: !!row.birm,
+      route_type: row.routeType || "birm",
+      hostler_hours: row.hostlerHours !== "" && row.hostlerHours != null ? Number(row.hostlerHours) : null,
       rate_manual: !!row.rateManual,
       rate_overrides: (row.rateOverrides && (Object.keys(row.rateOverrides.tiers || {}).length || Object.keys(row.rateOverrides.settings || {}).length)) ? row.rateOverrides : null,
     };
@@ -261,6 +282,8 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, computeHou
       trailerDropLocation: dbRow.trailer_drop_location || "",
       preShiftTextSentAt: dbRow.pre_shift_text_sent_at || null,
       birm: !!dbRow.birm,
+      routeType: dbRow.route_type || "birm",
+      hostlerHours: dbRow.hostler_hours != null ? String(dbRow.hostler_hours) : "",
       rateManual: !!dbRow.rate_manual,
       rateOverrides: dbRow.rate_overrides ? { tiers: dbRow.rate_overrides.tiers || {}, settings: dbRow.rate_overrides.settings || {} } : { tiers: {}, settings: {} },
       selected: false, // local-only UI state, not persisted — see note in chat
@@ -481,7 +504,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, computeHou
       timesheetReceived: false, timesheetStartTime: "", timesheetEndTime: "", trailerDropLocation: "", preShiftTextSentAt: null,
       createdAt: null, updatedAt: null, addedAt: null,
       cellSnapshot: "", mcSnapshot: "", emailSnapshot: "", dispatcherPhoneSnapshot: "", ratingSnapshot: "",
-      birm: false, rateManual: false, rateOverrides: { tiers: {}, settings: {} },
+      birm: false, routeType: "birm", hostlerHours: "", rateManual: false, rateOverrides: { tiers: {}, settings: {} },
       trips: [blankTrip()],
     };
   }
@@ -1008,8 +1031,14 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, computeHou
       <td class="col-shiftHosLeft"${rs}><input class="cell-input calc" data-row="${row.id}" data-field="shiftHosLeft" value="${escapeHtml(computeShiftLevelHosLeft(row))}" readonly tabindex="-1"></td>
       <td class="col-nextCallTimeCalc"${rs}><input class="cell-input calc" data-row="${row.id}" data-field="nextCallTimeCalc" value="${escapeHtml(computeNextCallTimeForRow(row))}" readonly tabindex="-1"></td>
       <td class="col-revLevel"${rs}><input class="cell-input small" style="width:42px;" placeholder="Rev" data-row="${row.id}" data-field="revLevel" value="${escapeHtml(row.revLevel)}"></td>
-      <td class="col-birm"${rs} style="text-align:center;" title="Building C only — flat BIRM rate instead of Hostler hourly">
-        <input type="checkbox" class="chk" data-action="toggle-birm" data-row="${row.id}" ${row.birm ? "checked" : ""}>
+      <td class="col-birm"${rs}>
+        ${row.location === "buildingc" ? `
+          <select class="cell-input small" data-action="change-route-type" data-row="${row.id}">
+            <option value="birm" ${row.routeType === "birm" ? "selected" : ""}>BIRM</option>
+            <option value="hostler" ${row.routeType === "hostler" ? "selected" : ""}>Hostler</option>
+            <option value="na" ${row.routeType === "na" ? "selected" : ""}>N/A</option>
+          </select>
+        ` : `<span class="static-text">—</span>`}
       </td>
       <td class="col-notes"${rs}><input class="cell-input" placeholder="Notes" data-row="${row.id}" data-field="notes" value="${escapeHtml(row.notes)}"></td>
       <td class="col-routes"${rs}>${routesChipsHtml(row)}</td>`;
@@ -1155,7 +1184,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, computeHou
         <th class="col-shiftHosLeft">HOS Left</th>
         <th class="col-nextCallTimeCalc">Next Call Time</th>
         <th class="col-revLevel">Rev Level</th>
-        <th class="col-birm" title="Building C only">BIRM</th>
+        <th class="col-birm" title="Building C only">Route</th>
         <th class="col-notes">Notes</th>
         <th class="col-routes">Routes</th>
         ${tripHeaderCells}
@@ -1395,18 +1424,30 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, computeHou
     saveShiftNow(found.row);
   }
 
-  // Building C only in practice — flips between the flat BIRM rate and the
-  // hourly Hostler rate for this load. Logged since it changes what the
-  // driver gets paid.
-  export function toggleBirm(rowId) {
+  // Building C only — switches between BIRM (flat), Hostler (hourly,
+  // manual shift length), and N/A (no automatic rate). Logged since it
+  // changes what the driver gets paid.
+  export function changeRouteType(rowId, newType) {
     const found = findRowAnywhere(rowId);
     if (!found) return;
-    const before = found.row.birm;
-    found.row.birm = !found.row.birm;
+    const before = found.row.routeType;
+    if (before === newType) return;
+    found.row.routeType = newType;
     saveShiftNow(found.row);
     recomputeRowRate(found.row);
-    logChange(found.row.dbId, labelForRow(found.row), "birm", String(before), String(found.row.birm));
+    logChange(found.row.dbId, labelForRow(found.row), "route_type", before, newType);
     if (loadDetailsState && loadDetailsState.rowId === rowId) renderLoadDetailsTabContent();
+  }
+
+  export function setHostlerHours(rowId, rawValue) {
+    const found = findRowAnywhere(rowId);
+    if (!found) return;
+    const before = found.row.hostlerHours;
+    if (before === rawValue) return;
+    found.row.hostlerHours = rawValue;
+    saveShiftNow(found.row);
+    recomputeRowRate(found.row);
+    logChange(found.row.dbId, labelForRow(found.row), "hostler_hours", before, rawValue);
   }
 
   // Local-only, not persisted to Supabase — this is a per-user selection
@@ -2070,15 +2111,25 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, computeHou
           ${rateTierBox("$/mile", `<input type="number" step="0.01" data-rate-setting-key="per_mile" value="${val("per_mile", 4)}">`, isOv("per_mile"))}
         </div>`;
     } else if (locationKey === "buildingc") {
+      const routeType = row.routeType || "birm";
       defaultsHtml = `
         <div class="rate-tier-grid">
           ${rateTierBox("BIRM flat", `<input type="number" step="0.01" data-rate-setting-key="birm_flat" value="${val("birm_flat", 800)}">`, isOv("birm_flat"))}
           ${rateTierBox("Hostler $/hr", `<input type="number" step="0.01" data-rate-setting-key="hostler_hourly" value="${val("hostler_hourly", 100)}">`, isOv("hostler_hourly"))}
         </div>
-        <div class="field" style="display:flex; align-items:center; gap:8px; margin-top:4px;">
-          <input type="checkbox" id="ld-birm-toggle" ${row.birm ? "checked" : ""}>
-          <label for="ld-birm-toggle" style="margin:0;">This load is BIRM (unchecked = Hostler hourly)</label>
-        </div>`;
+        <div class="field" style="margin-top:4px;">
+          <label>Route Type</label>
+          <select class="cell-input" id="ld-route-type-select">
+            <option value="birm" ${routeType === "birm" ? "selected" : ""}>BIRM</option>
+            <option value="hostler" ${routeType === "hostler" ? "selected" : ""}>Hostler</option>
+            <option value="na" ${routeType === "na" ? "selected" : ""}>N/A</option>
+          </select>
+        </div>
+        ${routeType === "hostler" ? `
+        <div class="field" style="margin-top:8px;">
+          <label>Shift Length (hours)</label>
+          <input class="cell-input" type="number" step="0.25" id="ld-hostler-hours" value="${escapeHtml(row.hostlerHours || "")}" placeholder="e.g. 8">
+        </div>` : ""}`;
     } else {
       defaultsHtml = `<div class="subtext">No editable rate defaults for this location yet.</div>`;
     }
@@ -2167,6 +2218,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, computeHou
           </div>
         `;
       }
+      recomputeRowRate(row); // guarantees the board's Rate column can't drift from what this panel is about to show
       body.innerHTML = `
         <div class="ld-overview-grid">
           <div class="ld-overview-main">${mainHtml}</div>
@@ -2412,6 +2464,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, computeHou
         if (match) trip.driverId = match.id;
       }
       await saveTripNow(row, trip, row.trips.indexOf(trip) + 1);
+      recomputeRowRate(row);
 
       const stopCount = Math.max(0, parseInt(trip.stopCount, 10) || 0);
       const newStops = [];
@@ -2908,9 +2961,50 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, computeHou
     renderAvailableTable();
   }
 
+  // Keeps the Available list in sync when a second dispatcher adds,
+  // edits, or removes a name on the same day — without this, each tab
+  // only ever sees its own edits until the page is reloaded.
+  function handleRealtimeAvailableChange(payload) {
+    const locationKey = state.activeLocation;
+    if (!locationKey) return;
+    if (payload.eventType === "DELETE") {
+      const oldRow = payload.old;
+      if (!oldRow) return;
+      for (const k in state.availableSheets) {
+        const sheet = state.availableSheets[k];
+        const idx = sheet.findIndex((r) => r.dbId === oldRow.id);
+        if (idx !== -1) { sheet.splice(idx, 1); if (k === availableSheetKey(state.activeLocation, state.activeDate)) renderAvailableTable(); break; }
+      }
+      return;
+    }
+    const dbRow = payload.new;
+    if (!dbRow || dbRow.location !== locationKey) return;
+    const k = availableSheetKey(dbRow.location, dbRow.shift_date);
+    if (!state.availableSheets[k]) return; // that day isn't cached in this tab yet — nothing to merge into
+    const sheet = state.availableSheets[k];
+    const existing = sheet.find((r) => r.dbId === dbRow.id);
+    if (existing) {
+      Object.assign(existing, availableRowFromDbRow(dbRow), { id: existing.id });
+    } else {
+      // Drop the lone starting blank row once real data arrives, same as the board's own sheets do
+      const onlyBlank = sheet.length === 1 && !sheet[0].dbId && !sheet[0].driverName.trim();
+      if (onlyBlank) sheet.length = 0;
+      sheet.push(availableRowFromDbRow(dbRow));
+    }
+    if (k === availableSheetKey(state.activeLocation, state.activeDate)) renderAvailableTable();
+  }
+
+  export function setupAvailableRealtimeSync(locationKey) {
+    if (!supabaseClient) return;
+    const channel = supabaseClient.channel(`available-${locationKey}`);
+    channel.on("postgres_changes", { event: "*", schema: "public", table: AVAILABLE_TABLE, filter: `location=eq.${locationKey}` }, handleRealtimeAvailableChange);
+    channel.subscribe();
+  }
+
   export function initAvailableSection() {
     if (!$("#available-table-body")) return; // not every page has this section
     refreshAvailableSection();
+    setupAvailableRealtimeSync(state.activeLocation || "atlanta");
 
     on("btn-available-add-row", "click", addAvailableRow);
 
@@ -2962,6 +3056,15 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, computeHou
       on("ad-cancel", "click", closeAddDriverModal);
       on("ad-submit", "click", submitDriverForm);
       on("modal-add-driver", "click", (e) => { if (e.target.id === "modal-add-driver") closeAddDriverModal(); });
+    }
+    if ($("#modal-send-text")) {
+      const closeSendText = () => { $("#modal-send-text").classList.add("hidden"); sendTextModalState = null; };
+      on("send-text-close", "click", closeSendText);
+      on("send-text-cancel", "click", closeSendText);
+      on("send-text-submit", "click", submitSendTextModal);
+      $("#modal-send-text").addEventListener("click", (e) => { if (e.target.id === "modal-send-text") closeSendText(); });
+      const msgInput = $("#send-text-message");
+      if (msgInput) msgInput.addEventListener("input", updateSendTextCounter);
     }
     if ($("#modal-add-load")) {
       on("al-close", "click", closeAddLoadModal);
@@ -3033,16 +3136,6 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, computeHou
       $("#modal-stop-times").addEventListener("click", (e) => { if (e.target.id === "modal-stop-times") closeStopTimesModal(); });
     }
 
-    if ($("#modal-send-text")) {
-      const closeSendText = () => { $("#modal-send-text").classList.add("hidden"); sendTextModalState = null; };
-      on("send-text-close", "click", closeSendText);
-      on("send-text-cancel", "click", closeSendText);
-      on("send-text-submit", "click", submitSendTextModal);
-      $("#modal-send-text").addEventListener("click", (e) => { if (e.target.id === "modal-send-text") closeSendText(); });
-      const msgInput = $("#send-text-message");
-      if (msgInput) msgInput.addEventListener("input", updateSendTextCounter);
-    }
-
     if ($("#modal-timesheet-complete")) {
       on("tsc-close", "click", skipTimesheetModal);
       on("tsc-cancel", "click", skipTimesheetModal);
@@ -3060,7 +3153,8 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, computeHou
       $("#ld-tab-content").addEventListener("change", (e) => {
         if (e.target.id === "ld-file-input" && e.target.files.length) uploadTripSheetImages(Array.from(e.target.files));
         if (e.target.id === "ld-rate-total") commitRateOverride(e.target.value);
-        if (e.target.id === "ld-birm-toggle" && loadDetailsState) toggleBirm(loadDetailsState.rowId);
+        if (e.target.id === "ld-route-type-select" && loadDetailsState) changeRouteType(loadDetailsState.rowId, e.target.value);
+        if (e.target.id === "ld-hostler-hours" && loadDetailsState) setHostlerHours(loadDetailsState.rowId, e.target.value);
         if (e.target.dataset.rateTierId != null && e.target.dataset.rateTierId !== "") commitRateBoxOverride("tier", Number(e.target.dataset.rateTierId), e.target.value);
         if (e.target.dataset.rateSettingKey) commitRateBoxOverride("setting", e.target.dataset.rateSettingKey, e.target.value);
       });
@@ -3285,8 +3379,8 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, computeHou
         toggleRowSelected(t.dataset.row);
         return;
       }
-      if (t.dataset.action === "toggle-birm") {
-        toggleBirm(t.dataset.row);
+      if (t.dataset.action === "change-route-type") {
+        changeRouteType(t.dataset.row, t.value);
         return;
       }
       if (t.type === "checkbox" && !t.dataset.trip && t.dataset.field === "preShiftTextSent") {
@@ -3405,6 +3499,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, computeHou
     try {
       if (info.type === "board") initBoardPage(info);
       else if (info.type === "houston-board") initHoustonBoardPage(info);
+      else if (info.type === "mondelez") initMondelezPage();
       else if (info.type === "driverlist") initDriverListPage();
       else if (info.type === "accounting") initAccountingPage();
     } catch (e) { console.error("page-specific init failed:", e); }

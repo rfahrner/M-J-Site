@@ -5,7 +5,7 @@ import {
   SAVE_DEBOUNCE_MS, closeLoadDetailsModal, loadDetailsState, renderLoadDetailsTabs,
   uploadTripSheetImages, removeTripSheetImage, startLoadDetailsEdit, cancelLoadDetailsEdit,
   saveLoadDetailsEdit, stopFieldsHtml, openLoadDetailsFromAccounting,
-  commitRateOverride, resetRateToCalculated, toggleBirm, commitRateBoxOverride,
+  commitRateOverride, resetRateToCalculated, changeRouteType, setHostlerHours, commitRateBoxOverride,
 } from './loadboard.js';
 import { ACCOUNTING_TABLE, ACCOUNTING_ROUTES_TABLE, loadPricingData, calcRoute, getPricingTiers, getPricingSettings } from './accountingcalc.js';
 
@@ -313,7 +313,8 @@ let accountingRecords = [];
       $("#ld-tab-content").addEventListener("change", (e) => {
         if (e.target.id === "ld-file-input" && e.target.files.length) uploadTripSheetImages(Array.from(e.target.files));
         if (e.target.id === "ld-rate-total") commitRateOverride(e.target.value);
-        if (e.target.id === "ld-birm-toggle" && loadDetailsState) toggleBirm(loadDetailsState.rowId);
+        if (e.target.id === "ld-route-type-select" && loadDetailsState) changeRouteType(loadDetailsState.rowId, e.target.value);
+        if (e.target.id === "ld-hostler-hours" && loadDetailsState) setHostlerHours(loadDetailsState.rowId, e.target.value);
         if (e.target.dataset.rateTierId != null && e.target.dataset.rateTierId !== "") commitRateBoxOverride("tier", Number(e.target.dataset.rateTierId), e.target.value);
         if (e.target.dataset.rateSettingKey) commitRateBoxOverride("setting", e.target.dataset.rateSettingKey, e.target.value);
       });

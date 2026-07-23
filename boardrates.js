@@ -81,23 +81,6 @@ export async function saveSetting(location, key, newValue) {
   return true;
 }
 
-// Hostler hours = Shift Complete timestamp minus Shift Start time-of-day,
-// both anchored to the shift's own date. Returns null (not zero) until the
-// shift is actually marked complete — there's no honest hours number before
-// then, and showing 0 would look like a real (and wrong) answer.
-export function computeHoursWorked(row) {
-  if (!row.shiftComplete || !row.shiftCompleteAt || !row.shiftStart) return null;
-  const m = /^(\d{1,2}):(\d{2})$/.exec(String(row.shiftStart).trim());
-  if (!m) return null;
-  const base = row.shiftDate ? new Date(row.shiftDate + "T00:00:00") : new Date(row.shiftCompleteAt);
-  const start = new Date(base);
-  start.setHours(Number(m[1]), Number(m[2]), 0, 0);
-  const end = new Date(row.shiftCompleteAt);
-  let diffMs = end.getTime() - start.getTime();
-  if (diffMs < 0) diffMs += 24 * 60 * 60 * 1000; // shift crossed midnight
-  return Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100;
-}
-
 // A load's own rate_overrides (row.rateOverrides = {tiers:{id:rate}, settings:{key:value}})
 // always win over the shared board_rate_tiers/board_rate_settings default —
 // these two helpers are the single place that "which number actually
@@ -178,17 +161,22 @@ export function calcLoadRateBreakdown(locationKey, row) {
   }
 
   if (locationKey === "buildingc") {
-    if (row.birm) {
+    const routeType = row.routeType || "birm";
+    if (routeType === "birm") {
       const flat = effectiveSetting(row, locationKey, "birm_flat", 800);
       return { total: flat, mode: "birm", lines: [{ label: "BIRM", detail: "Flat BIRM rate", amount: flat }], note: null };
     }
-    const hourly = effectiveSetting(row, locationKey, "hostler_hourly", 100);
-    const hours = computeHoursWorked(row);
-    if (hours == null) {
-      return { total: 0, mode: "hostler", lines: [], note: "Shift not complete yet — Hostler hours aren't known until Shift Complete is marked." };
+    if (routeType === "hostler") {
+      const hourly = effectiveSetting(row, locationKey, "hostler_hourly", 100);
+      const hours = parseFloat(row.hostlerHours);
+      if (isNaN(hours) || hours <= 0) {
+        return { total: 0, mode: "hostler", lines: [], note: "Enter the shift length to calculate the Hostler rate." };
+      }
+      const total = Math.round(hours * hourly * 100) / 100;
+      return { total, mode: "hostler", lines: [{ label: "Hostler", detail: `${hours} hrs × $${hourly}/hr`, amount: total }], note: null };
     }
-    const total = Math.round(hours * hourly * 100) / 100;
-    return { total, mode: "hostler", lines: [{ label: "Hostler", detail: `${hours} hrs × $${hourly}/hr`, amount: total }], note: null };
+    // na
+    return { total: 0, mode: "na", lines: [], note: "Marked N/A — no automatic rate for this route type." };
   }
 
   // houston (and anywhere else) — flat, no per-route breakdown to show
