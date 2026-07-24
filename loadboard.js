@@ -18,7 +18,7 @@ import { sendShiftToAccounting } from './accountingcalc.js';
 import { initHoustonBoardPage } from './houston.js';
 import { initMondelezPage } from './mondelez.js';
 import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_MIN, PRE_SHIFT_CALL_FOLLOWUP_MIN } from './alerts.js';
-import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveTierRate, effectiveSetting, isTierOverridden, isSettingOverridden } from './boardrates.js';
+import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveTierRate, effectiveSetting, isTierOverridden, isSettingOverridden, isDriverTierOverridden, isDriverSettingOverridden } from './boardrates.js';
 
   /* ---------------- page map (single source of truth for nav) ---------------- */
 
@@ -71,7 +71,6 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     { key: "salvageBhaulRefusedBy",  label: "Refused By",          type: "text", group: "backhaul", pistachio: true },
     { key: "backhaulTrailerNumber",  label: "B/Haul Trailer #",    type: "text", group: "backhaul", pistachio: true },
     { key: "returnEtaToDc",          label: "Return ETA to DC",    type: "time", group: "backhaul", pistachio: true },
-    { key: "ppwkReceived",           label: "Ppwk Rec'd",          type: "checkbox", group: "backhaul", pistachio: true },
     { key: "routeEstHours",   label: "Route Est Hours",    type: "text", small: true, inputmode: "decimal", group: "estimate" },
     // Not in the latest specified order -- kept available (hidden by
     // default) rather than deleted, since removal wasn't explicit. Flagged
@@ -134,35 +133,51 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
   export const ACCOUNTING_TABLE = "loads_accounting";
   export const ACCOUNTING_ROUTES_TABLE = "loads_accounting_routes";
 
-  // The Supabase CDN <script> tag should always finish before this module
-  // (module scripts are deferred by the browser regardless of the defer
-  // attribute), but a slow network or a flaky CDN edge can occasionally
-  // still win the race. Rather than giving up forever the instant
-  // window.supabase isn't there yet, wait briefly for it to show up —
-  // this uses top-level await, so nothing that imports from this module
-  // (which is everything) runs until this resolves one way or the other.
-  async function waitForSupabaseGlobal(maxWaitMs) {
-    if (typeof window === "undefined") return null;
+  // Starts as null so module evaluation itself never blocks or waits on
+  // anything — initSupabaseClient() (called from init(), after
+  // DOMContentLoaded) does the actual waiting for the CDN script and
+  // assigns this. Every usage across every file is inside a function
+  // body that only ever runs after init() has completed, so this being
+  // temporarily null at module-load time is safe — nothing reads it that
+  // early. `let` + export gives every importer a live binding, so they
+  // all see the real client the moment it's assigned here.
+  export let supabaseClient = null;
+
+  async function initSupabaseClient() {
+    if (typeof window === "undefined") return;
     const start = Date.now();
-    while (!window.supabase && Date.now() - start < maxWaitMs) {
+    while (!window.supabase && Date.now() - start < 4000) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    return window.supabase || null;
-  }
-
-  const supabaseGlobal = await waitForSupabaseGlobal(4000);
-  export const supabaseClient = supabaseGlobal
-    ? supabaseGlobal.createClient(SUPABASE_URL, SUPABASE_KEY, {
+    if (window.supabase) {
+      supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
         auth: { persistSession: true, autoRefreshToken: true, storageKey: "dl-dispatch-auth" },
-      })
-    : null;
+      });
+    }
+  }
 
   let currentUserRole = null; // set by requireAuth() before any page-specific init runs
   let currentUserLabel = null; // "username" (the @dltransport.local suffix stripped) — used for audit logging
 
   async function requireAuth() {
     if (!supabaseClient) return true; // no client configured (e.g. local test) — don't block
-    const { data } = await supabaseClient.auth.getSession();
+    let sessionResult;
+    try {
+      sessionResult = await Promise.race([
+        supabaseClient.auth.getSession(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("timed out checking login session")), 6000)),
+      ]);
+    } catch (e) {
+      // getSession() hanging or erroring should never leave the app stuck
+      // forever with zero feedback — treat it the same as "not logged in"
+      // and send to login, but log it clearly since a hang here usually
+      // means something's actually wrong (stale/corrupted auth token in
+      // local storage is the most common cause).
+      console.error("requireAuth(): session check failed or timed out —", e);
+      window.location.href = "login.html";
+      return false;
+    }
+    const { data } = sessionResult;
     if (!data.session) {
       window.location.href = "login.html";
       return false;
@@ -200,6 +215,9 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       "Carrier": d.carrier || null,
       "Rate/booking contact": d.rateBooking || null,
       "location": d.location || "atlanta",
+      "normal_rate": d.normalRate !== "" && d.normalRate != null ? Number(d.normalRate) : null,
+      "runs_out_of": d.runsOutOf && d.runsOutOf.length ? d.runsOutOf : null,
+      "atlanta_rate_overrides": d.atlantaRateOverrides && (Object.keys(d.atlantaRateOverrides.tiers || {}).length || Object.keys(d.atlantaRateOverrides.settings || {}).length) ? d.atlantaRateOverrides : null,
     };
   }
   function driverFromDbRow(row) {
@@ -219,6 +237,8 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       carrier: row["Carrier"] || "",
       rateBooking: row["Rate/booking contact"] || "",
       normalRate: row["normal_rate"] != null ? String(row["normal_rate"]) : "",
+      runsOutOf: row["runs_out_of"] || [],
+      atlantaRateOverrides: row["atlanta_rate_overrides"] ? { tiers: row["atlanta_rate_overrides"].tiers || {}, settings: row["atlanta_rate_overrides"].settings || {} } : { tiers: {}, settings: {} },
       location: row["location"] || "atlanta",
       addedAt: null,
     };
@@ -402,9 +422,11 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
 
   export function parseHHMM(str) {
     if (!str) return null;
-    const m = /^(\d{1,2}):(\d{2})$/.exec(str.trim());
+    const m = /^(\d{1,2}):?(\d{2})$/.exec(String(str).trim());
     if (!m) return null;
-    return Number(m[1]) * 60 + Number(m[2]);
+    const h = Number(m[1]), mm = Number(m[2]);
+    if (h > 23 || mm > 59) return null;
+    return h * 60 + mm;
   }
   export function minsToClock(mins) {
     if (mins == null || isNaN(mins)) return "";
@@ -431,6 +453,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     pendingAddLoadDriverId: null,
     addDriverNestedFromLoad: false,
     driverSort: { key: null, dir: "asc" },
+    boardSort: { key: "shiftStart", dir: "asc" },
     driverListTab: "atlanta", // only meaningful on the Driver List page — its 3 tabs
     datesWithData: new Set(), // which days in the browsable range have any loads — for the date dropdown
     hiddenCols: new Set([
@@ -467,6 +490,34 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     const cmp = (key === "mc" || key === "normalRate")
       ? Number(av) - Number(bv)
       : String(av).localeCompare(String(bv), undefined, { sensitivity: "base", numeric: true });
+    return dir === "desc" ? -cmp : cmp;
+  }
+
+  // Board grid sort — Driver sorts alphabetically; Shift Start / ETA /
+  // Next Call Time sort chronologically (parsed as HH:MM, not as plain
+  // text, so "9:00" and "09:00" both land in the right place and "13:00"
+  // doesn't sort before "9:00" the way it would as a string).
+  function compareRowsForSort(a, b, key, dir) {
+    let av, bv;
+    if (key === "driverName") {
+      const da = a.driverId ? findDriver(a.driverId) : null;
+      const db = b.driverId ? findDriver(b.driverId) : null;
+      av = (da ? da.name : a.driverNameText) || "";
+      bv = (db ? db.name : b.driverNameText) || "";
+      const aEmpty = !av.trim(), bEmpty = !bv.trim();
+      if (aEmpty && bEmpty) return 0;
+      if (aEmpty) return 1;
+      if (bEmpty) return -1;
+      const cmp = av.localeCompare(bv, undefined, { sensitivity: "base", numeric: true });
+      return dir === "desc" ? -cmp : cmp;
+    }
+    if (key === "nextCallTimeCalc") { av = parseHHMM(computeNextCallTimeForRow(a)); bv = parseHHMM(computeNextCallTimeForRow(b)); }
+    else { av = parseHHMM(a[key]); bv = parseHHMM(b[key]); }
+    const aEmpty = av == null, bEmpty = bv == null;
+    if (aEmpty && bEmpty) return 0;
+    if (aEmpty) return 1;
+    if (bEmpty) return -1;
+    const cmp = av - bv;
     return dir === "desc" ? -cmp : cmp;
   }
 
@@ -733,12 +784,42 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     $("#st-stop-fields").innerHTML = stopCount
       ? stopFieldsHtml(stopCount, [])
       : `<div class="subtext">No stop count set on this trip — nothing to fill in, but you can still confirm or skip.</div>`;
+    const ppwkCheckbox = $("#st-ppwk-received");
+    if (ppwkCheckbox) ppwkCheckbox.checked = true;
+    const uploadInput = $("#st-ppwk-upload");
+    if (uploadInput) uploadInput.value = "";
+    const statusEl = $("#st-upload-status");
+    if (statusEl) statusEl.textContent = "";
+    const dropLocationInput = $("#st-trailer-drop-location");
+    if (dropLocationInput) dropLocationInput.value = found.row.trailerDropLocation || "";
     $("#modal-stop-times").classList.remove("hidden");
   }
 
   function closeStopTimesModal() {
     if ($("#modal-stop-times")) $("#modal-stop-times").classList.add("hidden");
     stopTimesModalState = null;
+  }
+
+  async function uploadPaperworkImage(file) {
+    if (!stopTimesModalState || !supabaseClient) return;
+    const found = findRowAnywhere(stopTimesModalState.rowId);
+    if (!found) return;
+    const row = found.row;
+    if (!row.dbId) { setDriverSyncStatus("Save this load first (enter a driver or PRO#) before uploading paperwork.", "error"); return; }
+    const statusEl = $("#st-upload-status");
+    if (statusEl) statusEl.textContent = "Uploading…";
+    const path = `${row.dbId}/${Date.now()}_${file.name}`;
+    try {
+      const { error: upErr } = await supabaseClient.storage.from("trip-sheets").upload(path, file);
+      if (upErr) throw upErr;
+      const { error: insErr } = await supabaseClient.from("load_attachments").insert({ shift_id: row.dbId, file_path: path, file_name: file.name });
+      if (insErr) throw insErr;
+      if (statusEl) statusEl.textContent = `Uploaded: ${file.name}`;
+    } catch (e) {
+      console.error("uploadPaperworkImage failed:", e);
+      if (statusEl) statusEl.textContent = "";
+      setDriverSyncStatus(`Couldn't upload that image (${e.message || e}).`, "error");
+    }
   }
 
   async function finalizeTripCompletion(saveStopTimes) {
@@ -765,9 +846,15 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       }
     }
 
+    const ppwkCheckbox = $("#st-ppwk-received");
+    if (ppwkCheckbox) trip.ppwkReceived = ppwkCheckbox.checked;
+    const dropLocationInput = $("#st-trailer-drop-location");
+    if (dropLocationInput) row.trailerDropLocation = dropLocationInput.value.trim();
+
     trip.complete = true;
     trip.minimized = true;
     await saveTripNow(row, trip, row.trips.indexOf(trip) + 1);
+    await saveShiftNow(row); // persists the trailer drop location, which lives on the load, not the trip
     logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "route_complete", "false", "true");
     closeStopTimesModal();
     renderBoardTable();
@@ -915,16 +1002,46 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     return computeCalc(latest, row).hosLeft;
   }
 
-  // Recomputes the Rate column from the board rate engine (mileage tiers /
-  // flat-per-route / TONU / BIRM / Hostler, depending on location) and
+  // Priority for what a load's rate actually is: (1) a manual override
+  // typed directly on this load — highest priority, most specific intent
+  // wins; (2) for Atlanta, the assigned driver's own tier/setting rate
+  // card, if any of those boxes are filled in on their profile — some
+  // drivers run a negotiated structure instead of one flat number, so
+  // this lets calcLoadRateBreakdown() apply it tier-by-tier via
+  // effectiveTierRate()/effectiveSetting() in boardrates.js; (3) the
+  // driver's flat usual rate, for locations where a single number is the
+  // right shape (or as a fallback if an Atlanta driver has a flat rate
+  // but no tier boxes filled in); (4) the location's calculated
+  // tier/flat engine. This is the one place that priority gets decided,
+  // so recomputeRowRate() and the Rate panel's live breakdown can't
+  // drift from each other.
+  function getEffectiveRateInfo(row) {
+    const locationKey = row.location || state.activeLocation || "atlanta";
+    const drv = row.driverId ? findDriver(row.driverId) : null;
+    const driverOv = drv && drv.atlantaRateOverrides;
+    const hasAtlantaOverrides = driverOv && (Object.keys(driverOv.tiers || {}).length || Object.keys(driverOv.settings || {}).length);
+    if (locationKey === "atlanta" && hasAtlantaOverrides) {
+      return calcLoadRateBreakdown(locationKey, row); // picks up the driver's tier/setting overrides itself
+    }
+    if (drv && drv.normalRate) {
+      const amount = Number(drv.normalRate);
+      return {
+        total: amount, mode: "driver-usual-rate",
+        lines: [{ label: "Driver's usual rate", detail: drv.name, amount }],
+        note: null,
+      };
+    }
+    return calcLoadRateBreakdown(locationKey, row);
+  }
+
+  // Recomputes the Rate column from getEffectiveRateInfo() above and
   // writes it into row.rate — unless the dispatcher has typed a manual
   // override into that field, in which case this is a no-op so we never
   // silently clobber what they typed. Updates the live DOM cell in place
   // when present, rather than forcing a full board redraw.
   function recomputeRowRate(row) {
     if (row.rateManual) return;
-    const locationKey = row.location || state.activeLocation || "atlanta";
-    const breakdown = calcLoadRateBreakdown(locationKey, row);
+    const breakdown = getEffectiveRateInfo(row);
     const nextRate = breakdown.total ? String(breakdown.total) : "";
     if (row.rate === nextRate) return;
     row.rate = nextRate;
@@ -945,17 +1062,31 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
 
   function openTripsFor(row) {
     const open = row.trips.filter((t) => !t.minimized);
-    return open.length ? open : [row.trips[row.trips.length - 1]]; // always show at least one editable trip row
+    if (open.length) return open;
+    // Every trip is minimized/collapsed — rather than showing nothing
+    // (which would leave no way to add another route), start a genuinely
+    // new blank one. This is a real, not-minimized trip, unlike the old
+    // behavior that just displayed a completed trip as if it were open.
+    const fresh = blankTrip();
+    row.trips.push(fresh);
+    return [fresh];
   }
 
   function routesChipsHtml(row) {
-    const done = row.trips.filter((t) => t.minimized);
-    if (!done.length) return `<span class="subtext" style="font-size:11px;">—</span>`;
-    return done.map((t, i) => {
-      const statusCls = t.complete ? "trip-segment-done" : "";
-      const title = t.complete ? "Closed out — click to view" : "Click to view or edit";
-      return `<button type="button" class="trip-chip ${statusCls}" data-action="restore-trip" data-row="${row.id}" data-trip="${t.id}" title="${title}">${escapeHtml(t.routeId || t.tripId || `Route ${i + 1}`)}</button>`;
-    }).join(" ");
+    // A minimized trip only counts as a "route" worth showing here if it
+    // actually has a Route ID or Trip ID — an empty trip that got
+    // collapsed (nothing entered, or collapsed by mistake) shouldn't
+    // leave a meaningless placeholder chip behind. This column is
+    // exclusively for routes that have been completed or minimized with
+    // real data on them — nothing else belongs here.
+    const done = row.trips.filter((t) => t.minimized && (String(t.routeId || "").trim() || String(t.tripId || "").trim()));
+    return done.length
+      ? done.map((t) => {
+          const statusCls = t.complete ? "trip-segment-done" : "";
+          const title = t.complete ? "Closed out — click to view" : "Click to view or edit";
+          return `<button type="button" class="trip-chip ${statusCls}" data-action="restore-trip" data-row="${row.id}" data-trip="${t.id}" title="${title}">${escapeHtml(t.routeId || t.tripId)}</button>`;
+        }).join(" ")
+      : `<span class="subtext" style="font-size:11px;">—</span>`;
   }
 
   function tripFieldCellsHtml(row, trip) {
@@ -984,6 +1115,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
         <button type="button" class="tc-btn" data-action="minimize-trip" data-row="${row.id}" data-trip="${trip.id}" title="Collapse — doesn't mark it done">&minus;</button>
         <button type="button" class="tc-btn" data-action="add-trip" data-row="${row.id}" title="Add another trip">+</button>
         <button type="button" class="tc-btn tc-btn-primary" data-action="complete-trip" data-row="${row.id}" data-trip="${trip.id}" ${canComplete ? "" : "disabled"} title="${canComplete ? "Mark closed out" : "Enter a Route ID first"}">${trip.complete ? "✓" : "Complete"}</button>
+        <button type="button" class="tc-btn" data-action="delete-trip" data-row="${row.id}" data-trip="${trip.id}" title="Delete this route" style="color: var(--red-600, #dc2626);">&times;</button>
       </td>`;
   }
 
@@ -1031,15 +1163,14 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       <td class="col-shiftHosLeft"${rs}><input class="cell-input calc" data-row="${row.id}" data-field="shiftHosLeft" value="${escapeHtml(computeShiftLevelHosLeft(row))}" readonly tabindex="-1"></td>
       <td class="col-nextCallTimeCalc"${rs}><input class="cell-input calc" data-row="${row.id}" data-field="nextCallTimeCalc" value="${escapeHtml(computeNextCallTimeForRow(row))}" readonly tabindex="-1"></td>
       <td class="col-revLevel"${rs}><input class="cell-input small" style="width:42px;" placeholder="Rev" data-row="${row.id}" data-field="revLevel" value="${escapeHtml(row.revLevel)}"></td>
+      ${row.location === "buildingc" ? `
       <td class="col-birm"${rs}>
-        ${row.location === "buildingc" ? `
           <select class="cell-input small" data-action="change-route-type" data-row="${row.id}">
             <option value="birm" ${row.routeType === "birm" ? "selected" : ""}>BIRM</option>
             <option value="hostler" ${row.routeType === "hostler" ? "selected" : ""}>Hostler</option>
             <option value="na" ${row.routeType === "na" ? "selected" : ""}>N/A</option>
           </select>
-        ` : `<span class="static-text">—</span>`}
-      </td>
+      </td>` : ""}
       <td class="col-notes"${rs}><input class="cell-input" placeholder="Notes" data-row="${row.id}" data-field="notes" value="${escapeHtml(row.notes)}"></td>
       <td class="col-routes"${rs}>${routesChipsHtml(row)}</td>`;
   }
@@ -1052,6 +1183,15 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       row.selected ? "is-row-selected" : "",
       row.addedAt ? "is-new" : "",
     ].join(" ");
+    if (!open.length) {
+      // Every trip is minimized — still need exactly one <tr> so the
+      // shift-level info (PRO#, driver, etc.) has somewhere to render;
+      // the trip-specific columns just stay blank rather than forcing a
+      // completed trip to display as if it were still open.
+      const shiftCells = shiftInfoCellsHtml(row, 1);
+      const blankTripCells = getOrderedTripSubcols().map((col) => `<td class="col-${col.key}${col.pistachio ? " col-pistachio" : ""}"></td>`).join("") + `<td class="col-trip-actions"></td>`;
+      return `<tr id="${row.id}" class="${rowClasses}">${shiftCells}${blankTripCells}</tr>`;
+    }
     return open.map((trip, i) => {
       const idAttr = i === 0 ? ` id="${row.id}"` : ` id="${row.id}__${trip.id}" data-parent-row="${row.id}"`;
       const shiftCells = i === 0 ? shiftInfoCellsHtml(row, open.length) : "";
@@ -1160,14 +1300,20 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
   function renderBoardTable() {
     if (!$("#board-table")) return; // this page (e.g. Accounting) has no board grid — nothing to redraw
     const rows = getSheet(state.activeLocation, state.activeDate);
-    const displayRows = [...rows].sort((a, b) => (a.shiftComplete ? 1 : 0) - (b.shiftComplete ? 1 : 0)); // stable — completed shifts sink to the bottom, order preserved otherwise
+    const sortKey = state.boardSort.key;
+    const displayRows = [...rows].sort((a, b) => {
+      const completeDiff = (a.shiftComplete ? 1 : 0) - (b.shiftComplete ? 1 : 0); // completed shifts always sink to the bottom
+      if (completeDiff !== 0) return completeDiff;
+      if (!sortKey) return 0;
+      return compareRowsForSort(a, b, sortKey, state.boardSort.dir);
+    });
     const tripHeaderCells = getOrderedTripSubcols().map((c) => {
       const pistachioCls = c.pistachio ? " col-pistachio" : "";
       return `<th class="col-${c.key}${pistachioCls} col-draggable" draggable="true" data-col-key="${c.key}" title="Drag to reorder">${c.label}</th>`;
     }).join("");
     const thead = `<thead>
       <tr>
-        <th class="pin pin-select"><input type="checkbox" class="chk" id="select-all-rows" title="Select all"></th>
+        <th class="pin pin-select"><div id="board-select-count" class="board-select-count"></div><input type="checkbox" class="chk" id="select-all-rows" title="Select all"></th>
         <th class="pin pin-text"></th>
         <th class="col-email">Email</th>
         <th class="col-dispatcherPhone">Dispatcher Phone</th>
@@ -1176,23 +1322,26 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
         <th class="col-mc">MC #</th>
         <th class="col-rating">Rating</th>
         <th class="col-driverPreference">Driver Preference</th>
-        <th class="pin pin-driver">Driver</th>
+        <th class="pin pin-driver board-sortable" data-board-sort="driverName">Driver<span class="sort-arrow"></span></th>
         <th class="col-rate">Rate</th>
         <th class="col-cell">Cell</th>
-        <th class="col-shiftStart">Shift Start</th>
-        <th class="col-etaShiftReport">ETA</th>
+        <th class="col-shiftStart board-sortable" data-board-sort="shiftStart">Shift Start<span class="sort-arrow"></span></th>
+        <th class="col-etaShiftReport board-sortable" data-board-sort="etaShiftReport">ETA<span class="sort-arrow"></span></th>
         <th class="col-shiftHosLeft">HOS Left</th>
-        <th class="col-nextCallTimeCalc">Next Call Time</th>
+        <th class="col-nextCallTimeCalc board-sortable" data-board-sort="nextCallTimeCalc">Next Call Time<span class="sort-arrow"></span></th>
         <th class="col-revLevel">Rev Level</th>
-        <th class="col-birm" title="Building C only">Route</th>
+        ${state.activeLocation === "buildingc" ? `<th class="col-birm" title="Building C only">Route</th>` : ""}
         <th class="col-notes">Notes</th>
         <th class="col-routes">Routes</th>
         ${tripHeaderCells}
         <th class="col-trip-actions"></th>
       </tr>
     </thead>`;
-    const totalCols = 20 + TRIP_SUBCOLS.length + 1;
-    const addRowHtml = `<tr class="quick-add-row"><td colspan="${totalCols}"><button type="button" class="quick-add-btn" id="btn-quick-add-row"><span class="quick-add-btn-label">+ Add Row</span></button></td></tr>`;
+    const totalCols = 20 + TRIP_SUBCOLS.length + 1 + (state.activeLocation === "buildingc" ? 1 : 0);
+    const addRowHtml = `<tr class="quick-add-row"><td colspan="${totalCols}">
+      <button type="button" class="quick-add-btn" id="btn-quick-add-row"><span class="quick-add-btn-label">+ Add Row</span></button>
+      <button type="button" class="quick-add-btn quick-add-btn-secondary" id="btn-add-time-slots"><span class="quick-add-btn-label">+ Add Time Slots</span></button>
+    </td></tr>`;
     const tbody = `<tbody>${displayRows.map(rowsToHtml).join("")}${addRowHtml}</tbody>`;
 
     $("#board-table").innerHTML = thead + tbody;
@@ -1200,6 +1349,12 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     if (emptyState) emptyState.classList.toggle("hidden", rows.length > 0);
     refreshDriverDatalist();
     updateBulkActionButtonsVisibility();
+    updateBoardSelectCount();
+    $all("th[data-board-sort]").forEach((th) => {
+      const arrow = th.querySelector(".sort-arrow");
+      if (!arrow) return;
+      arrow.textContent = state.boardSort.key === th.dataset.boardSort ? (state.boardSort.dir === "asc" ? " ▲" : " ▼") : "";
+    });
   }
 
   // Async — the actual "switch to this day" entry point. Fetches from
@@ -1335,13 +1490,20 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     else if (state.activeLocation) renderBoardTable(); // driver-linked display cells may need refreshing
   }
 
+  // Reused for both postgres_changes sync and the "someone's typing here"
+  // broadcast below — one channel per location, not two.
+  let boardChannel = null;
+  const editingSessionId = uid("session"); // distinguishes our own broadcasts from other tabs' so we don't highlight our own row
+
   function setupRealtimeSync(locationKey) {
     if (!supabaseClient) return;
     const channel = supabaseClient.channel(`board-${locationKey}`);
     channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_shifts", filter: `location=eq.${locationKey}` }, handleRealtimeShiftChange);
     channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_trips" }, handleRealtimeTripChange);
     channel.on("postgres_changes", { event: "*", schema: "public", table: "atlanta_drivers" }, handleRealtimeDriverChange);
+    channel.on("broadcast", { event: "row-editing" }, ({ payload }) => handleRemoteRowEditing(payload));
     channel.subscribe();
+    boardChannel = channel;
   }
 
   function setupDriverListRealtimeSync() {
@@ -1349,6 +1511,58 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     const channel = supabaseClient.channel("driverlist");
     channel.on("postgres_changes", { event: "*", schema: "public", table: "atlanta_drivers" }, handleRealtimeDriverChange);
     channel.subscribe();
+  }
+
+  /* ---------------- live "someone's typing here" row highlight ----------------
+     Ephemeral broadcast, not stored anywhere — a row highlights for every
+     other dispatcher on the same board while anyone has a field in it
+     focused, and un-highlights shortly after they leave. A repeating
+     ping while focus stays in the row means a dropped "stopped editing"
+     event (tab closed, network hiccup) can't leave a row stuck
+     highlighted forever — the receiving side times it out on its own. */
+  let editingRowId = null;
+  let editingPingInterval = null;
+  const remoteEditingTimeouts = new Map(); // rowId -> timeout handle
+
+  function broadcastEditingState(rowId, editing) {
+    if (!boardChannel) return;
+    boardChannel.send({ type: "broadcast", event: "row-editing", payload: { rowId, editing, from: editingSessionId } });
+  }
+
+  function handleRowFocusIn(e) {
+    const tr = e.target.closest("tr[id]");
+    if (!tr || !tr.id || tr.id === editingRowId) return;
+    editingRowId = tr.id;
+    tr.classList.add("is-being-edited"); // shows locally too — helps the person typing track which row they're in, same as everyone else sees
+    broadcastEditingState(tr.id, true);
+    clearInterval(editingPingInterval);
+    editingPingInterval = setInterval(() => broadcastEditingState(tr.id, true), 4000);
+  }
+
+  function handleRowFocusOut(e) {
+    const tr = e.target.closest("tr[id]");
+    if (!tr || tr.id !== editingRowId) return;
+    if (e.relatedTarget && tr.contains(e.relatedTarget)) return; // focus just moved to another field in the same row
+    tr.classList.remove("is-being-edited");
+    broadcastEditingState(tr.id, false);
+    editingRowId = null;
+    clearInterval(editingPingInterval);
+  }
+
+  function handleRemoteRowEditing(payload) {
+    if (!payload || payload.from === editingSessionId) return; // ignore our own broadcasts
+    const { rowId, editing } = payload;
+    const tr = document.getElementById(rowId);
+    clearTimeout(remoteEditingTimeouts.get(rowId));
+    if (editing) {
+      if (tr) tr.classList.add("is-being-edited");
+      remoteEditingTimeouts.set(rowId, setTimeout(() => {
+        const el = document.getElementById(rowId);
+        if (el) el.classList.remove("is-being-edited");
+      }, 8000));
+    } else if (tr) {
+      tr.classList.remove("is-being-edited");
+    }
   }
 
   /* ---------------- rendering: driver list ---------------- */
@@ -1365,7 +1579,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     if (!body) return;
     const tbody = getSortedDrivers().map((d) => `
       <tr id="dl-${d.id}" class="${d.addedAt ? "is-new" : ""}">
-        <td><button class="edit-driver-btn" data-action="edit-driver" data-driver-id="${d.id}">Edit</button></td>
+        <td><button type="button" class="cell-link-btn" data-action="edit-driver" data-driver-id="${d.id}" title="Open driver profile">↗</button></td>
         <td>${escapeHtml(d.name)}</td>
         <td>${escapeHtml(d.phone || "—")}</td>
         <td>${escapeHtml(d.mc || "—")}</td>
@@ -1458,6 +1672,14 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     if ($("#btn-text-selected")) $("#btn-text-selected").classList.toggle("hidden", !anySelected);
   }
 
+  function updateBoardSelectCount() {
+    const el = $("#board-select-count");
+    if (!el) return;
+    const rows = getSheet(state.activeLocation, state.activeDate);
+    const selectedCount = rows.filter((r) => r.selected).length;
+    el.textContent = `Count ${rows.length} (${selectedCount} selected)`;
+  }
+
   function toggleRowSelected(rowId) {
     const found = findRowAnywhere(rowId);
     if (!found) return;
@@ -1465,6 +1687,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     const tr = document.getElementById(rowId);
     if (tr) tr.classList.toggle("is-row-selected", found.row.selected);
     updateBulkActionButtonsVisibility();
+    updateBoardSelectCount();
   }
 
   function selectAllRows(checked) {
@@ -1479,6 +1702,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       }
     });
     updateBulkActionButtonsVisibility();
+    updateBoardSelectCount();
   }
 
   let timesheetModalState = null; // { rowId, queue: [rowId, ...] } — queue is for bulk-complete chaining
@@ -1630,6 +1854,18 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     renderBoardTable();
   }
 
+  // A driver showing up twice on the same day is usually a mistake, but
+  // not always — so this just flags it rather than blocking the
+  // assignment. Scoped to the current location + day, not across boards.
+  function warnIfDriverAlreadyScheduled(row, driverId) {
+    const sheet = getSheet(state.activeLocation, state.activeDate);
+    const conflict = sheet.find((r) => r.id !== row.id && r.driverId && String(r.driverId) === String(driverId));
+    if (!conflict) return;
+    const drv = findDriver(driverId);
+    const label = conflict.proNumber ? `PRO# ${conflict.proNumber}` : "another load";
+    alert(`${drv ? drv.name : "This driver"} is already scheduled today on ${label}.\n\nThat's fine if it's intentional — just flagging it in case it's not.`);
+  }
+
   async function deleteRow(rowId) {
     const found = findRowAnywhere(rowId);
     if (!found) return;
@@ -1652,6 +1888,37 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       } catch (e) {
         console.error("deleteRow failed:", e);
         setDriverSyncStatus(`Row removed here, but couldn't delete it from the database (${e.message || e}) — it may come back on refresh.`, "error");
+      }
+    }
+  }
+
+  async function deleteTrip(rowId, tripId) {
+    const found = findRowAnywhere(rowId);
+    if (!found) return;
+    const row = found.row;
+    const trip = row.trips.find((t) => t.id === tripId);
+    if (!trip) return;
+    if (row.trips.length <= 1) {
+      alert("A load needs at least one route on it — clear its fields instead of deleting the only one.");
+      return;
+    }
+    const label = trip.routeId || trip.tripId || "this route";
+    if (!confirm(`Delete route ${label}? This can't be undone.`)) return;
+
+    logChange(row.dbId, `${labelForRow(row)} — ${label}`, "route_deleted", "active", "deleted");
+
+    const idx = row.trips.findIndex((t) => t.id === tripId);
+    if (idx !== -1) row.trips.splice(idx, 1);
+    renderBoardTable();
+    recomputeRowRate(row);
+
+    if (trip.dbId && supabaseClient) {
+      try {
+        const { error } = await supabaseClient.from(TRIPS_TABLE).delete().eq("id", trip.dbId);
+        if (error) throw error;
+      } catch (e) {
+        console.error("deleteTrip failed:", e);
+        setDriverSyncStatus(`Route removed here, but couldn't delete it from the database (${e.message || e}) — it may come back on refresh.`, "error");
       }
     }
   }
@@ -2085,9 +2352,9 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
   function rateSectionHtml(row) {
     const locationKey = row.location || state.activeLocation || "atlanta";
     const tiers = (getBoardRateTiers() && getBoardRateTiers()[locationKey]) || [];
-    const breakdown = calcLoadRateBreakdown(locationKey, row);
+    const breakdown = getEffectiveRateInfo(row);
     const val = (key, fallback) => effectiveSetting(row, locationKey, key, fallback);
-    const isOv = (key) => isSettingOverridden(row, key);
+    const isOv = (key) => isSettingOverridden(row, key) || isDriverSettingOverridden(row, key);
 
     let defaultsHtml;
     if (locationKey === "atlanta") {
@@ -2097,7 +2364,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
           ${tiers.map((t) => rateTierBox(
             `${t.min}-${t.max}MI`,
             `<input type="number" step="0.01" data-rate-tier-id="${t.id}" value="${effectiveTierRate(row, t)}">`,
-            isTierOverridden(row, t.id)
+            isTierOverridden(row, t.id) || isDriverTierOverridden(row, t.id)
           )).join("")}
           ${rateTierBox(`Over ${overMax}MI ($/mi)`, `<input type="number" step="0.01" data-rate-setting-key="over_tier_per_mile" value="${val("over_tier_per_mile", 2.4)}">`, isOv("over_tier_per_mile"))}
           ${rateTierBox("Stops", `<input type="number" step="1" data-rate-setting-key="stop_charge_free_stops" value="${val("stop_charge_free_stops", 2)}">`, isOv("stop_charge_free_stops"))}
@@ -2179,7 +2446,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
         mainHtml = `
           <div class="ld-edit-bar"><button type="button" class="btn btn-ghost" data-ld-edit="overview">Edit</button></div>
           <div class="field-box-grid">
-            <fieldset class="field-box"><legend>Driver</legend><div class="static-text">${escapeHtml(drv ? drv.name : (row.driverNameText || "—"))}</div></fieldset>
+            <fieldset class="field-box"><legend>Driver</legend><div class="static-text">${escapeHtml(drv ? drv.name : (row.driverNameText || "—"))}${drv ? ` <button type="button" class="inline-add-driver" data-action="edit-driver" data-driver-id="${drv.id}" style="margin-left:6px;">View Profile</button>` : ""}</div></fieldset>
             <fieldset class="field-box"><legend>Status</legend><div class="static-text">${row.shiftComplete ? "Complete" : "Active"}</div></fieldset>
             <fieldset class="field-box"><legend>Trips</legend><div class="static-text">${row.trips.length}</div></fieldset>
             <fieldset class="field-box" style="grid-column: span 2;">
@@ -2619,15 +2886,66 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
   function setVal(id, val) { const el = $("#" + id); if (el) el.value = val; }
   function setText(id, text) { const el = $("#" + id); if (el) el.textContent = text; }
 
+  // Same box style as the Load Details Rate panel, but scoped to one
+  // driver's personal rate card instead of one load — every box left
+  // blank just means "use the normal Atlanta default for this driver."
+  function driverAtlantaRateBoxesHtml(overrides) {
+    const tiers = (getBoardRateTiers() && getBoardRateTiers().atlanta) || [];
+    const ov = overrides || { tiers: {}, settings: {} };
+    const overMax = tiers.length ? tiers[tiers.length - 1].max : 187;
+    const box = (label, inputHtml) => `<fieldset class="rate-tier-box"><legend>${label}</legend>${inputHtml}</fieldset>`;
+    return `
+      <div class="rate-tier-grid" style="grid-template-columns: repeat(2, 1fr);">
+        ${tiers.map((t) => box(`${t.min}-${t.max}MI`, `<input type="number" step="0.01" data-dr-tier-id="${t.id}" value="${ov.tiers[t.id] ?? ""}" placeholder="default">`)).join("")}
+        ${box(`Over ${overMax}MI ($/mi)`, `<input type="number" step="0.01" data-dr-setting-key="over_tier_per_mile" value="${ov.settings.over_tier_per_mile ?? ""}" placeholder="default">`)}
+        ${box("Stops", `<input type="number" step="1" data-dr-setting-key="stop_charge_free_stops" value="${ov.settings.stop_charge_free_stops ?? ""}" placeholder="default">`)}
+        ${box("$/extra stop", `<input type="number" step="0.01" data-dr-setting-key="stop_charge_per_stop" value="${ov.settings.stop_charge_per_stop ?? ""}" placeholder="default">`)}
+        ${box("TONU flat", `<input type="number" step="0.01" data-dr-setting-key="tonu_flat" value="${ov.settings.tonu_flat ?? ""}" placeholder="default">`)}
+      </div>`;
+  }
+
+  function updateAtlantaRateSectionVisibility() {
+    const section = $("#ad-atlanta-rate-section");
+    if (!section) return;
+    const atlantaChecked = $('input[name="ad-runs-out-of"][value="atlanta"]');
+    section.classList.toggle("hidden", !(atlantaChecked && atlantaChecked.checked));
+  }
+
+  function readAtlantaRateOverridesFromForm() {
+    const section = $("#ad-atlanta-rate-section");
+    if (!section) return null;
+    const overrides = { tiers: {}, settings: {} };
+    $all("[data-dr-tier-id]", section).forEach((el) => {
+      const v = el.value.trim();
+      if (v !== "") overrides.tiers[el.dataset.drTierId] = Number(v);
+    });
+    $all("[data-dr-setting-key]", section).forEach((el) => {
+      const v = el.value.trim();
+      if (v !== "") overrides.settings[el.dataset.drSettingKey] = Number(v);
+    });
+    return (Object.keys(overrides.tiers).length || Object.keys(overrides.settings).length) ? overrides : null;
+  }
+
+
   export function openAddDriverModal(nestedFromLoad) {
     const modalEl = $("#modal-add-driver");
     if (!modalEl) { console.error('openAddDriverModal: #modal-add-driver not found on this page.'); return; }
     state.addDriverNestedFromLoad = !!nestedFromLoad;
     state.editingDriverId = null;
+    driverProfileState = null; // no driver yet — nothing to show history/notes for
     modalEl.classList.remove("hidden"); // open first — a missing field below should never block this
-    ["ad-name", "ad-phone", "ad-mc", "ad-dispatcher-phone", "ad-email", "ad-email2", "ad-rating", "ad-preference", "ad-carrier", "ad-rate-booking", "ad-notes", "ad-tii-amount"]
+    const tabStrip = $("#ad-modal-tabs");
+    if (tabStrip) tabStrip.classList.add("hidden");
+    const editEl = $("#ad-tab-edit"); if (editEl) editEl.classList.remove("hidden");
+    const historyEl = $("#ad-tab-history"); if (historyEl) historyEl.classList.add("hidden");
+    const notesEl = $("#ad-tab-notes"); if (notesEl) notesEl.classList.add("hidden");
+    ["ad-name", "ad-phone", "ad-mc", "ad-dispatcher-phone", "ad-email", "ad-email2", "ad-rating", "ad-preference", "ad-carrier", "ad-rate-booking", "ad-notes", "ad-tii-amount", "ad-rate"]
       .forEach((id) => setVal(id, ""));
     $all('input[name="ad-tia"]').forEach((r) => (r.checked = r.value === "no"));
+    $all('input[name="ad-runs-out-of"]').forEach((c) => { c.checked = false; });
+    const atlantaBoxes = $("#ad-atlanta-rate-boxes");
+    if (atlantaBoxes) atlantaBoxes.innerHTML = driverAtlantaRateBoxesHtml(null);
+    updateAtlantaRateSectionVisibility();
     $all(".field", modalEl).forEach((f) => f.classList.remove("has-error"));
     setText("ad-modal-title", "Add Driver");
     setText("ad-submit", "Add");
@@ -2635,7 +2953,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     if (nameEl) nameEl.focus();
   }
 
-  function openEditDriverModal(driverId) {
+  export function openEditDriverModal(driverId) {
     const d = findDriver(driverId);
     if (!d) { console.error("openEditDriverModal: no driver found for id", driverId); return; }
     const modalEl = $("#modal-add-driver");
@@ -2643,7 +2961,16 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     state.addDriverNestedFromLoad = false;
     state.editingDriverId = driverId;
     state.editingDriverLocation = d.location || "atlanta";
+    driverProfileState = { driverId, activeTab: "edit", history: null, notes: null };
     modalEl.classList.remove("hidden"); // open first — a missing field below should never block this
+    const tabStrip = $("#ad-modal-tabs");
+    if (tabStrip) {
+      tabStrip.classList.remove("hidden");
+      $all("[data-ad-tab]", tabStrip).forEach((btn) => btn.classList.toggle("is-active", btn.dataset.adTab === "edit"));
+    }
+    const editEl = $("#ad-tab-edit"); if (editEl) editEl.classList.remove("hidden");
+    const historyEl = $("#ad-tab-history"); if (historyEl) historyEl.classList.add("hidden");
+    const notesEl = $("#ad-tab-notes"); if (notesEl) notesEl.classList.add("hidden");
     setVal("ad-name", d.name || "");
     setVal("ad-phone", d.phone || "");
     setVal("ad-mc", d.mc || "");
@@ -2655,16 +2982,25 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     setVal("ad-carrier", d.carrier || "");
     setVal("ad-rate-booking", d.rateBooking || "");
     setVal("ad-notes", d.notes || "");
+    setVal("ad-rate", d.normalRate || "");
     $all('input[name="ad-tia"]').forEach((r) => (r.checked = r.value === (d.tia ? "yes" : "no")));
     setVal("ad-tii-amount", d.tiiAmount != null ? d.tiiAmount : "");
+    const runsOutOf = d.runsOutOf || [];
+    $all('input[name="ad-runs-out-of"]').forEach((c) => { c.checked = runsOutOf.includes(c.value); });
+    const atlantaBoxes = $("#ad-atlanta-rate-boxes");
+    if (atlantaBoxes) atlantaBoxes.innerHTML = driverAtlantaRateBoxesHtml(d.atlantaRateOverrides);
+    updateAtlantaRateSectionVisibility();
     $all(".field", modalEl).forEach((f) => f.classList.remove("has-error"));
-    setText("ad-modal-title", "Edit Driver");
+    setText("ad-modal-title", `${d.name} — Driver Profile`);
     setText("ad-submit", "Save");
     const nameEl = $("#ad-name");
     if (nameEl) nameEl.focus();
   }
 
-  function closeAddDriverModal() { $("#modal-add-driver").classList.add("hidden"); }
+  function closeAddDriverModal() {
+    $("#modal-add-driver").classList.add("hidden");
+    driverProfileState = null;
+  }
 
   async function submitDriverForm() {
     const name = $("#ad-name").value.trim();
@@ -2695,6 +3031,9 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       rateBooking: $("#ad-rate-booking").value.trim(),
       tia: $all('input[name="ad-tia"]').find((r) => r.checked).value === "yes",
       tiiAmount: $("#ad-tii-amount").value.trim() ? Number($("#ad-tii-amount").value) : null,
+      normalRate: $("#ad-rate").value.trim() || null,
+      runsOutOf: $all('input[name="ad-runs-out-of"]').filter((c) => c.checked).map((c) => c.value),
+      atlantaRateOverrides: readAtlantaRateOverridesFromForm(),
       location: isEdit ? state.editingDriverLocation : (state.activeLocation === "buildingc" ? "atlanta" : (state.activeLocation || state.driverListTab || "atlanta")),
     };
 
@@ -2743,6 +3082,119 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     }
   }
 
+  /* ---------------- driver profile modal (History + Notes tabs) ---------------- */
+
+  const DRIVER_NOTES_TABLE = "driver_notes";
+  let driverProfileState = null; // { driverId, activeTab, history: null|[], notes: null|[] }
+
+  // Pulls this driver's past PRO#/Aljex# across every board they could
+  // have run — loads_shifts covers Atlanta/Delaware/Building C,
+  // loads_houston and mondelez_loads cover those separately since they're
+  // their own tables. Merged and sorted newest-first.
+  async function loadDriverProfileHistory(driverId) {
+    if (!supabaseClient) return [];
+    const idNum = Number(driverId);
+    const [shiftsRes, houstonRes, mondelezRes] = await Promise.all([
+      supabaseClient.from(SHIFTS_TABLE).select("pro_number, shift_date, location").eq("driver_id", idNum).order("shift_date", { ascending: false }).limit(50),
+      supabaseClient.from("loads_houston").select("aljex_number, shift_date").eq("driver_id", idNum).order("shift_date", { ascending: false }).limit(50),
+      supabaseClient.from("mondelez_loads").select("aljex_number, shift_date, location").eq("driver_id", idNum).order("shift_date", { ascending: false }).limit(50),
+    ]);
+    const entries = [];
+    (shiftsRes.data || []).forEach((r) => entries.push({ label: r.pro_number || "(no PRO#)", date: r.shift_date, board: r.location || "board" }));
+    (houstonRes.data || []).forEach((r) => entries.push({ label: r.aljex_number || "(no Aljex#)", date: r.shift_date, board: "houston" }));
+    (mondelezRes.data || []).forEach((r) => entries.push({ label: r.aljex_number || "(no Aljex#)", date: r.shift_date, board: `mondelez — ${r.location}` }));
+    entries.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+    return entries;
+  }
+
+  async function loadDriverProfileNotes(driverId) {
+    if (!supabaseClient) return [];
+    const { data, error } = await supabaseClient.from(DRIVER_NOTES_TABLE).select("*").eq("driver_id", Number(driverId)).order("created_at", { ascending: false });
+    if (error) { console.error("Failed to load driver notes:", error); return []; }
+    return data || [];
+  }
+
+  // Manages the three tabs inside #modal-add-driver when editing an
+  // existing driver: Edit (the form itself), History, Notes. Adding a
+  // brand new driver skips all this — driverProfileState stays null and
+  // the tab strip is hidden, since there's nothing to show history/notes
+  // for yet.
+  function switchAddDriverTab(tab) {
+    if (!driverProfileState) return;
+    driverProfileState.activeTab = tab;
+    $all("[data-ad-tab]").forEach((btn) => btn.classList.toggle("is-active", btn.dataset.adTab === tab));
+    const editEl = $("#ad-tab-edit");
+    const historyEl = $("#ad-tab-history");
+    const notesEl = $("#ad-tab-notes");
+    if (editEl) editEl.classList.toggle("hidden", tab !== "edit");
+    if (historyEl) historyEl.classList.toggle("hidden", tab !== "history");
+    if (notesEl) notesEl.classList.toggle("hidden", tab !== "notes");
+    if (tab === "history" || tab === "notes") renderAddDriverProfileTabContent();
+  }
+
+  async function renderAddDriverProfileTabContent() {
+    if (!driverProfileState) return;
+    const activeTab = driverProfileState.activeTab;
+    const body = activeTab === "history" ? $("#ad-tab-history") : $("#ad-tab-notes");
+    if (!body) return;
+
+    if (activeTab === "history") {
+      if (driverProfileState.history === null) {
+        body.innerHTML = `<div class="subtext">Loading…</div>`;
+        const history = await loadDriverProfileHistory(driverProfileState.driverId);
+        if (!driverProfileState || driverProfileState.activeTab !== "history") return; // closed or switched tabs mid-fetch
+        driverProfileState.history = history;
+      }
+      const rows = driverProfileState.history;
+      body.innerHTML = rows.length
+        ? `<div class="ld-history-row" style="grid-template-columns: 110px 150px 1fr;"><span>Date</span><span>Board</span><span>PRO# / Load #</span></div>` +
+          rows.map((r) => `<div class="ld-history-row" style="grid-template-columns: 110px 150px 1fr;"><span>${escapeHtml(r.date || "—")}</span><span>${escapeHtml(r.board || "—")}</span><span>${escapeHtml(r.label)}</span></div>`).join("")
+        : `<div class="subtext">No past loads on file for this driver yet.</div>`;
+    } else {
+      if (driverProfileState.notes === null) {
+        body.innerHTML = `<div class="subtext">Loading…</div>`;
+        const notes = await loadDriverProfileNotes(driverProfileState.driverId);
+        if (!driverProfileState || driverProfileState.activeTab !== "notes") return;
+        driverProfileState.notes = notes;
+      }
+      const notes = driverProfileState.notes;
+      body.innerHTML = `
+        <div class="field">
+          <label for="dp-note-input">Add a note</label>
+          <textarea class="cell-input" id="dp-note-input" rows="2" style="width:100%;" placeholder="e.g. Prefers early shifts, reliable on short notice"></textarea>
+          <button type="button" class="btn btn-ghost" id="dp-note-submit" style="margin-top:6px;">Add Note</button>
+        </div>
+        <div style="margin-top:14px;">
+          ${notes.length
+            ? notes.map((n) => `<div class="ld-history-row" style="grid-template-columns: 150px 1fr;"><span class="subtext">${escapeHtml(new Date(n.created_at).toLocaleString())}</span><span>${escapeHtml(n.note_text)}</span></div>`).join("")
+            : `<div class="subtext">No notes yet.</div>`}
+        </div>`;
+    }
+  }
+
+  async function submitDriverNote() {
+    if (!driverProfileState || !supabaseClient) return;
+    const input = $("#dp-note-input");
+    if (!input) return;
+    const text = input.value.trim();
+    if (!text) return;
+    const submitBtn = $("#dp-note-submit");
+    if (submitBtn) submitBtn.disabled = true;
+    try {
+      const { data, error } = await supabaseClient.from(DRIVER_NOTES_TABLE)
+        .insert({ driver_id: Number(driverProfileState.driverId), note_text: text }).select();
+      if (error) throw error;
+      if (driverProfileState.notes === null) driverProfileState.notes = [];
+      driverProfileState.notes.unshift(data[0]);
+      renderAddDriverProfileTabContent();
+    } catch (e) {
+      console.error("submitDriverNote failed:", e);
+      setDriverSyncStatus(`Couldn't save that note (${e.message || e}).`, "error");
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
+    }
+  }
+
   /* ---------------- Add Load modal (guarded — only wired if present) ---------------- */
 
   export function openAddLoadModal() {
@@ -2780,13 +3232,75 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     box.classList.remove("hidden");
   }
 
+  // Keeps the "+ Add Row" button (always the last row) visible after
+  // adding — without this, each add pushes it further down and out of
+  // view, so it looks like it disappeared.
+  function scrollQuickAddIntoView() {
+    const btn = document.getElementById("btn-quick-add-row");
+    if (btn) btn.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
   function quickAddBlankRow() {
     const row = blankRow(null, "");
     row.addedAt = Date.now();
     getSheet(state.activeLocation, state.activeDate).push(row);
     renderBoardTable();
+    scrollQuickAddIntoView();
     const input = document.querySelector(`#${row.id} input[data-field="driverName"]`);
     if (input) input.focus();
+  }
+
+  // "+ Add Time Slots" — lets a dispatcher add a batch of blank rows at
+  // once, each pre-filled with a Shift Start time, instead of clicking
+  // "+ Add Row" repeatedly. e.g. 5 at 0900, 5 at 1300, 5 at 1400, 5 at 2100.
+  function addTimeSlotRowUI(time, count) {
+    const container = $("#ats-rows");
+    if (!container) return;
+    const div = document.createElement("div");
+    div.className = "ats-slot-row";
+    div.innerHTML = `
+      <input class="cell-input" data-ats-time placeholder="--:--" value="${escapeHtml(time || "")}">
+      <input class="cell-input" data-ats-count type="number" min="1" placeholder="Count" value="${count || ""}">
+      <span class="subtext">rows</span>
+      <button type="button" class="ats-remove-btn" title="Remove">&times;</button>
+    `;
+    div.querySelector(".ats-remove-btn").addEventListener("click", () => div.remove());
+    container.appendChild(div);
+  }
+
+  function openAddTimeSlotsModal() {
+    const container = $("#ats-rows");
+    if (!container) return;
+    container.innerHTML = "";
+    addTimeSlotRowUI("", "5");
+    addTimeSlotRowUI("", "5");
+    $("#modal-add-time-slots").classList.remove("hidden");
+  }
+
+  function closeAddTimeSlotsModal() {
+    $("#modal-add-time-slots").classList.add("hidden");
+  }
+
+  function submitAddTimeSlots() {
+    const slotRows = $all(".ats-slot-row", $("#ats-rows"));
+    const newRows = [];
+    slotRows.forEach((div) => {
+      const time = div.querySelector("[data-ats-time]").value.trim();
+      const count = parseInt(div.querySelector("[data-ats-count]").value, 10) || 0;
+      if (!time || count <= 0) return;
+      for (let i = 0; i < count; i++) {
+        const row = blankRow(null, "");
+        row.shiftStart = time;
+        row.addedAt = Date.now();
+        newRows.push(row);
+      }
+    });
+    closeAddTimeSlotsModal();
+    if (!newRows.length) return;
+    const sheet = getSheet(state.activeLocation, state.activeDate);
+    newRows.forEach((r) => sheet.push(r));
+    renderBoardTable();
+    scrollQuickAddIntoView();
   }
 
   async function submitAddLoad() {
@@ -2812,6 +3326,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = "Add Load"; }
 
     getSheet(state.activeLocation, state.activeDate).push(row);
+    if (driverId) warnIfDriverAlreadyScheduled(row, driverId);
 
     closeAddLoadModal();
     renderBoardTable();
@@ -3056,6 +3571,13 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       on("ad-cancel", "click", closeAddDriverModal);
       on("ad-submit", "click", submitDriverForm);
       on("modal-add-driver", "click", (e) => { if (e.target.id === "modal-add-driver") closeAddDriverModal(); });
+      const atlantaRunsCheckbox = $('input[name="ad-runs-out-of"][value="atlanta"]');
+      if (atlantaRunsCheckbox) atlantaRunsCheckbox.addEventListener("change", updateAtlantaRateSectionVisibility);
+      $all("[data-ad-tab]").forEach((btn) => btn.addEventListener("click", () => switchAddDriverTab(btn.dataset.adTab)));
+      const historyEl = $("#ad-tab-history");
+      if (historyEl) historyEl.addEventListener("click", (e) => { if (e.target.id === "dp-note-submit") submitDriverNote(); });
+      const notesEl = $("#ad-tab-notes");
+      if (notesEl) notesEl.addEventListener("click", (e) => { if (e.target.id === "dp-note-submit") submitDriverNote(); });
     }
     if ($("#modal-send-text")) {
       const closeSendText = () => { $("#modal-send-text").classList.add("hidden"); sendTextModalState = null; };
@@ -3065,6 +3587,13 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       $("#modal-send-text").addEventListener("click", (e) => { if (e.target.id === "modal-send-text") closeSendText(); });
       const msgInput = $("#send-text-message");
       if (msgInput) msgInput.addEventListener("input", updateSendTextCounter);
+    }
+    if ($("#modal-add-time-slots")) {
+      on("ats-close", "click", closeAddTimeSlotsModal);
+      on("ats-cancel", "click", closeAddTimeSlotsModal);
+      on("ats-submit", "click", submitAddTimeSlots);
+      on("ats-add-slot-row", "click", () => addTimeSlotRowUI("", "5"));
+      $("#modal-add-time-slots").addEventListener("click", (e) => { if (e.target.id === "modal-add-time-slots") closeAddTimeSlotsModal(); });
     }
     if ($("#modal-add-load")) {
       on("al-close", "click", closeAddLoadModal);
@@ -3134,6 +3663,8 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       on("st-skip", "click", () => finalizeTripCompletion(false));
       on("st-confirm", "click", () => finalizeTripCompletion(true));
       $("#modal-stop-times").addEventListener("click", (e) => { if (e.target.id === "modal-stop-times") closeStopTimesModal(); });
+      const ppwkUpload = $("#st-ppwk-upload");
+      if (ppwkUpload) ppwkUpload.addEventListener("change", (e) => { if (e.target.files && e.target.files[0]) uploadPaperworkImage(e.target.files[0]); });
     }
 
     if ($("#modal-timesheet-complete")) {
@@ -3168,6 +3699,8 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
         const saveBtn = e.target.closest("[data-ld-save]");
         if (saveBtn) saveLoadDetailsEdit(saveBtn.dataset.ldSave);
         if (e.target.id === "ld-rate-reset") resetRateToCalculated();
+        const profileBtn = e.target.closest('[data-action="edit-driver"]');
+        if (profileBtn) openEditDriverModal(profileBtn.dataset.driverId);
       });
       $("#ld-tab-content").addEventListener("input", (e) => {
         if (e.target.id === "ld-tr-stopCount" && loadDetailsState && loadDetailsState.editDraft) {
@@ -3207,10 +3740,22 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     }
 
     const boardTable = $("#board-table");
+    boardTable.addEventListener("focusin", handleRowFocusIn);
+    boardTable.addEventListener("focusout", handleRowFocusOut);
     boardTable.addEventListener("click", (e) => {
+      const sortHeader = e.target.closest("th[data-board-sort]");
+      if (sortHeader) {
+        const key = sortHeader.dataset.boardSort;
+        state.boardSort = state.boardSort.key === key
+          ? { key, dir: state.boardSort.dir === "asc" ? "desc" : "asc" }
+          : { key, dir: "asc" };
+        renderBoardTable();
+        return;
+      }
       const textBtn = e.target.closest('[data-action="text-driver"]');
       if (textBtn) textDriverForRow(textBtn.dataset.row);
       if (e.target.closest("#btn-quick-add-row")) quickAddBlankRow();
+      if (e.target.closest("#btn-add-time-slots")) openAddTimeSlotsModal();
       const minimizeBtn = e.target.closest('[data-action="minimize-trip"]');
       if (minimizeBtn) minimizeTrip(minimizeBtn.dataset.row, minimizeBtn.dataset.trip);
       const restoreBtn = e.target.closest('[data-action="restore-trip"]');
@@ -3219,6 +3764,8 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       if (addTripBtn) addNewTrip(addTripBtn.dataset.row);
       const completeBtn = e.target.closest('[data-action="complete-trip"]');
       if (completeBtn && !completeBtn.disabled) completeTrip(completeBtn.dataset.row, completeBtn.dataset.trip);
+      const deleteTripBtn = e.target.closest('[data-action="delete-trip"]');
+      if (deleteTripBtn) deleteTrip(deleteTripBtn.dataset.row, deleteTripBtn.dataset.trip);
       const openProBtn = e.target.closest('[data-open-pro]');
       if (openProBtn) openLoadDetailsModal(openProBtn.dataset.openPro, openProBtn.dataset.trip || null);
     });
@@ -3345,6 +3892,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
         if (match) found.row.driverId = match.id;
         updateDriverLinkedCellsInPlace(rowId);
         scheduleShiftSave(found.row);
+        if (match) warnIfDriverAlreadyScheduled(found.row, match.id);
         return;
       }
       if (t.dataset.field === "shiftStart") {
@@ -3483,6 +4031,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
   /* ---------------- init ---------------- */
 
   async function init() {
+    await initSupabaseClient();
     const ok = await requireAuth();
     if (!ok) return; // requireAuth() already redirected to login.html
 

@@ -5,7 +5,7 @@ import {
   SAVE_DEBOUNCE_MS, closeLoadDetailsModal, loadDetailsState, renderLoadDetailsTabs,
   uploadTripSheetImages, removeTripSheetImage, startLoadDetailsEdit, cancelLoadDetailsEdit,
   saveLoadDetailsEdit, stopFieldsHtml, openLoadDetailsFromAccounting,
-  commitRateOverride, resetRateToCalculated, changeRouteType, setHostlerHours, commitRateBoxOverride,
+  commitRateOverride, resetRateToCalculated, changeRouteType, setHostlerHours, commitRateBoxOverride, openEditDriverModal,
 } from './loadboard.js';
 import { ACCOUNTING_TABLE, ACCOUNTING_ROUTES_TABLE, loadPricingData, calcRoute, getPricingTiers, getPricingSettings } from './accountingcalc.js';
 
@@ -328,6 +328,8 @@ let accountingRecords = [];
         const saveBtn = e.target.closest("[data-ld-save]");
         if (saveBtn) saveLoadDetailsEdit(saveBtn.dataset.ldSave);
         if (e.target.id === "ld-rate-reset") resetRateToCalculated();
+        const profileBtn = e.target.closest('[data-action="edit-driver"]');
+        if (profileBtn) openEditDriverModal(profileBtn.dataset.driverId);
       });
       $("#ld-tab-content").addEventListener("input", (e) => {
         if (e.target.id === "ld-tr-stopCount" && loadDetailsState && loadDetailsState.editDraft) {

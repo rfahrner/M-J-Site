@@ -53,7 +53,13 @@
         <h3 id="ad-modal-title">Add Driver</h3>
         <button class="modal-close" id="ad-close">&times;</button>
       </div>
+      <div class="modal-tabs hidden" id="ad-modal-tabs">
+        <button type="button" class="ld-tab is-active" data-ad-tab="edit">Edit</button>
+        <button type="button" class="ld-tab" data-ad-tab="history">History</button>
+        <button type="button" class="ld-tab" data-ad-tab="notes">Notes</button>
+      </div>
       <div class="modal-body">
+        <div id="ad-tab-edit">
         <div class="field">
           <label for="ad-name">Driver name</label>
           <input type="text" id="ad-name">
@@ -119,6 +125,9 @@
           <label for="ad-tii-amount">Interchange coverage ($ &mdash; leave blank if none)</label>
           <input type="number" id="ad-tii-amount" min="0" step="0.01">
         </div>
+        </div>
+        <div id="ad-tab-history" class="hidden"></div>
+        <div id="ad-tab-notes" class="hidden"></div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-ghost" id="ad-cancel">Cancel</button>

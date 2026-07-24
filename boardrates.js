@@ -15,7 +15,7 @@
    - board_rate_settings: flat numbers per location (per-mile rates,
      stop charges, TONU flat, BIRM flat, Hostler hourly, Houston flat).
    ================================================================ */
-import { supabaseClient } from './loadboard.js';
+import { supabaseClient, findDriver } from './loadboard.js';
 
 export const BOARD_RATE_TIERS_TABLE = "board_rate_tiers";
 export const BOARD_RATE_SETTINGS_TABLE = "board_rate_settings";
@@ -82,19 +82,45 @@ export async function saveSetting(location, key, newValue) {
 }
 
 // A load's own rate_overrides (row.rateOverrides = {tiers:{id:rate}, settings:{key:value}})
-// always win over the shared board_rate_tiers/board_rate_settings default —
-// these two helpers are the single place that "which number actually
-// applies to this load" gets decided, so every other spot in this file
-// only has to call them instead of re-deriving that logic.
+// always win over everything else. Next in line, for Atlanta specifically,
+// is the assigned driver's own personal rate card (drv.atlantaRateOverrides,
+// same {tiers, settings} shape) — some drivers run a negotiated tier
+// structure instead of a single flat rate, so this lets every tier/setting
+// box be personalized per driver, not just one number. Falls through to
+// the shared board_rate_tiers/board_rate_settings default last. These two
+// helpers are the single place that priority gets decided, so every other
+// spot in this file only has to call them instead of re-deriving it.
+function driverOverridesFor(row) {
+  if (!row || !row.driverId) return null;
+  const drv = findDriver(row.driverId);
+  return drv ? drv.atlantaRateOverrides : null;
+}
 export function effectiveTierRate(row, tier) {
-  const override = row && row.rateOverrides && row.rateOverrides.tiers ? row.rateOverrides.tiers[tier.id] : undefined;
-  return override != null ? override : tier.rate;
+  const loadOverride = row && row.rateOverrides && row.rateOverrides.tiers ? row.rateOverrides.tiers[tier.id] : undefined;
+  if (loadOverride != null) return loadOverride;
+  const driverOv = driverOverridesFor(row);
+  const driverOverride = driverOv && driverOv.tiers ? driverOv.tiers[tier.id] : undefined;
+  if (driverOverride != null) return driverOverride;
+  return tier.rate;
 }
 export function effectiveSetting(row, locationKey, key, fallback) {
-  const override = row && row.rateOverrides && row.rateOverrides.settings ? row.rateOverrides.settings[key] : undefined;
-  if (override != null) return override;
+  const loadOverride = row && row.rateOverrides && row.rateOverrides.settings ? row.rateOverrides.settings[key] : undefined;
+  if (loadOverride != null) return loadOverride;
+  if (locationKey === "atlanta") {
+    const driverOv = driverOverridesFor(row);
+    const driverOverride = driverOv && driverOv.settings ? driverOv.settings[key] : undefined;
+    if (driverOverride != null) return driverOverride;
+  }
   const settings = (cachedSettings && cachedSettings[locationKey]) || {};
   return settings[key] != null ? settings[key] : fallback;
+}
+export function isDriverTierOverridden(row, tierId) {
+  const driverOv = driverOverridesFor(row);
+  return !!(driverOv && driverOv.tiers && driverOv.tiers[tierId] != null);
+}
+export function isDriverSettingOverridden(row, key) {
+  const driverOv = driverOverridesFor(row);
+  return !!(driverOv && driverOv.settings && driverOv.settings[key] != null);
 }
 export function isTierOverridden(row, tierId) {
   return !!(row && row.rateOverrides && row.rateOverrides.tiers && row.rateOverrides.tiers[tierId] != null);
