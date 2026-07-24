@@ -326,7 +326,7 @@ button {
 #board-view {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 52px); /* 52px = .topbar height */
+  max-height: calc(100vh - 52px); /* 52px = .topbar height — caps a large board so it still scrolls internally instead of stretching the page, but doesn't force this height when there's little content */
 }
 
 .grid-scroll {

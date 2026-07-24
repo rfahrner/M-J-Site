@@ -38,7 +38,6 @@
         <button class="btn" id="btn-add-load">+ Add Load</button>
       </div>
     </div>
-    
 
     <div id="driver-sync-status" class="hidden"></div>
 
@@ -84,7 +83,7 @@
         <button class="modal-close" id="ad-close">&times;</button>
       </div>
       <div class="modal-tabs hidden" id="ad-modal-tabs">
-        <button type="button" class="ld-tab is-active" data-ad-tab="edit">Profile</button>
+        <button type="button" class="ld-tab is-active" data-ad-tab="edit">Edit</button>
         <button type="button" class="ld-tab" data-ad-tab="history">History</button>
         <button type="button" class="ld-tab" data-ad-tab="notes">Notes</button>
       </div>
@@ -94,6 +93,7 @@
           <label for="ad-name">Driver name</label>
           <input type="text" id="ad-name">
           <div class="field-error">Required.</div>
+        </div>
         <div class="field">
           <label for="ad-phone">Driver cell</label>
           <input type="tel" id="ad-phone">
@@ -140,6 +140,24 @@
           <input type="text" id="ad-rate-booking" placeholder="Rate and/or who to contact to book">
         </div>
         <div class="field">
+          <label for="ad-rate">Usual rate ($ — leave blank if it varies)</label>
+          <input type="number" id="ad-rate" min="0" step="0.01" placeholder="Overrides the calculated route rate when set">
+        </div>
+        <div class="field">
+          <label>Runs out of</label>
+          <div class="radio-row" style="flex-wrap: wrap; gap: 12px;">
+            <label><input type="checkbox" name="ad-runs-out-of" value="atlanta"> Atlanta</label>
+            <label><input type="checkbox" name="ad-runs-out-of" value="delaware"> Delaware</label>
+            <label><input type="checkbox" name="ad-runs-out-of" value="buildingc"> Building C</label>
+            <label><input type="checkbox" name="ad-runs-out-of" value="houston"> Houston</label>
+            <label><input type="checkbox" name="ad-runs-out-of" value="mondelez"> Mondelez</label>
+          </div>
+        </div>
+        <div class="field hidden" id="ad-atlanta-rate-section" style="border-top:1px solid var(--line); padding-top:14px; margin-top:14px;">
+          <label>Atlanta rate card <span class="subtext">(only applies to Atlanta loads — leave any box blank to use the normal default)</span></label>
+          <div id="ad-atlanta-rate-boxes"></div>
+        </div>
+        <div class="field">
           <label for="ad-notes">Notes</label>
           <textarea id="ad-notes"></textarea>
         </div>
@@ -154,23 +172,14 @@
           <label for="ad-tii-amount">Interchange coverage ($ &mdash; leave blank if none)</label>
           <input type="number" id="ad-tii-amount" min="0" step="0.01">
         </div>
-      </div>
-<div class="field">
-          <label for="ad-tii-amount">Interchange coverage ($ &mdash; leave blank if none)</label>
-          <input type="number" id="ad-tii-amount" min="0" step="0.01">
-        </div>
         </div>
         <div id="ad-tab-history" class="hidden"></div>
         <div id="ad-tab-notes" class="hidden"></div>
       </div>
-
-<div class="field">
-  <label for="st-ppwk-upload">Upload paperwork (optional)</label>
-  <input type="file" id="st-ppwk-upload" accept="image/*">
-  <div class="subtext" id="st-upload-status" style="margin-top:4px;"></div>
-</div>
       <div class="modal-footer">
         <button class="btn btn-ghost" id="ad-cancel">Cancel</button>
+        <button class="btn" id="ad-submit">Add</button>
+      </div>
     </div>
   </div>
 
@@ -266,6 +275,21 @@
       <div class="modal-body">
         <div class="subtext" style="margin-bottom:12px;">Optional — record in/out times for each stop before closing this trip out.</div>
         <div id="st-stop-fields"></div>
+        <div class="field" style="margin-top:16px; padding-top:16px; border-top:1px solid var(--line);">
+          <label style="display:flex; align-items:center; gap:8px; margin-bottom:0;">
+            <input type="checkbox" id="st-ppwk-received" checked>
+            <span>Paperwork received</span>
+          </label>
+        </div>
+        <div class="field">
+          <label for="st-ppwk-upload">Upload paperwork (optional)</label>
+          <input type="file" id="st-ppwk-upload" accept="image/*">
+          <div class="subtext" id="st-upload-status" style="margin-top:4px;"></div>
+        </div>
+        <div class="field">
+          <label for="st-trailer-drop-location">Trailer drop location</label>
+          <input type="text" id="st-trailer-drop-location" class="cell-input" placeholder="Where was the trailer dropped?">
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-ghost" id="st-skip">Skip</button>
@@ -274,7 +298,8 @@
     </div>
   </div>
 
-    <div class="overlay hidden" id="modal-send-text">
+  <!-- ================= Send Text modal ================= -->
+  <div class="overlay hidden" id="modal-send-text">
     <div class="modal">
       <div class="modal-header">
         <h3>Send Text</h3>
@@ -296,6 +321,7 @@
     </div>
   </div>
 
+  <!-- ================= Complete Shift / Time Sheet modal ================= -->
   <div class="overlay hidden" id="modal-timesheet-complete">
     <div class="modal">
       <div class="modal-header">
@@ -320,7 +346,6 @@
     </div>
   </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <!-- ================= Load History modal ================= -->
   <div class="overlay hidden" id="modal-load-history">
     <div class="modal">
@@ -335,6 +360,26 @@
     </div>
   </div>
 
+  <!-- ================= Add Time Slots modal ================= -->
+  <div class="overlay hidden" id="modal-add-time-slots">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Add Time Slots</h3>
+        <button class="modal-close" id="ats-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="subtext" style="margin-bottom:10px;">Add several blank rows at once, each pre-filled with a Shift Start time.</div>
+        <div id="ats-rows"></div>
+        <button type="button" class="inline-add-driver" id="ats-add-slot-row">+ Add another time</button>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="ats-cancel">Cancel</button>
+        <button class="btn" id="ats-submit">Add Rows</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script type="module" src="loadboard.js" defer></script>
 </body>
 </html>
