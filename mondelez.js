@@ -23,7 +23,7 @@ import {
   state, supabaseClient, uid, findDriver, driversForLocation, setDriverSyncStatus,
   SAVE_DEBOUNCE_MS, escapeHtml, $, keyToDate, addDays, dateKey,
   refreshDriverDatalist, closeDateDropdown, renderCalendarGrid, resetCalendarViewMonth,
-  closeContextMenu, handleRealtimeDriverChange, pick, textDriverPhone,
+  closeContextMenu, handleRealtimeDriverChange, pick, textDriverPhone, openAddDriverModal,
 } from './loadboard.js';
 
 export const MONDELEZ_TABLE = "mondelez_loads";
@@ -590,6 +590,8 @@ export async function initMondelezPage() {
     if (!e.target.closest("#date-dropdown") && !e.target.closest("#date-input")) closeDateDropdown();
   });
 
+  if ($("#btn-add-driver")) $("#btn-add-driver").addEventListener("click", () => openAddDriverModal(false));
+
   $("#mondelez-rate-panel").addEventListener("change", (e) => {
     const key = e.target.dataset.mdzSetting;
     if (!key) return;
@@ -638,7 +640,7 @@ export async function initMondelezPage() {
     if (field === "driverName") {
       row.driverName = t.value;
       row.driverId = null;
-      const match = driversForLocation("atlanta").find((d) => d.name.toLowerCase() === t.value.trim().toLowerCase());
+      const match = driversForLocation("mondelez").find((d) => d.name.toLowerCase() === t.value.trim().toLowerCase());
       if (match) row.driverId = match.id;
       scheduleMondelezRowSave(row);
       return;

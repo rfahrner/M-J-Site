@@ -526,6 +526,12 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     return [locationKey];
   }
   export function driversForLocation(locationKey) {
+    // Mondelez drivers aren't tagged via the single `location` field the other
+    // boards use — they're tagged in runs_out_of instead (a driver can run
+    // Mondelez alongside their normal home base), so this needs its own check.
+    if (locationKey === "mondelez") {
+      return state.drivers.filter((d) => Array.isArray(d.runsOutOf) && d.runsOutOf.includes("mondelez"));
+    }
     const group = locationGroupFor(locationKey);
     return state.drivers.filter((d) => group.includes(d.location));
   }
@@ -2942,7 +2948,8 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     ["ad-name", "ad-phone", "ad-mc", "ad-dispatcher-phone", "ad-email", "ad-email2", "ad-rating", "ad-preference", "ad-carrier", "ad-rate-booking", "ad-notes", "ad-tii-amount", "ad-rate"]
       .forEach((id) => setVal(id, ""));
     $all('input[name="ad-tia"]').forEach((r) => (r.checked = r.value === "no"));
-    $all('input[name="ad-runs-out-of"]').forEach((c) => { c.checked = false; });
+    const addingFromMondelez = (state.activeLocation || state.driverListTab) === "mondelez";
+    $all('input[name="ad-runs-out-of"]').forEach((c) => { c.checked = addingFromMondelez && c.value === "mondelez"; });
     const atlantaBoxes = $("#ad-atlanta-rate-boxes");
     if (atlantaBoxes) atlantaBoxes.innerHTML = driverAtlantaRateBoxesHtml(null);
     updateAtlantaRateSectionVisibility();
@@ -3002,6 +3009,17 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     driverProfileState = null;
   }
 
+  // The single-value `location` field only makes sense for "atlanta" /
+  // "delaware" / "houston" — Building C shares Atlanta's pool, and Mondelez
+  // isn't a real driver "home base" at all, it's tracked entirely through
+  // the runs_out_of checkboxes instead. Writing "mondelez" here would be
+  // meaningless data that driversForLocation("mondelez") wouldn't even look
+  // at, since that filters by runs_out_of, not this field.
+  function normalizeDriverLocationField(context) {
+    if (context === "buildingc" || context === "mondelez") return "atlanta";
+    return context || "atlanta";
+  }
+
   async function submitDriverForm() {
     const name = $("#ad-name").value.trim();
     const phone = $("#ad-phone").value.trim();
@@ -3034,7 +3052,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       normalRate: $("#ad-rate").value.trim() || null,
       runsOutOf: $all('input[name="ad-runs-out-of"]').filter((c) => c.checked).map((c) => c.value),
       atlantaRateOverrides: readAtlantaRateOverridesFromForm(),
-      location: isEdit ? state.editingDriverLocation : (state.activeLocation === "buildingc" ? "atlanta" : (state.activeLocation || state.driverListTab || "atlanta")),
+      location: isEdit ? state.editingDriverLocation : normalizeDriverLocationField(state.activeLocation || state.driverListTab),
     };
 
     if (!supabaseClient) {
