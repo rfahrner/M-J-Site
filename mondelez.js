@@ -272,7 +272,10 @@ function mondelezRowHtml(row) {
   const rowClasses = [row.tonu ? "is-tonu" : "", row.highlighted ? "is-row-pinned" : "", row.addedAt ? "is-new" : ""].join(" ");
   return `<tr id="${row.id}" class="${rowClasses}">
     <td class="pin pin-select"><input type="checkbox" class="chk" data-action="toggle-mdz-select" data-mdz-row="${row.id}" ${row.selected ? "checked" : ""} title="Select"></td>
-    <td class="pin pin-text"><button class="text-btn" data-action="text-mdz-driver" data-mdz-row="${row.id}" title="Text this driver">Text</button></td>
+    <td class="pin pin-text">
+      <button class="text-btn" data-action="text-mdz-driver" data-mdz-row="${row.id}" title="Text this driver">Text</button>
+      ${MDZ_EMAIL_LOCATIONS.has(row.location) ? `<button class="text-btn" data-action="email-mdz-driver" data-mdz-row="${row.id}" title="Email route info">Email</button>` : ""}
+    </td>
     ${showLocationCol ? `<td class="col-mdz-location"><span class="static-text">${escapeHtml(mondelezLocationLabel(row.location))}</span></td>` : ""}
     <td class="pin pin-pro${row.shiftComplete ? " shift-complete-tint" : ""}"><input class="cell-input" placeholder="Aljex#" data-mdz-row="${row.id}" data-mdz-field="aljexNumber" value="${escapeHtml(row.aljexNumber)}"></td>
     <td class="col-mdz-group"><input class="cell-input" placeholder="Delivery Group" data-mdz-row="${row.id}" data-mdz-field="deliveryGroup" value="${escapeHtml(row.deliveryGroup)}"></td>
@@ -443,6 +446,66 @@ function textMondelezDriverForRow(rowId) {
   textDriverPhone(drv ? drv.phone : null);
 }
 
+// Only these three locations use this template — the Activation Keys
+// block is a fixed reference list for all three regardless of which one
+// the row itself is at, since it's about which mobile-app organization
+// the driver logs into, not something that varies load to load.
+const MDZ_EMAIL_LOCATIONS = new Set(["morris", "addison", "indianapolis"]);
+
+function buildMondelezRouteEmailBody(row, driverName) {
+  const line = (label, val) => `${label} ${val || ""}`.trimEnd();
+  const screenshotNote = row.routeImageUrl
+    ? "[Route screenshot opened in a separate tab — drag or paste it in here]"
+    : "[No route screenshot uploaded on this load yet]";
+  return [
+    "Good evening, you are scheduled to take the following route tonight (See screenshot of the route below app info):",
+    "",
+    screenshotNote,
+    "",
+    line("Pickup Location:", mondelezLocationLabel(row.location)),
+    line("DG#:", row.deliveryGroup),
+    line("Trailer #:", row.trailerNumber),
+    line("Start Time:", row.startTime),
+    line("Miles:", row.miles),
+    line("Stops:", row.stopCount),
+    "",
+    "Mobile Link Info:",
+    "Organization ID: 078605713",
+    "Activation Keys",
+    "Morris IL - 6104",
+    "Addison IL - 6136",
+    "Indianapolis - 6116",
+    line("Your Driver/User tonight:", driverName),
+    "",
+    "If you are having an issue accessing your route, please click to the top right-hand corner of the app that says \"more\".  From the pop-up menu, choose \"Reactivate Device\".  A warning will pop up that says \"Possible data loss!\".  This is fine.  Enter the code that is provided and click \"Reactivate\".  You will then be taken back to the menu to insert the above information.  If you still cannot access your route after entering all the pertinent information, please call night dispatch immediately.  It is critical that we use the app correctly when delivering stops.",
+    "",
+    "The delivery app is not used when making shuttle runs.",
+  ].join("\n");
+}
+
+// mailto: can prefill a subject and body, but there's no way for a URL
+// scheme to attach a file to the draft it opens — that's a hard browser/
+// OS restriction, not something to work around. The closest practical
+// substitute: open the uploaded screenshot in its own tab at the same
+// time, so it's one drag-and-drop (or copy/paste) away from landing in
+// the email that's about to open, rather than the dispatcher having to
+// go hunt for it separately.
+function emailMondelezRouteInfo(rowId) {
+  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
+  if (!row) return;
+  const drv = row.driverId ? findDriver(row.driverId) : null;
+  const driverName = drv ? drv.name : (row.driverName || "");
+  const driverEmail = drv && drv.email ? drv.email : "";
+
+  if (row.routeImageUrl) window.open(row.routeImageUrl, "_blank");
+
+  const subject = `Tonight's Route — ${mondelezLocationLabel(row.location)}${row.deliveryGroup ? " — " + row.deliveryGroup : ""}`;
+  const body = buildMondelezRouteEmailBody(row, driverName);
+  const a = document.createElement("a");
+  a.href = `mailto:${encodeURIComponent(driverEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  a.click();
+}
+
 /* ---------------- tab + date switching ---------------- */
 
 export function switchMondelezTab(tabKey) {
@@ -545,6 +608,8 @@ export async function initMondelezPage() {
     if (viewBtn) viewRouteImage(viewBtn.dataset.mdzRow);
     const textBtn = e.target.closest("[data-action='text-mdz-driver']");
     if (textBtn) textMondelezDriverForRow(textBtn.dataset.mdzRow);
+    const emailBtn = e.target.closest("[data-action='email-mdz-driver']");
+    if (emailBtn) emailMondelezRouteInfo(emailBtn.dataset.mdzRow);
   });
   table.addEventListener("change", (e) => {
     const t = e.target;

@@ -1336,6 +1336,16 @@ fieldset.rate-tier-box.is-overridden {
 .col-mdz-notes { min-width: 150px; }
 .col-mdz-image { width: 90px; min-width: 90px; text-align: center; }
 
+/* Mondelez needs a wider Text/Email button cell than the other boards —
+   scoped to #mondelez-table specifically so this doesn't affect the
+   shared .pin-text/.pin-pro/.pin-driver sizing used elsewhere. */
+#mondelez-table .pin-text {
+  width: 94px; min-width: 94px;
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+}
+#mondelez-table .pin-pro { left: 168px; }
+#mondelez-table .pin-driver { left: 260px; }
+
 /* Add Time Slots modal */
 .ats-slot-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .ats-slot-row input[data-ats-time] { width: 80px; flex: none; }
