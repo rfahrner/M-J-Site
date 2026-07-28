@@ -4,7 +4,7 @@
      split) with entirely different columns. See chat for why this
      isn't just another branch in the existing board code.
      ================================================================ */
-import { state, supabaseClient, uid, findDriver, driversForLocation, setDriverSyncStatus, SAVE_DEBOUNCE_MS, escapeHtml, $, $all, addDays, keyToDate, dateKey, on, refreshDriverDatalist, renderBoardChrome, beginTextBatchFlow, textDriverPhone, openAddDriverModal, openAddLoadModal, closeAddLoadModal, closeDateDropdown, renderCalendarGrid, closeContextMenu, sendCurrentGroupBatchDirect, openCurrentGroupBatch, confirmGroupBatchSent, pick, handleRealtimeDriverChange, initAvailableSection, resetCalendarViewMonth, resetGroupTextState, refreshAvailableSection } from './loadboard.js';
+import { state, supabaseClient, uid, findDriver, driversForLocation, setDriverSyncStatus, SAVE_DEBOUNCE_MS, escapeHtml, $, $all, addDays, keyToDate, dateKey, on, refreshDriverDatalist, renderBoardChrome, beginTextBatchFlow, textDriverPhone, openAddDriverModal, openAddLoadModal, closeAddLoadModal, closeDateDropdown, renderCalendarGrid, closeContextMenu, sendCurrentGroupBatchDirect, openCurrentGroupBatch, confirmGroupBatchSent, pick, handleRealtimeDriverChange, initAvailableSection, resetCalendarViewMonth, resetGroupTextState, refreshAvailableSection, openDriverAutocomplete, updateDriverAutocomplete, closeDriverAutocomplete, captureFocusForRerender, handleRowAwareTab, openEditDriverModal } from './loadboard.js';
 import { getBoardRateSettings } from './boardrates.js';
 export const HOUSTON_TABLE = "loads_houston";
   export const houstonState = { sheets: {}, datesWithData: new Set() };
@@ -129,11 +129,11 @@ export const HOUSTON_TABLE = "loads_houston";
         <input class="cell-input small" style="width:46px;" placeholder="Rate" data-row="${row.id}" data-field="normalRate" value="${escapeHtml(row.normalRate)}">
       </td>
       <td class="pin pin-pro${row.shiftComplete ? " shift-complete-tint" : ""}">
-        <input class="cell-input" placeholder="Aljex#" data-row="${row.id}" data-field="aljexNumber" value="${escapeHtml(row.aljexNumber)}">
+        <input class="cell-input" placeholder="Aljex#" data-row="${row.id}" data-field="aljexNumber" value="${escapeHtml(row.aljexNumber)}">${row.aljexNumber ? `<button type="button" class="cell-link-btn" data-open-hou-load="${row.id}" title="Open load details">↗</button>` : ""}
       </td>
       <td class="pin pin-driver">
         <div class="driver-name-wrap">
-          <input class="cell-input" list="driverNamesList" placeholder="Type driver name…" data-row="${row.id}" data-field="driverName" value="${escapeHtml(displayName)}">
+          <input class="cell-input" data-driver-ac="true" placeholder="Type driver name…" data-row="${row.id}" data-field="driverName" value="${escapeHtml(displayName)}">
         </div>
       </td>
       <td class="col-cell"><span class="static-text">${escapeHtml(pick(drv && drv.phone, row.driverPhone))}</span></td>
@@ -153,7 +153,7 @@ export const HOUSTON_TABLE = "loads_houston";
     const rows = getHoustonSheet(state.activeDate);
     const displayRows = [...rows].sort((a, b) => (a.shiftComplete ? 1 : 0) - (b.shiftComplete ? 1 : 0));
     const thead = `<thead><tr>
-      <th class="pin pin-select"><input type="checkbox" class="chk" id="select-all-rows" title="Select all"></th>
+      <th class="pin pin-select"><div id="houston-select-count" class="board-select-count"></div><input type="checkbox" class="chk" id="select-all-rows" title="Select all"></th>
       <th class="pin pin-text"></th>
       <th class="pin pin-rate">Rate</th>
       <th class="pin pin-pro">Aljex #</th>
@@ -170,12 +170,24 @@ export const HOUSTON_TABLE = "loads_houston";
       <th class="col-hou-timeout">Time Out / Remarks</th>
     </tr></thead>`;
     const totalHoustonCols = 15;
-    const addRowHtml = `<tr class="quick-add-row"><td colspan="${totalHoustonCols}"><button type="button" class="quick-add-btn" id="btn-quick-add-row"><span class="quick-add-btn-label">+ Add Row</span></button></td></tr>`;
+    const addRowHtml = `<tr class="quick-add-row"><td colspan="${totalHoustonCols}">
+      <button type="button" class="quick-add-btn" id="btn-quick-add-row"><span class="quick-add-btn-label">+ Add Row</span></button>
+      <button type="button" class="quick-add-btn quick-add-btn-secondary" id="btn-add-time-slots"><span class="quick-add-btn-label">+ Add Time Slots</span></button>
+    </td></tr>`;
     const tbody = `<tbody>${displayRows.map(houstonRowToHtml).join("")}${addRowHtml}</tbody>`;
     $("#board-table").innerHTML = thead + tbody;
     const emptyState = $("#board-empty-state");
     if (emptyState) emptyState.classList.toggle("hidden", rows.length > 0);
     refreshDriverDatalist();
+    updateHoustonSelectCount();
+  }
+
+  function updateHoustonSelectCount() {
+    const el = $("#houston-select-count");
+    if (!el) return;
+    const rows = getHoustonSheet(state.activeDate);
+    const selectedCount = rows.filter((r) => r.selected).length;
+    el.textContent = `Count ${rows.length} (${selectedCount} selected)`;
   }
 
   export async function loadAndRenderHoustonBoard() {
@@ -211,6 +223,7 @@ export const HOUSTON_TABLE = "loads_houston";
     found.row.selected = !found.row.selected;
     const tr = document.getElementById(rowId);
     if (tr) tr.classList.toggle("is-row-selected", found.row.selected);
+    updateHoustonSelectCount();
   }
 
   export function selectAllHoustonRows(checked) {
@@ -224,6 +237,7 @@ export const HOUSTON_TABLE = "loads_houston";
         if (chk) chk.checked = checked;
       }
     });
+    updateHoustonSelectCount();
   }
 
   export function completeSelectedHoustonRows() {
@@ -267,7 +281,56 @@ export const HOUSTON_TABLE = "loads_houston";
     const input = document.querySelector(`#${row.id} input[data-field="driverName"]`);
     if (input) input.focus();
   }
-  
+
+  // "+ Add Time Slots" for Houston — same idea as the main board's version:
+  // add a batch of blank rows at once, each pre-filled with a Shift Start
+  // time, instead of clicking "+ Add Row" repeatedly.
+  export function addHoustonTimeSlotRowUI(time, count) {
+    const container = $("#ats-rows");
+    if (!container) return;
+    const div = document.createElement("div");
+    div.className = "ats-slot-row";
+    div.innerHTML = `
+      <input class="cell-input" data-ats-time placeholder="--:--" value="${escapeHtml(time || "")}">
+      <input class="cell-input" data-ats-count type="number" min="1" placeholder="Count" value="${count || ""}">
+      <span class="subtext">rows</span>
+      <button type="button" class="ats-remove-btn" title="Remove">&times;</button>
+    `;
+    div.querySelector(".ats-remove-btn").addEventListener("click", () => div.remove());
+    container.appendChild(div);
+  }
+  export function openAddHoustonTimeSlotsModal() {
+    const container = $("#ats-rows");
+    if (!container) return;
+    container.innerHTML = "";
+    addHoustonTimeSlotRowUI("", "5");
+    addHoustonTimeSlotRowUI("", "5");
+    $("#modal-add-time-slots").classList.remove("hidden");
+  }
+  export function closeAddHoustonTimeSlotsModal() {
+    $("#modal-add-time-slots").classList.add("hidden");
+  }
+  export function submitAddHoustonTimeSlots() {
+    const slotRows = $all(".ats-slot-row", $("#ats-rows"));
+    const newRows = [];
+    slotRows.forEach((div) => {
+      const time = div.querySelector("[data-ats-time]").value.trim();
+      const count = parseInt(div.querySelector("[data-ats-count]").value, 10) || 0;
+      if (!time || count <= 0) return;
+      for (let i = 0; i < count; i++) {
+        const row = blankHoustonRow(null, "");
+        row.time = time;
+        row.addedAt = Date.now();
+        newRows.push(row);
+      }
+    });
+    closeAddHoustonTimeSlotsModal();
+    if (!newRows.length) return;
+    const sheet = getHoustonSheet(state.activeDate);
+    newRows.forEach((r) => sheet.push(r));
+    renderHoustonBoardTable();
+  }
+
   export function toggleHoustonShiftComplete(rowId) {
     const found = findHoustonRowAnywhere(rowId);
     if (!found) return;
@@ -298,6 +361,82 @@ export const HOUSTON_TABLE = "loads_houston";
         setDriverSyncStatus(`Row removed here, but couldn't delete it from the database (${e.message || e}) — it may come back on refresh.`, "error");
       }
     }
+  }
+
+  /* ---------------- Load Details modal ---------------- */
+
+  let houstonLdRowId = null;
+
+  export function openHoustonLoadDetailsModal(rowId) {
+    const found = findHoustonRowAnywhere(rowId);
+    if (!found) return;
+    const row = found.row;
+    const modal = $("#modal-houston-load-details");
+    if (!modal) { console.error("Houston Load Details modal HTML isn't on this page yet."); return; }
+    houstonLdRowId = rowId;
+
+    const setVal = (id, val) => { const el = $("#" + id); if (el) el.value = val == null ? "" : val; };
+    const drv = row.driverId ? findDriver(row.driverId) : null;
+    setVal("hou-ld-driver", drv ? drv.name : row.driverName);
+    const driverField = $("#hou-ld-driver");
+    if (driverField) driverField.dataset.driverId = row.driverId || "";
+    const profileLink = $("#hou-ld-view-profile");
+    if (profileLink) { profileLink.classList.toggle("hidden", !row.driverId); profileLink.dataset.driverId = row.driverId || ""; }
+    setVal("hou-ld-aljex", row.aljexNumber);
+    setVal("hou-ld-time", row.time);
+    setVal("hou-ld-carrier", row.carrier);
+    setVal("hou-ld-mc", row.mc);
+    setVal("hou-ld-rating", row.rating);
+    setVal("hou-ld-cell", row.driverPhone);
+    setVal("hou-ld-dispatcher", row.dispatcherPhone);
+    setVal("hou-ld-rate", row.normalRate);
+    setVal("hou-ld-ttc", row.ttc);
+    setVal("hou-ld-ttt", row.ttt);
+    setVal("hou-ld-comments", row.comments);
+    setVal("hou-ld-timeout", row.timeOutRemarks);
+    modal.classList.remove("hidden");
+  }
+
+  export function closeHoustonLoadDetailsModal() {
+    const modal = $("#modal-houston-load-details");
+    if (modal) modal.classList.add("hidden");
+    closeDriverAutocomplete();
+    houstonLdRowId = null;
+  }
+
+  export function saveHoustonLoadDetailsModal() {
+    if (!houstonLdRowId) return;
+    const found = findHoustonRowAnywhere(houstonLdRowId);
+    if (!found) { closeHoustonLoadDetailsModal(); return; }
+    const row = found.row;
+    const getVal = (id) => { const el = $("#" + id); return el ? el.value : ""; };
+
+    const driverField = $("#hou-ld-driver");
+    const driverNameTyped = driverField ? driverField.value.trim() : row.driverName;
+    let driverId = driverField ? driverField.dataset.driverId : "";
+    if (!driverId) {
+      const match = driversForLocation("houston").find((d) => d.name.toLowerCase() === driverNameTyped.toLowerCase());
+      driverId = match ? match.id : null;
+    }
+
+    row.driverName = driverNameTyped;
+    row.driverId = driverId || null;
+    row.aljexNumber = getVal("hou-ld-aljex").trim();
+    row.time = getVal("hou-ld-time").trim();
+    row.carrier = getVal("hou-ld-carrier").trim();
+    row.mc = getVal("hou-ld-mc").trim();
+    row.rating = getVal("hou-ld-rating").trim();
+    row.driverPhone = getVal("hou-ld-cell").trim();
+    row.dispatcherPhone = getVal("hou-ld-dispatcher").trim();
+    row.normalRate = getVal("hou-ld-rate").trim();
+    row.ttc = getVal("hou-ld-ttc").trim();
+    row.ttt = getVal("hou-ld-ttt").trim();
+    row.comments = getVal("hou-ld-comments").trim();
+    row.timeOutRemarks = getVal("hou-ld-timeout").trim();
+
+    saveHoustonRowNow(row);
+    closeHoustonLoadDetailsModal();
+    renderHoustonBoardTable();
   }
 
   export function textHoustonDriverForRow(rowId) {
@@ -343,6 +482,7 @@ export const HOUSTON_TABLE = "loads_houston";
       { label: row.tonu ? "Un-TONU" : "TONU", action: () => toggleHoustonTonu(rowId) },
       { label: row.highlighted ? "Remove Highlight" : "Highlight", action: () => toggleHoustonRowPin(rowId) },
       { label: row.shiftComplete ? "Mark Shift Incomplete" : "Shift Complete", action: () => toggleHoustonShiftComplete(rowId) },
+      { label: "Load Details", action: () => openHoustonLoadDetailsModal(rowId) },
       { label: "Load History", action: () => openHoustonLoadHistoryModal(rowId) },
       { label: "Text Now", action: () => textHoustonDriverForRow(rowId) },
       { label: "Delete", action: () => deleteHoustonRow(rowId), danger: true },
@@ -382,8 +522,10 @@ export const HOUSTON_TABLE = "loads_houston";
     const existing = rows.find((r) => r.dbId === dbRow.id);
     const wasComplete = existing ? existing.shiftComplete : null;
     if (!existing) {
+      const restoreFocus = captureFocusForRerender();
       rows.push(houstonRowFromDbRow(dbRow));
       renderHoustonBoardTable();
+      restoreFocus();
       return;
     }
     const tr = document.getElementById(existing.id);
@@ -393,11 +535,13 @@ export const HOUSTON_TABLE = "loads_houston";
     const fresh = houstonRowFromDbRow(dbRow);
     Object.assign(existing, fresh, { id: existing.id, addedAt: existing.addedAt, selected: existing.selected });
     if (domField) existing[domField] = preserved;
+    const restoreFocus = captureFocusForRerender();
     if (wasComplete !== existing.shiftComplete) renderHoustonBoardTable();
     else {
       const trAfter = document.getElementById(existing.id);
       if (trAfter) trAfter.outerHTML = houstonRowToHtml(existing);
     }
+    restoreFocus();
   }
 
   export function setupHoustonRealtimeSync() {
@@ -481,11 +625,51 @@ export const HOUSTON_TABLE = "loads_houston";
     }
 
     const boardTable = $("#board-table");
+    boardTable.addEventListener("keydown", (e) => handleRowAwareTab(e, "#board-table"));
     boardTable.addEventListener("click", (e) => {
       const textBtn = e.target.closest('[data-action="text-driver"]');
       if (textBtn) textHoustonDriverForRow(textBtn.dataset.row);
+      const openBtn = e.target.closest("[data-open-hou-load]");
+      if (openBtn) openHoustonLoadDetailsModal(openBtn.dataset.openHouLoad);
       if (e.target.closest("#btn-quick-add-row")) quickAddHoustonBlankRow();
+      if (e.target.closest("#btn-add-time-slots")) openAddHoustonTimeSlotsModal();
     });
+    if ($("#modal-add-time-slots")) {
+      on("ats-close", "click", closeAddHoustonTimeSlotsModal);
+      on("ats-cancel", "click", closeAddHoustonTimeSlotsModal);
+      on("ats-submit", "click", submitAddHoustonTimeSlots);
+      on("ats-add-slot-row", "click", () => addHoustonTimeSlotRowUI("", "5"));
+      $("#modal-add-time-slots").addEventListener("click", (e) => { if (e.target.id === "modal-add-time-slots") closeAddHoustonTimeSlotsModal(); });
+    }
+    const houLdModal = $("#modal-houston-load-details");
+    if (houLdModal) {
+      on("hou-ld-close", "click", closeHoustonLoadDetailsModal);
+      on("hou-ld-cancel", "click", closeHoustonLoadDetailsModal);
+      on("hou-ld-save", "click", saveHoustonLoadDetailsModal);
+      houLdModal.addEventListener("click", (e) => { if (e.target.id === "modal-houston-load-details") closeHoustonLoadDetailsModal(); });
+      const driverField = $("#hou-ld-driver");
+      if (driverField) {
+        driverField.addEventListener("focus", () => {
+          openDriverAutocomplete(driverField, "houston", (drv) => {
+            driverField.value = drv.name;
+            driverField.dataset.driverId = drv.id;
+            const profileLink = $("#hou-ld-view-profile");
+            if (profileLink) { profileLink.classList.remove("hidden"); profileLink.dataset.driverId = drv.id; }
+          });
+        });
+        driverField.addEventListener("input", () => {
+          driverField.dataset.driverId = "";
+          const profileLink = $("#hou-ld-view-profile");
+          if (profileLink) profileLink.classList.add("hidden");
+          updateDriverAutocomplete(driverField, "houston");
+        });
+        driverField.addEventListener("blur", () => closeDriverAutocomplete());
+      }
+      const houProfileLink = $("#hou-ld-view-profile");
+      if (houProfileLink) houProfileLink.addEventListener("click", () => {
+        if (houProfileLink.dataset.driverId) openEditDriverModal(houProfileLink.dataset.driverId);
+      });
+    }
     boardTable.addEventListener("contextmenu", (e) => {
       const tr = e.target.closest("tr");
       if (!tr || !tr.id) return;
@@ -532,6 +716,33 @@ export const HOUSTON_TABLE = "loads_houston";
         }
       }
       scheduleHoustonRowSave(found.row);
+      if (t.dataset.driverAc === "true") updateDriverAutocomplete(t, "houston");
+    });
+    boardTable.addEventListener("focusin", (e) => {
+      const t = e.target;
+      if (!(t.dataset && t.dataset.row && t.dataset.driverAc === "true")) return;
+      const rowId = t.dataset.row;
+      openDriverAutocomplete(t, "houston", (drv) => {
+        t.value = drv.name;
+        const found = findHoustonRowAnywhere(rowId);
+        if (found) {
+          found.row.driverName = drv.name;
+          found.row.driverId = drv.id;
+          const tr = document.getElementById(found.row.id);
+          if (tr) {
+            const setText = (selector, val) => { const el = tr.querySelector(selector); if (el) el.textContent = val; };
+            setText(".col-cell .static-text", pick(drv.phone, found.row.driverPhone));
+            setText(".col-dispatcherPhone .static-text", pick(drv.dispatcherPhone, found.row.dispatcherPhone));
+            setText(".col-hou-carrier .static-text", pick(drv.carrier, found.row.carrier));
+            setText(".col-mc .static-text", pick(drv.mc, found.row.mc));
+            setText(".col-rating .static-text", pick(drv.rating, found.row.rating));
+          }
+          scheduleHoustonRowSave(found.row);
+        }
+      });
+    });
+    boardTable.addEventListener("focusout", (e) => {
+      if (e.target.dataset && e.target.dataset.driverAc === "true") closeDriverAutocomplete();
     });
 
     // Add Load modal on this page saves via the Houston path instead

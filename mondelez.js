@@ -21,9 +21,11 @@
    ================================================================ */
 import {
   state, supabaseClient, uid, findDriver, driversForLocation, setDriverSyncStatus,
-  SAVE_DEBOUNCE_MS, escapeHtml, $, keyToDate, addDays, dateKey,
+  SAVE_DEBOUNCE_MS, escapeHtml, $, $all, keyToDate, addDays, dateKey,
   refreshDriverDatalist, closeDateDropdown, renderCalendarGrid, resetCalendarViewMonth,
   closeContextMenu, handleRealtimeDriverChange, pick, textDriverPhone, openAddDriverModal,
+  openDriverAutocomplete, updateDriverAutocomplete, closeDriverAutocomplete, captureFocusForRerender,
+  handleRowAwareTab, openEditDriverModal,
 } from './loadboard.js';
 
 export const MONDELEZ_TABLE = "mondelez_loads";
@@ -265,6 +267,69 @@ function mondelezLocationLabel(key) {
   return loc ? loc.label : key;
 }
 
+// Right-click a row to move it to a different Mondelez location tab (e.g. a
+// load built under the wrong tab by mistake) without having to delete and
+// recreate it — everything on the row carries over, only the location changes.
+function openMondelezRowContextMenu(rowId, x, y) {
+  closeContextMenu();
+  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
+  if (!row) return;
+  const items = [
+    { label: row.tonu ? "Un-TONU" : "TONU", action: () => toggleMondelezTonu(rowId) },
+    { label: row.highlighted ? "Remove Highlight" : "Highlight", action: () => toggleMondelezHighlight(rowId) },
+    { label: row.shiftComplete ? "Mark Shift Incomplete" : "Shift Complete", action: () => toggleMondelezShiftComplete(rowId) },
+    { label: "Load Details", action: () => openMondelezLoadDetailsModal(rowId) },
+    { label: "Text Now", action: () => textMondelezDriverForRow(rowId) },
+    { label: "Email Now", action: () => emailMondelezRouteInfo(rowId) },
+    { label: "Delete", action: () => deleteMondelezRow(rowId), danger: true },
+  ];
+  const menu = document.createElement("div");
+  menu.className = "row-context-menu";
+  menu.id = "row-context-menu";
+  menu.innerHTML = items.map((it, i) => `<button class="context-menu-item${it.danger ? " context-menu-item-danger" : ""}" data-idx="${i}">${it.label}</button>`).join("");
+  document.body.appendChild(menu);
+  menu.style.left = x + "px";
+  menu.style.top = y + "px";
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) menu.style.left = Math.max(4, window.innerWidth - rect.width - 8) + "px";
+  if (rect.bottom > window.innerHeight) menu.style.top = Math.max(4, window.innerHeight - rect.height - 8) + "px";
+  $all(".context-menu-item", menu).forEach((btn, i) => {
+    btn.addEventListener("click", () => { items[i].action(); closeContextMenu(); });
+  });
+}
+
+function moveMondelezRowToLocation(rowId, newLocationKey) {
+  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
+  if (!row) return;
+  row.location = newLocationKey;
+  saveMondelezRowNow(row);
+  renderMondelezTable(); // the row now belongs to a different tab, so it drops out of the current view
+}
+
+function toggleMondelezTonu(rowId) {
+  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
+  if (!row) return;
+  row.tonu = !row.tonu;
+  const tr = document.getElementById(rowId);
+  if (tr) tr.classList.toggle("is-tonu", row.tonu);
+  saveMondelezRowNow(row);
+}
+function toggleMondelezHighlight(rowId) {
+  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
+  if (!row) return;
+  row.highlighted = !row.highlighted;
+  const tr = document.getElementById(rowId);
+  if (tr) tr.classList.toggle("is-row-pinned", row.highlighted);
+  saveMondelezRowNow(row);
+}
+function toggleMondelezShiftComplete(rowId) {
+  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
+  if (!row) return;
+  row.shiftComplete = !row.shiftComplete;
+  saveMondelezRowNow(row);
+  renderMondelezTable(); // completed rows sort to the bottom
+}
+
 function mondelezRowHtml(row) {
   const drv = row.driverId ? findDriver(row.driverId) : null;
   const displayName = drv ? drv.name : row.driverName;
@@ -277,14 +342,14 @@ function mondelezRowHtml(row) {
       ${MDZ_EMAIL_LOCATIONS.has(row.location) ? `<button class="text-btn" data-action="email-mdz-driver" data-mdz-row="${row.id}" title="Email route info">Email</button>` : ""}
     </td>
     ${showLocationCol ? `<td class="col-mdz-location"><span class="static-text">${escapeHtml(mondelezLocationLabel(row.location))}</span></td>` : ""}
-    <td class="pin pin-pro${row.shiftComplete ? " shift-complete-tint" : ""}"><input class="cell-input" placeholder="Aljex#" data-mdz-row="${row.id}" data-mdz-field="aljexNumber" value="${escapeHtml(row.aljexNumber)}"></td>
+    <td class="pin pin-pro${row.shiftComplete ? " shift-complete-tint" : ""}"><input class="cell-input" placeholder="Aljex#" data-mdz-row="${row.id}" data-mdz-field="aljexNumber" value="${escapeHtml(row.aljexNumber)}">${row.aljexNumber ? `<button type="button" class="cell-link-btn" data-open-mdz-load="${row.id}" title="Open load details">↗</button>` : ""}</td>
     <td class="col-mdz-group"><input class="cell-input" placeholder="Delivery Group" data-mdz-row="${row.id}" data-mdz-field="deliveryGroup" value="${escapeHtml(row.deliveryGroup)}"></td>
     <td class="pin pin-driver">
-      <div class="driver-name-wrap"><input class="cell-input" list="driverNamesList" placeholder="Type driver name…" data-mdz-row="${row.id}" data-mdz-field="driverName" value="${escapeHtml(displayName)}"></div>
+      <div class="driver-name-wrap"><input class="cell-input" data-driver-ac="true" placeholder="Type driver name…" data-mdz-row="${row.id}" data-mdz-field="driverName" value="${escapeHtml(displayName)}"></div>
     </td>
     <td class="col-cell"><span class="static-text">${escapeHtml(pick(drv && drv.phone, ""))}</span></td>
     <td class="col-shiftStart"><input class="cell-input small" style="width:52px;" placeholder="--:--" data-mdz-row="${row.id}" data-mdz-field="startTime" value="${escapeHtml(row.startTime)}"></td>
-    <td class="col-mdz-driverapp"><input class="cell-input small" data-mdz-row="${row.id}" data-mdz-field="driverAppId" value="${escapeHtml(row.driverAppId)}"></td>
+    <td class="col-mdz-driverapp"><input class="cell-input small" data-mdz-row="${row.id}" data-mdz-field="driverAppId" inputmode="numeric" maxlength="9" placeholder="9-digit ID" value="${escapeHtml(row.driverAppId)}"></td>
     <td class="col-mdz-trailer"><input class="cell-input small" data-mdz-row="${row.id}" data-mdz-field="trailerNumber" value="${escapeHtml(row.trailerNumber)}"></td>
     <td class="col-mdz-trailer"><input class="cell-input small" placeholder="Return #" data-mdz-row="${row.id}" data-mdz-field="returnTrailerNumber" value="${escapeHtml(row.returnTrailerNumber)}"></td>
     <td class="col-mdz-miles"><input class="cell-input small" style="width:52px;" inputmode="decimal" data-mdz-row="${row.id}" data-mdz-field="miles" value="${escapeHtml(row.miles)}"></td>
@@ -296,7 +361,7 @@ function mondelezRowHtml(row) {
     <td class="col-mdz-notes"><input class="cell-input" placeholder="Status / Notes" data-mdz-row="${row.id}" data-mdz-field="notes" value="${escapeHtml(row.notes)}"></td>
     <td class="col-mdz-image">
       ${row.routeImageUrl
-        ? `<button type="button" class="btn btn-ghost" style="padding:3px 8px; font-size:10.5px;" data-action="view-route-image" data-mdz-row="${row.id}">View Route</button>`
+        ? `<img src="${escapeHtml(row.routeImageUrl)}" class="mdz-route-thumb" data-action="view-route-image" data-mdz-row="${row.id}" alt="Route image" title="Click to view full size">`
         : `<label class="btn btn-ghost" style="padding:3px 8px; font-size:10.5px; cursor:pointer;">Upload<input type="file" accept="image/*" data-action="upload-route-image" data-mdz-row="${row.id}" style="display:none;"></label>`}
     </td>
     <td class="col-availRemove"><button type="button" class="available-remove-btn" data-action="delete-mdz-row" data-mdz-row="${row.id}" title="Delete">&times;</button></td>
@@ -309,7 +374,7 @@ function renderMondelezTable() {
   const displayRows = [...rows].sort((a, b) => (a.shiftComplete ? 1 : 0) - (b.shiftComplete ? 1 : 0));
   const showLocationCol = mondelezState.activeTab === "combined";
   const thead = `<thead><tr>
-    <th class="pin pin-select"><input type="checkbox" class="chk" id="mdz-select-all" title="Select all"></th>
+    <th class="pin pin-select"><div id="mdz-select-count" class="board-select-count"></div><input type="checkbox" class="chk" id="mdz-select-all" title="Select all"></th>
     <th class="pin pin-text"></th>
     ${showLocationCol ? `<th class="col-mdz-location">Location</th>` : ""}
     <th class="pin pin-pro">Aljex #</th>
@@ -335,6 +400,15 @@ function renderMondelezTable() {
   const emptyState = $("#mondelez-empty-state");
   if (emptyState) emptyState.classList.toggle("hidden", rows.length > 0);
   refreshDriverDatalist();
+  updateMondelezSelectCount();
+}
+
+function updateMondelezSelectCount() {
+  const el = $("#mdz-select-count");
+  if (!el) return;
+  const rows = getMondelezDisplayRows(state.activeDate);
+  const selectedCount = rows.filter((r) => r.selected).length;
+  el.textContent = `Count ${rows.length} (${selectedCount} selected)`;
 }
 
 function renderMondelezChrome() {
@@ -403,17 +477,20 @@ function viewRouteImage(rowId) {
   const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
   if (!row || !row.routeImageUrl) return;
   const overlay = document.createElement("div");
-  overlay.className = "overlay";
+  overlay.className = "overlay image-lightbox-overlay";
   overlay.id = "mdz-image-overlay";
   overlay.innerHTML = `
-    <div class="modal" style="width:auto; max-width:92vw;">
+    <div class="modal image-lightbox-content">
       <div class="modal-header"><h3>Route — ${escapeHtml(row.aljexNumber || "")}</h3><button class="modal-close" id="mdz-image-close">&times;</button></div>
-      <div class="modal-body" style="text-align:center;"><img src="${escapeHtml(row.routeImageUrl)}" style="max-width:100%; max-height:75vh; border-radius:6px;"></div>
+      <div class="modal-body" style="text-align:center; padding:12px;"><img src="${escapeHtml(row.routeImageUrl)}" alt="Route image"></div>
     </div>`;
   document.body.appendChild(overlay);
   const close = () => overlay.remove();
   overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
   $("#mdz-image-close").addEventListener("click", close);
+  document.addEventListener("keydown", function escHandler(e) {
+    if (e.key === "Escape") { close(); document.removeEventListener("keydown", escHandler); }
+  });
 }
 
 /* ---------------- row actions ---------------- */
@@ -437,6 +514,95 @@ async function deleteMondelezRow(rowId) {
     try { await supabaseClient.from(MONDELEZ_TABLE).delete().eq("id", row.dbId); }
     catch (e) { console.error("deleteMondelezRow failed:", e); }
   }
+}
+
+/* ---------------- Load Details modal ---------------- */
+
+let mdzLoadDetailsRowId = null;
+
+function openMondelezLoadDetailsModal(rowId) {
+  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
+  if (!row) return;
+  const modal = $("#modal-mdz-load-details");
+  if (!modal) { console.error("Mondelez Load Details modal HTML isn't on this page yet."); return; }
+  mdzLoadDetailsRowId = rowId;
+
+  const setVal = (id, val) => { const el = $("#" + id); if (el) el.value = val == null ? "" : val; };
+  const locSelect = $("#mdz-ld-location");
+  if (locSelect) {
+    locSelect.innerHTML = MONDELEZ_LOCATIONS.map((l) => `<option value="${l.key}">${escapeHtml(l.label)}</option>`).join("");
+    locSelect.value = row.location;
+  }
+  const drv = row.driverId ? findDriver(row.driverId) : null;
+  setVal("mdz-ld-driver", drv ? drv.name : row.driverName);
+  $("#mdz-ld-driver").dataset.driverId = row.driverId || "";
+  const profileLink = $("#mdz-ld-view-profile");
+  if (profileLink) {
+    profileLink.classList.toggle("hidden", !row.driverId);
+    profileLink.dataset.driverId = row.driverId || "";
+  }
+  setVal("mdz-ld-aljex", row.aljexNumber);
+  setVal("mdz-ld-group", row.deliveryGroup);
+  setVal("mdz-ld-start", row.startTime);
+  setVal("mdz-ld-driverapp", row.driverAppId);
+  setVal("mdz-ld-trailer", row.trailerNumber);
+  setVal("mdz-ld-returntrailer", row.returnTrailerNumber);
+  setVal("mdz-ld-stops", row.stopCount);
+  setVal("mdz-ld-miles", row.miles);
+  setVal("mdz-ld-carrierpay", row.carrierPay);
+  setVal("mdz-ld-fsc", row.fsc);
+  setVal("mdz-ld-additional", row.additionalCharges);
+  setVal("mdz-ld-revenue", row.revenueTotal);
+  setVal("mdz-ld-notes", row.notes);
+  modal.classList.remove("hidden");
+}
+
+function closeMondelezLoadDetailsModal() {
+  const modal = $("#modal-mdz-load-details");
+  if (modal) modal.classList.add("hidden");
+  closeDriverAutocomplete();
+  mdzLoadDetailsRowId = null;
+}
+
+function saveMondelezLoadDetailsModal() {
+  if (!mdzLoadDetailsRowId) return;
+  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === mdzLoadDetailsRowId);
+  if (!row) { closeMondelezLoadDetailsModal(); return; }
+  const getVal = (id) => { const el = $("#" + id); return el ? el.value : ""; };
+
+  const newLocation = getVal("mdz-ld-location") || row.location;
+  const locationChanged = newLocation !== row.location;
+
+  const driverInput = $("#mdz-ld-driver");
+  const driverNameTyped = driverInput ? driverInput.value.trim() : row.driverName;
+  const explicitDriverId = driverInput ? driverInput.dataset.driverId : "";
+  let driverId = explicitDriverId || null;
+  if (!driverId) {
+    const match = driversForLocation("mondelez").find((d) => d.name.toLowerCase() === driverNameTyped.toLowerCase());
+    driverId = match ? match.id : null;
+  }
+
+  row.location = newLocation;
+  row.driverName = driverNameTyped;
+  row.driverId = driverId;
+  row.aljexNumber = getVal("mdz-ld-aljex").trim();
+  row.deliveryGroup = getVal("mdz-ld-group").trim();
+  row.startTime = getVal("mdz-ld-start").trim();
+  row.driverAppId = getVal("mdz-ld-driverapp").replace(/\D/g, "").slice(0, 9);
+  row.trailerNumber = getVal("mdz-ld-trailer").trim();
+  row.returnTrailerNumber = getVal("mdz-ld-returntrailer").trim();
+  row.stopCount = getVal("mdz-ld-stops").trim();
+  row.miles = getVal("mdz-ld-miles").trim();
+  row.carrierPay = getVal("mdz-ld-carrierpay").trim();
+  row.fsc = getVal("mdz-ld-fsc").trim();
+  row.additionalCharges = getVal("mdz-ld-additional").trim();
+  row.revenueTotal = getVal("mdz-ld-revenue").trim();
+  row.revenueManual = row.revenueTotal !== "";
+  row.notes = getVal("mdz-ld-notes").trim();
+
+  saveMondelezRowNow(row);
+  closeMondelezLoadDetailsModal();
+  renderMondelezTable(); // if location changed, this drops the row out of the current tab's view
 }
 
 function textMondelezDriverForRow(rowId) {
@@ -475,7 +641,9 @@ function buildMondelezRouteEmailBody(row, driverName) {
     "Morris IL - 6104",
     "Addison IL - 6136",
     "Indianapolis - 6116",
-    line("Your Driver/User tonight:", driverName),
+    line("Your user ID:", row.driverAppId),
+    "iOS: https://apps.apple.com/app/id1008328213",
+    "Android: https://play.google.com/store/apps/details?id=com.descartes.mobilelink&pcampaignid=web_share",
     "",
     "If you are having an issue accessing your route, please click to the top right-hand corner of the app that says \"more\".  From the pop-up menu, choose \"Reactivate Device\".  A warning will pop up that says \"Possible data loss!\".  This is fine.  Enter the code that is provided and click \"Reactivate\".  You will then be taken back to the menu to insert the above information.  If you still cannot access your route after entering all the pertinent information, please call night dispatch immediately.  It is critical that we use the app correctly when delivering stops.",
     "",
@@ -538,14 +706,22 @@ function handleRealtimeMondelezChange(payload) {
   const rows = mondelezState.rowsByDate[state.activeDate];
   if (!rows) return;
   const existing = rows.find((r) => r.dbId === dbRow.id);
-  if (!existing) { rows.push(mondelezRowFromDbRow(dbRow)); renderMondelezTable(); return; }
+  if (!existing) {
+    const restoreFocus = captureFocusForRerender();
+    rows.push(mondelezRowFromDbRow(dbRow));
+    renderMondelezTable();
+    restoreFocus();
+    return;
+  }
   const tr = document.getElementById(existing.id);
   const activeEl = document.activeElement;
   const domField = (tr && tr.contains(activeEl)) ? activeEl.dataset.mdzField : null;
   const preserved = domField ? existing[domField] : undefined;
   Object.assign(existing, mondelezRowFromDbRow(dbRow), { id: existing.id, selected: existing.selected });
   if (domField) existing[domField] = preserved;
+  const restoreFocus = captureFocusForRerender();
   renderMondelezTable();
+  restoreFocus();
 }
 
 function setupMondelezRealtimeSync() {
@@ -592,6 +768,36 @@ export async function initMondelezPage() {
 
   if ($("#btn-add-driver")) $("#btn-add-driver").addEventListener("click", () => openAddDriverModal(false));
 
+  const mdzLdModal = $("#modal-mdz-load-details");
+  if (mdzLdModal) {
+    const closeBtn = $("#mdz-ld-close"); if (closeBtn) closeBtn.addEventListener("click", closeMondelezLoadDetailsModal);
+    const cancelBtn = $("#mdz-ld-cancel"); if (cancelBtn) cancelBtn.addEventListener("click", closeMondelezLoadDetailsModal);
+    const saveBtn = $("#mdz-ld-save"); if (saveBtn) saveBtn.addEventListener("click", saveMondelezLoadDetailsModal);
+    mdzLdModal.addEventListener("click", (e) => { if (e.target.id === "modal-mdz-load-details") closeMondelezLoadDetailsModal(); });
+    const driverField = $("#mdz-ld-driver");
+    if (driverField) {
+      driverField.addEventListener("focus", () => {
+        openDriverAutocomplete(driverField, "mondelez", (drv) => {
+          driverField.value = drv.name;
+          driverField.dataset.driverId = drv.id;
+          const profileLink = $("#mdz-ld-view-profile");
+          if (profileLink) { profileLink.classList.remove("hidden"); profileLink.dataset.driverId = drv.id; }
+        });
+      });
+      driverField.addEventListener("input", () => {
+        driverField.dataset.driverId = "";
+        const profileLink = $("#mdz-ld-view-profile");
+        if (profileLink) profileLink.classList.add("hidden");
+        updateDriverAutocomplete(driverField, "mondelez");
+      });
+      driverField.addEventListener("blur", () => closeDriverAutocomplete());
+    }
+    const profileLink = $("#mdz-ld-view-profile");
+    if (profileLink) profileLink.addEventListener("click", (e) => {
+      if (profileLink.dataset.driverId) openEditDriverModal(profileLink.dataset.driverId);
+    });
+  }
+
   $("#mondelez-rate-panel").addEventListener("change", (e) => {
     const key = e.target.dataset.mdzSetting;
     if (!key) return;
@@ -602,8 +808,17 @@ export async function initMondelezPage() {
   });
 
   const table = $("#mondelez-table");
+  table.addEventListener("keydown", (e) => handleRowAwareTab(e, "#mondelez-table"));
+  table.addEventListener("contextmenu", (e) => {
+    const tr = e.target.closest("tr");
+    if (!tr || !tr.id) return;
+    e.preventDefault();
+    openMondelezRowContextMenu(tr.id, e.clientX, e.clientY);
+  });
   table.addEventListener("click", (e) => {
     if (e.target.closest("#btn-mdz-add-row")) quickAddMondelezRow();
+    const openBtn = e.target.closest("[data-open-mdz-load]");
+    if (openBtn) openMondelezLoadDetailsModal(openBtn.dataset.openMdzLoad);
     const delBtn = e.target.closest("[data-action='delete-mdz-row']");
     if (delBtn) deleteMondelezRow(delBtn.dataset.mdzRow);
     const viewBtn = e.target.closest("[data-action='view-route-image']");
@@ -623,11 +838,29 @@ export async function initMondelezPage() {
     if (t.dataset.action === "toggle-mdz-select") {
       const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === t.dataset.mdzRow);
       if (row) row.selected = t.checked;
+      updateMondelezSelectCount();
       return;
     }
     if (t.dataset.action === "upload-route-image" && t.files && t.files[0]) {
       uploadRouteImage(t.dataset.mdzRow, t.files[0]);
     }
+  });
+  table.addEventListener("focusin", (e) => {
+    const t = e.target;
+    if (!(t.dataset && t.dataset.mdzRow && t.dataset.driverAc === "true")) return;
+    const rowId = t.dataset.mdzRow;
+    openDriverAutocomplete(t, "mondelez", (drv) => {
+      t.value = drv.name;
+      const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
+      if (row) {
+        row.driverName = drv.name;
+        row.driverId = drv.id;
+        scheduleMondelezRowSave(row);
+      }
+    });
+  });
+  table.addEventListener("focusout", (e) => {
+    if (e.target.dataset && e.target.dataset.driverAc === "true") closeDriverAutocomplete();
   });
   table.addEventListener("input", (e) => {
     const t = e.target;
@@ -637,12 +870,20 @@ export async function initMondelezPage() {
     const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
     if (!row) return;
 
+    if (field === "driverAppId") {
+      const digitsOnly = t.value.replace(/\D/g, "").slice(0, 9);
+      if (digitsOnly !== t.value) t.value = digitsOnly;
+      row.driverAppId = digitsOnly;
+      scheduleMondelezRowSave(row);
+      return;
+    }
     if (field === "driverName") {
       row.driverName = t.value;
       row.driverId = null;
       const match = driversForLocation("mondelez").find((d) => d.name.toLowerCase() === t.value.trim().toLowerCase());
       if (match) row.driverId = match.id;
       scheduleMondelezRowSave(row);
+      if (t.dataset.driverAc === "true") updateDriverAutocomplete(t, "mondelez");
       return;
     }
     if (field === "revenueTotal") {
@@ -657,4 +898,6 @@ export async function initMondelezPage() {
   });
 
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeContextMenu(); });
+  document.addEventListener("click", (e) => { if (!e.target.closest("#row-context-menu")) closeContextMenu(); });
+  document.addEventListener("scroll", closeContextMenu, true);
 }

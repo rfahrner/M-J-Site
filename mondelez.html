@@ -148,7 +148,255 @@
       </div>
     </div>
   </div>
+<!--
+  Mondelez Load Details modal — paste this just before the closing </body>
+  tag in mondelez.html, alongside your other modals.
 
+  This is what "Load Details" in the row right-click menu now opens.
+  Location is a dropdown here — changing it and hitting Save moves the load
+  to that location's tab, same as the old "Move to X" menu items did, just
+  living in one place now instead of a separate menu.
+-->
+<div class="overlay hidden" id="modal-mdz-load-details">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Load Details</h3>
+      <button type="button" class="modal-close" id="mdz-ld-close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label for="mdz-ld-location">Location</label>
+        <select class="cell-input" id="mdz-ld-location"></select>
+      </div>
+      <div class="field">
+        <label for="mdz-ld-driver">Driver</label>
+        <input class="cell-input" id="mdz-ld-driver" data-driver-ac="true" placeholder="Type driver name…">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-aljex">Aljex #</label>
+        <input class="cell-input" id="mdz-ld-aljex">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-group">Delivery Group</label>
+        <input class="cell-input" id="mdz-ld-group">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-start">Start Time</label>
+        <input class="cell-input" id="mdz-ld-start" placeholder="--:--">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-driverapp">Driver App ID</label>
+        <input class="cell-input" id="mdz-ld-driverapp" inputmode="numeric" maxlength="9" placeholder="9-digit ID">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-trailer">Trailer #</label>
+        <input class="cell-input" id="mdz-ld-trailer">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-returntrailer">Return Trailer #</label>
+        <input class="cell-input" id="mdz-ld-returntrailer">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-stops">Stops</label>
+        <input class="cell-input" id="mdz-ld-stops" type="number" min="0">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-miles">Miles</label>
+        <input class="cell-input" id="mdz-ld-miles" type="number" min="0">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-carrierpay">Carrier Pay</label>
+        <input class="cell-input" id="mdz-ld-carrierpay" type="number" min="0" step="0.01">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-fsc">FSC</label>
+        <input class="cell-input" id="mdz-ld-fsc" type="number" min="0" step="0.01">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-additional">Additional</label>
+        <input class="cell-input" id="mdz-ld-additional" type="number" min="0" step="0.01">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-revenue">Revenue</label>
+        <input class="cell-input" id="mdz-ld-revenue" type="number" min="0" step="0.01">
+        <div class="subtext" style="margin-top:4px;">Leave blank to use the calculated total</div>
+      </div>
+      <div class="field">
+        <label for="mdz-ld-notes">Status / Notes</label>
+        <textarea class="cell-input" id="mdz-ld-notes" rows="3"></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="mdz-ld-cancel">Cancel</button>
+      <button class="btn" id="mdz-ld-save">Save</button>
+    </div>
+  </div>
+</div>
+<!--
+  Mondelez Load Details modal — paste this just before the closing </body>
+  tag in mondelez.html, alongside your other modals.
+-->
+<div class="overlay hidden" id="modal-mdz-load-details">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Load Details</h3>
+      <button type="button" class="modal-close" id="mdz-ld-close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label for="mdz-ld-location">Location</label>
+        <select class="cell-input" id="mdz-ld-location"></select>
+      </div>
+      <div class="field">
+        <label for="mdz-ld-driver">Driver</label>
+        <input class="cell-input" id="mdz-ld-driver" data-driver-ac="true" placeholder="Type driver name…">
+        <a href="#" id="mdz-ld-view-profile" class="hidden" style="display:inline-block; margin-top:4px; font-size:12.5px;">View Driver Profile</a>
+      </div>
+      <div class="field">
+        <label for="mdz-ld-aljex">Aljex #</label>
+        <input class="cell-input" id="mdz-ld-aljex">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-group">Delivery Group</label>
+        <input class="cell-input" id="mdz-ld-group">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-start">Start Time</label>
+        <input class="cell-input" id="mdz-ld-start" placeholder="--:--">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-driverapp">Driver App ID</label>
+        <input class="cell-input" id="mdz-ld-driverapp" inputmode="numeric" maxlength="9" placeholder="9-digit ID">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-trailer">Trailer #</label>
+        <input class="cell-input" id="mdz-ld-trailer">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-returntrailer">Return Trailer #</label>
+        <input class="cell-input" id="mdz-ld-returntrailer">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-stops">Stops</label>
+        <input class="cell-input" id="mdz-ld-stops" type="number" min="0">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-miles">Miles</label>
+        <input class="cell-input" id="mdz-ld-miles" type="number" min="0">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-carrierpay">Carrier Pay</label>
+        <input class="cell-input" id="mdz-ld-carrierpay" type="number" min="0" step="0.01">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-fsc">FSC</label>
+        <input class="cell-input" id="mdz-ld-fsc" type="number" min="0" step="0.01">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-additional">Additional</label>
+        <input class="cell-input" id="mdz-ld-additional" type="number" min="0" step="0.01">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-revenue">Revenue</label>
+        <input class="cell-input" id="mdz-ld-revenue" type="number" min="0" step="0.01">
+        <div class="subtext" style="margin-top:4px;">Leave blank to use the calculated total</div>
+      </div>
+      <div class="field">
+        <label for="mdz-ld-notes">Status / Notes</label>
+        <textarea class="cell-input" id="mdz-ld-notes" rows="3"></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="mdz-ld-cancel">Cancel</button>
+      <button class="btn" id="mdz-ld-save">Save</button>
+    </div>
+  </div>
+</div>
+<!--
+  Mondelez Load Details modal — paste this just before the closing </body>
+  tag in mondelez.html, alongside your other modals.
+
+  This is what "Load Details" in the row right-click menu now opens.
+  Location is a dropdown here — changing it and hitting Save moves the load
+  to that location's tab, same as the old "Move to X" menu items did, just
+  living in one place now instead of a separate menu.
+-->
+<div class="overlay hidden" id="modal-mdz-load-details">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Load Details</h3>
+      <button type="button" class="modal-close" id="mdz-ld-close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label for="mdz-ld-location">Location</label>
+        <select class="cell-input" id="mdz-ld-location"></select>
+      </div>
+      <div class="field">
+        <label for="mdz-ld-driver">Driver</label>
+        <input class="cell-input" id="mdz-ld-driver" data-driver-ac="true" placeholder="Type driver name…">
+        <button type="button" id="mdz-ld-view-profile" class="cell-link-btn hidden" title="Open driver profile" style="margin-top:4px;">↗</button>
+      </div>
+      <div class="field">
+        <label for="mdz-ld-aljex">Aljex #</label>
+        <input class="cell-input" id="mdz-ld-aljex">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-group">Delivery Group</label>
+        <input class="cell-input" id="mdz-ld-group">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-start">Start Time</label>
+        <input class="cell-input" id="mdz-ld-start" placeholder="--:--">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-driverapp">Driver App ID</label>
+        <input class="cell-input" id="mdz-ld-driverapp" inputmode="numeric" maxlength="9" placeholder="9-digit ID">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-trailer">Trailer #</label>
+        <input class="cell-input" id="mdz-ld-trailer">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-returntrailer">Return Trailer #</label>
+        <input class="cell-input" id="mdz-ld-returntrailer">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-stops">Stops</label>
+        <input class="cell-input" id="mdz-ld-stops" type="number" min="0">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-miles">Miles</label>
+        <input class="cell-input" id="mdz-ld-miles" type="number" min="0">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-carrierpay">Carrier Pay</label>
+        <input class="cell-input" id="mdz-ld-carrierpay" type="number" min="0" step="0.01">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-fsc">FSC</label>
+        <input class="cell-input" id="mdz-ld-fsc" type="number" min="0" step="0.01">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-additional">Additional</label>
+        <input class="cell-input" id="mdz-ld-additional" type="number" min="0" step="0.01">
+      </div>
+      <div class="field">
+        <label for="mdz-ld-revenue">Revenue</label>
+        <input class="cell-input" id="mdz-ld-revenue" type="number" min="0" step="0.01">
+        <div class="subtext" style="margin-top:4px;">Leave blank to use the calculated total</div>
+      </div>
+      <div class="field">
+        <label for="mdz-ld-notes">Status / Notes</label>
+        <textarea class="cell-input" id="mdz-ld-notes" rows="3"></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="mdz-ld-cancel">Cancel</button>
+      <button class="btn" id="mdz-ld-save">Save</button>
+    </div>
+  </div>
+</div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script type="module" src="loadboard.js" defer></script>
 </body>

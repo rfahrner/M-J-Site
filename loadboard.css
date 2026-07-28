@@ -698,6 +698,12 @@ td.trip-tint-b {
   z-index: 30;
 }
 .autocomplete-item { padding: 6px 10px; font-size: 12.5px; cursor: pointer; }
+.autocomplete-item:hover, .autocomplete-item.is-highlighted { background: var(--slate-100, #f1f5f9); }
+/* The floating driver autocomplete is appended to <body> and positioned via
+   JS (position:fixed, set inline), used both on regular pages and inside
+   modals (Load Details) -- needs to sit above the modal overlay (z-index
+   100), not just above regular page content. */
+.driver-ac-floating { z-index: 500; }
 .autocomplete-item:hover { background: var(--blue-bg); }
 .autocomplete-item .ac-sub { color: var(--slate-500); font-size: 11px; }
 
@@ -906,6 +912,13 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
   display: flex; align-items: center; justify-content: center;
   z-index: 100;
 }
+/* Driver profile opens FROM WITHIN Load Details on every board now (the
+   "↗" link next to the driver name) — it needs to render above that modal,
+   not behind it. Same z-index as any other .overlay would fall back to DOM
+   order, and this modal is defined earlier in the HTML than the newer Load
+   Details modals, so it was losing that fight even though it's opened
+   more recently and should be the one on top. */
+#modal-add-driver { z-index: 150; }
 .hidden { display: none !important; }
 
 .modal {
@@ -922,6 +935,42 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
   border-bottom: 1px solid var(--line);
   display: flex; align-items: center; justify-content: space-between;
 }
+
+/* Route image thumbnail (Mondelez) — small, clickable, opens the lightbox */
+.mdz-route-thumb {
+  width: 40px; height: 40px;
+  object-fit: cover;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  transition: transform 0.12s ease;
+}
+.mdz-route-thumb:hover { transform: scale(1.08); }
+
+/* Image lightbox — grows in from the center rather than just appearing,
+   and sized to fill most of the screen so it's actually readable
+   (a trip sheet photo needs to be legible, not thumbnail-sized). */
+@keyframes lightbox-grow-in {
+  from { transform: scale(0.85); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+.image-lightbox-overlay {
+  background: rgba(11,18,32,0.8);
+}
+.image-lightbox-content {
+  width: auto;
+  max-width: 95vw;
+  max-height: 95vh;
+  animation: lightbox-grow-in 0.16s ease-out;
+}
+.image-lightbox-content img {
+  display: block;
+  max-width: 95vw;
+  max-height: calc(95vh - 60px);
+  object-fit: contain;
+  border-radius: 6px;
+}
+
 .modal-header h3 { margin: 0; font-size: 15px; }
 .modal-close { border: none; background: transparent; font-size: 18px; color: var(--slate-500); line-height: 1; }
 .modal-body { padding: 18px 20px; }
@@ -1341,6 +1390,8 @@ fieldset.rate-tier-box.is-overridden {
    shared .pin-text/.pin-pro/.pin-driver sizing used elsewhere. */
 #mondelez-table .pin-text {
   width: 94px; min-width: 94px;
+}
+#mondelez-table td.pin-text {
   display: flex; align-items: center; justify-content: center; gap: 4px;
 }
 #mondelez-table .pin-pro { left: 168px; }

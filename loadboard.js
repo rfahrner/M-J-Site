@@ -1156,7 +1156,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       <td class="col-driverPreference"${rs}><span class="static-text">${escapeHtml((drv && drv.preference) || "")}</span></td>
       <td class="pin pin-driver"${rs}>
         <div class="driver-name-wrap">
-          <input class="cell-input" list="driverNamesList" placeholder="Type driver name…"
+          <input class="cell-input" data-driver-ac="true" placeholder="Type driver name…"
             data-row="${row.id}" data-field="driverName" value="${escapeHtml(displayName)}">
         </div>
       </td>
@@ -1428,6 +1428,36 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     return activeEl.dataset.field || null;
   }
 
+  // Realtime updates (including echoes of the user's own save) sometimes have
+  // to fall back to a full table re-render — which replaces every row's DOM
+  // nodes, including whichever one the user is currently typing in. A fresh
+  // node with the same value isn't the same element, so the browser doesn't
+  // keep it focused, and the user gets silently kicked out of the field
+  // mid-sentence. Call this right before a re-render that might do that;
+  // it hands back a function that re-focuses (and restores cursor position
+  // in) the equivalent field afterward, if there was one to restore.
+  export function captureFocusForRerender() {
+    const el = document.activeElement;
+    if (!el || !("value" in el)) return () => {};
+    const ds = el.dataset || {};
+    let selector = null;
+    if (ds.row && ds.field) selector = `[data-row="${ds.row}"][data-field="${ds.field}"]`;
+    else if (ds.mdzRow && ds.mdzField) selector = `[data-mdz-row="${ds.mdzRow}"][data-mdz-field="${ds.mdzField}"]`;
+    else if (ds.availRow) selector = `[data-avail-row="${ds.availRow}"]`;
+    else if (el.id) selector = `#${el.id}`;
+    if (!selector) return () => {};
+    const selStart = typeof el.selectionStart === "number" ? el.selectionStart : null;
+    const selEnd = typeof el.selectionEnd === "number" ? el.selectionEnd : null;
+    return () => {
+      const fresh = document.querySelector(selector);
+      if (!fresh) return;
+      fresh.focus();
+      if (selStart != null && fresh.setSelectionRange) {
+        try { fresh.setSelectionRange(selStart, selEnd); } catch (e) { /* not a text-selectable input type */ }
+      }
+    };
+  }
+
   function handleRealtimeShiftChange(payload) {
     if (payload.eventType === "DELETE") return; // no delete-row feature yet
     const dbRow = payload.new;
@@ -1442,7 +1472,9 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     const existing = rows.find((r) => r.dbId === dbRow.id);
     if (!existing) {
       rows.push(shiftFromDbRow(dbRow));
+      const restoreFocus = captureFocusForRerender();
       renderBoardTable(); // a whole new row appeared — simplest to redraw
+      restoreFocus();
       return;
     }
     const domField = currentlyEditedField(existing.id, null);
@@ -1453,7 +1485,9 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     Object.assign(existing, fresh, { id: existing.id, trips: existing.trips, addedAt: existing.addedAt, selected: existing.selected });
     if (stateKey) existing[stateKey] = preserved; // don't clobber what the user is actively typing right now
     if (wasComplete !== existing.shiftComplete) {
+      const restoreFocus = captureFocusForRerender();
       renderBoardTable(); // needs to move to the top/bottom — a single-row rebuild can't reposition it
+      restoreFocus();
     } else {
       recalcRowCalcCellsInPlace(existing.id);
     }
@@ -1493,7 +1527,11 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     }
     refreshDriverDatalist();
     if (currentFile() === "driverlist.html") renderDriverList();
-    else if (state.activeLocation) renderBoardTable(); // driver-linked display cells may need refreshing
+    else if (state.activeLocation) {
+      const restoreFocus = captureFocusForRerender();
+      renderBoardTable(); // driver-linked display cells may need refreshing
+      restoreFocus();
+    }
   }
 
   // Reused for both postgres_changes sync and the "someone's typing here"
@@ -1578,6 +1616,188 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     if (!dl) { dl = document.createElement("datalist"); dl.id = "driverNamesList"; document.body.appendChild(dl); }
     const contextLocation = state.activeLocation || state.driverListTab || "atlanta";
     dl.innerHTML = driversForLocation(contextLocation).map((d) => `<option value="${escapeHtml(d.name)}">`).join("");
+  }
+
+  /* ---------------- shared driver-name autocomplete (all driver-name fields site-wide) ----------------
+     Replaces the native <datalist> popup everywhere it was used. A native
+     datalist's open/close timing and on-screen position are entirely up to
+     the browser -- a page has no control over either, which is why it was
+     closing on its own and not consistently appearing under the field. This
+     is one floating dropdown, positioned in JS under whichever input is
+     currently focused (so it always tracks it correctly regardless of which
+     table/page it's in, or whether that table scrolls), and it only ever
+     closes on a real dismissal: picking an option, clicking elsewhere, or
+     pressing Escape -- never on its own after a few seconds. */
+  let driverAcBox = null;
+  let driverAcOnPick = null; // (driver) => void
+  let driverAcMatches = [];
+  let driverAcHighlight = -1;
+  let driverAcInput = null;
+
+  function ensureDriverAcBox() {
+    if (driverAcBox) return driverAcBox;
+    const box = document.createElement("div");
+    box.className = "autocomplete-list hidden driver-ac-floating";
+    box.id = "driver-ac-floating";
+    document.body.appendChild(box);
+    // mousedown fires before the input's blur/focusout, so a pick registers
+    // before closeDriverAutocomplete() would otherwise hide the box first
+    box.addEventListener("mousedown", (e) => {
+      const item = e.target.closest("[data-pick-driver]");
+      if (!item) return;
+      e.preventDefault();
+      const drv = findDriver(item.dataset.pickDriver);
+      if (drv && driverAcOnPick) driverAcOnPick(drv);
+      closeDriverAutocomplete();
+    });
+    driverAcBox = box;
+    return box;
+  }
+
+  function positionDriverAcBox(inputEl) {
+    const box = ensureDriverAcBox();
+    const rect = inputEl.getBoundingClientRect();
+    box.style.position = "fixed";
+    box.style.left = rect.left + "px";
+    box.style.top = rect.bottom + 2 + "px";
+    box.style.width = Math.max(rect.width, 220) + "px";
+  }
+
+  function renderDriverAcOptions(query, locationKey) {
+    const box = ensureDriverAcBox();
+    const q = (query || "").trim().toLowerCase();
+    const pool = driversForLocation(locationKey || "atlanta");
+    driverAcMatches = (q ? pool.filter((d) => d.name.toLowerCase().includes(q)) : pool).slice(0, 8);
+    driverAcHighlight = -1;
+    box.innerHTML = driverAcMatches.length
+      ? driverAcMatches.map((d, i) => `
+          <div class="autocomplete-item" data-pick-driver="${d.id}" data-ac-index="${i}">
+            ${escapeHtml(d.name)}<div class="ac-sub">${escapeHtml(d.mc)} · ${escapeHtml(d.phone)}</div>
+          </div>`).join("")
+      : `<div class="autocomplete-item" style="color:var(--slate-500);">No matching driver.</div>`;
+  }
+
+  function setDriverAcHighlight(index) {
+    if (!driverAcBox) return;
+    driverAcHighlight = index;
+    $all(".autocomplete-item[data-ac-index]", driverAcBox).forEach((el) => {
+      const isHit = Number(el.dataset.acIndex) === index;
+      el.classList.toggle("is-highlighted", isHit);
+      if (isHit) el.scrollIntoView({ block: "nearest" });
+    });
+  }
+
+  function handleDriverAcKeydown(e) {
+    if (!driverAcBox || driverAcBox.classList.contains("hidden")) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (driverAcMatches.length) setDriverAcHighlight(Math.min(driverAcHighlight + 1, driverAcMatches.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (driverAcMatches.length) setDriverAcHighlight(Math.max(driverAcHighlight - 1, 0));
+    } else if (e.key === "Enter") {
+      if (driverAcHighlight >= 0 && driverAcMatches[driverAcHighlight]) {
+        e.preventDefault();
+        const drv = driverAcMatches[driverAcHighlight];
+        if (driverAcOnPick) driverAcOnPick(drv);
+        closeDriverAutocomplete();
+      }
+    } else if (e.key === "Escape") {
+      closeDriverAutocomplete();
+    }
+  }
+
+  // Call on focus (and again on every keystroke) for any driver-name field —
+  // locationKey picks which driver pool to search (pass "mondelez" on the
+  // Mondelez board, "houston" on Houston, etc; falls back to state.activeLocation).
+  export function openDriverAutocomplete(inputEl, locationKey, onPick) {
+    driverAcOnPick = onPick;
+    positionDriverAcBox(inputEl);
+    renderDriverAcOptions(inputEl.value, locationKey || state.activeLocation);
+    ensureDriverAcBox().classList.remove("hidden");
+    if (driverAcInput && driverAcInput !== inputEl) driverAcInput.removeEventListener("keydown", handleDriverAcKeydown);
+    if (driverAcInput !== inputEl) inputEl.addEventListener("keydown", handleDriverAcKeydown);
+    driverAcInput = inputEl;
+  }
+  export function updateDriverAutocomplete(inputEl, locationKey) {
+    // If the box got closed for any reason (Escape, a stray blur/refocus
+    // cycle, a realtime re-render swapping the DOM node) while the user is
+    // still actively typing in this field, treat that as reopening it
+    // rather than silently doing nothing — a user who's still typing
+    // should always see live suggestions, not get stuck with a dead field
+    // until they click away and back in.
+    if (!driverAcBox || driverAcBox.classList.contains("hidden")) {
+      if (document.activeElement === inputEl) openDriverAutocomplete(inputEl, locationKey, driverAcOnPick);
+      return;
+    }
+    positionDriverAcBox(inputEl); // re-anchor in case the row shifted (e.g. a save-status change)
+    renderDriverAcOptions(inputEl.value, locationKey || state.activeLocation);
+  }
+  export function closeDriverAutocomplete() {
+    if (driverAcBox) driverAcBox.classList.add("hidden");
+    // driverAcOnPick is deliberately NOT cleared here — it's only ever
+    // invoked from the box's own click handler or the Enter-key handler,
+    // both of which already check the box is visible first, so there's no
+    // risk of a stale callback firing while closed. Keeping it around lets
+    // updateDriverAutocomplete's self-heal-by-reopening path work correctly
+    // if this field gets typed in again without a fresh focus event.
+    if (driverAcInput) { driverAcInput.removeEventListener("keydown", handleDriverAcKeydown); driverAcInput = null; }
+  }
+  // Reposition on scroll rather than closing outright — closing here used to
+  // fire immediately after opening, because focusing a field near the edge
+  // of a scrolled table triggers the browser's own small auto-scroll to
+  // bring it into view, and that scroll event was being caught (this
+  // listener runs in the capture phase specifically so it catches scrolling
+  // inside the table's own scroll container, not just the page) and
+  // dismissing the dropdown before it was ever visible.
+  document.addEventListener("scroll", () => {
+    if (driverAcInput && driverAcBox && !driverAcBox.classList.contains("hidden")) {
+      positionDriverAcBox(driverAcInput);
+    }
+  }, true);
+  window.addEventListener("resize", () => closeDriverAutocomplete());
+
+  // Tab, site-wide across every board table: move rightward through the
+  // editable fields on the CURRENT row, then drop down to the first
+  // editable field of the next row once the current row runs out.
+  // Plain DOM tab order was jumping unpredictably, since each row mixes
+  // many non-editable calculated cells (plain <span> text) in among the
+  // real inputs, and pinned/sticky columns don't reorder tab flow to
+  // match — this makes tab order explicit instead of relying on that.
+  const EDITABLE_SELECTOR = 'input:not([disabled]):not([type="checkbox"]), textarea:not([disabled]), select:not([disabled])';
+  export function handleRowAwareTab(e, tableSelector) {
+    if (e.key !== "Tab") return;
+    const el = e.target;
+    if (!el.matches || !el.matches(EDITABLE_SELECTOR)) return;
+    const table = el.closest(tableSelector);
+    if (!table) return;
+    const tr = el.closest("tr");
+    if (!tr) return;
+    const rowFields = $all(EDITABLE_SELECTOR, tr);
+    const idx = rowFields.indexOf(el);
+    if (idx === -1) return;
+    const forward = !e.shiftKey;
+    const nextInRow = forward ? rowFields[idx + 1] : rowFields[idx - 1];
+    if (nextInRow) {
+      e.preventDefault();
+      nextInRow.focus();
+      if (nextInRow.select && nextInRow.type !== "checkbox") nextInRow.select();
+      return;
+    }
+    // ran out of fields on this row — drop to the next (or previous) row
+    let sib = forward ? tr.nextElementSibling : tr.previousElementSibling;
+    while (sib) {
+      const fields = $all(EDITABLE_SELECTOR, sib);
+      const target = forward ? fields[0] : fields[fields.length - 1];
+      if (target) {
+        e.preventDefault();
+        target.focus();
+        if (target.select && target.type !== "checkbox") target.select();
+        return;
+      }
+      sib = forward ? sib.nextElementSibling : sib.previousElementSibling;
+    }
+    // no more rows either way — let the browser do its normal thing (tab out of the table)
   }
 
   function renderDriverList() {
@@ -2452,7 +2672,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
         mainHtml = `
           <div class="ld-edit-bar"><button type="button" class="btn btn-ghost" data-ld-edit="overview">Edit</button></div>
           <div class="field-box-grid">
-            <fieldset class="field-box"><legend>Driver</legend><div class="static-text">${escapeHtml(drv ? drv.name : (row.driverNameText || "—"))}${drv ? ` <button type="button" class="inline-add-driver" data-action="edit-driver" data-driver-id="${drv.id}" style="margin-left:6px;">View Profile</button>` : ""}</div></fieldset>
+            <fieldset class="field-box"><legend>Driver</legend><div class="static-text">${escapeHtml(drv ? drv.name : (row.driverNameText || "—"))}${drv ? ` <button type="button" class="cell-link-btn" data-action="edit-driver" data-driver-id="${drv.id}" title="Open driver profile">↗</button>` : ""}</div></fieldset>
             <fieldset class="field-box"><legend>Status</legend><div class="static-text">${row.shiftComplete ? "Complete" : "Active"}</div></fieldset>
             <fieldset class="field-box"><legend>Trips</legend><div class="static-text">${row.trips.length}</div></fieldset>
             <fieldset class="field-box" style="grid-column: span 2;">
@@ -2471,7 +2691,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
         const d = loadDetailsState.editDraft;
         mainHtml = `
           <div class="field-box-grid">
-            <fieldset class="field-box"><legend>Driver</legend><input class="cell-input" id="ld-ov-driver" list="driverNamesList" value="${escapeHtml(d.driverName)}"></fieldset>
+            <fieldset class="field-box"><legend>Driver</legend><input class="cell-input" id="ld-ov-driver" data-driver-ac="true" value="${escapeHtml(d.driverName)}"></fieldset>
             <fieldset class="field-box" style="grid-column: span 2;">
               <legend>Time Sheet</legend>
               <div class="ov-timesheet-row">
@@ -2551,7 +2771,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
             <fieldset class="field-box"><legend>Trailer #</legend><input class="cell-input" id="ld-tr-trailerOut" value="${escapeHtml(d.trailerOut)}"></fieldset>
             <fieldset class="field-box"><legend>Route Miles</legend><input class="cell-input" id="ld-tr-routeMiles" value="${escapeHtml(d.routeMiles)}"></fieldset>
             <fieldset class="field-box"><legend>Stops</legend><input class="cell-input" id="ld-tr-stopCount" value="${escapeHtml(d.stopCount)}"></fieldset>
-            <fieldset class="field-box"><legend>Reassign Driver</legend><input class="cell-input" id="ld-tr-driver" list="driverNamesList" value="${escapeHtml(d.driverName)}"><div class="subtext" style="margin-top:4px;">Leave blank to keep the load's driver</div></fieldset>
+            <fieldset class="field-box"><legend>Reassign Driver</legend><input class="cell-input" id="ld-tr-driver" data-driver-ac="true" value="${escapeHtml(d.driverName)}"><div class="subtext" style="margin-top:4px;">Leave blank to keep the load's driver</div></fieldset>
             <fieldset class="field-box" style="grid-column: span 2;"><legend>Notes on this route</legend><textarea class="cell-input" id="ld-tr-notes" rows="3" style="width:100%;">${escapeHtml(d.notes)}</textarea></fieldset>
             <fieldset class="field-box" style="grid-column: span 2;"><legend>Stop In/Out Times</legend><div id="ld-stop-fields">${stopFieldsHtml(stopCount, d.stops)}</div></fieldset>
           </div>
@@ -2890,6 +3110,11 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
   /* ---------------- Add Driver modal (guarded — only wired if present) ---------------- */
 
   function setVal(id, val) { const el = $("#" + id); if (el) el.value = val; }
+  // Companion to setVal — reads a field's value without crashing if that
+  // field happens to be missing from whichever page's HTML is actually
+  // loaded (this has bitten submitDriverForm more than once now, since
+  // driver-form fields have shifted around across several HTML rebuilds).
+  function getVal(id) { const el = $("#" + id); return el ? el.value : ""; }
   function setText(id, text) { const el = $("#" + id); if (el) el.textContent = text; }
 
   // Same box style as the Load Details Rate panel, but scoped to one
@@ -2947,7 +3172,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     const notesEl = $("#ad-tab-notes"); if (notesEl) notesEl.classList.add("hidden");
     ["ad-name", "ad-phone", "ad-mc", "ad-dispatcher-phone", "ad-email", "ad-email2", "ad-rating", "ad-preference", "ad-carrier", "ad-rate-booking", "ad-notes", "ad-tii-amount", "ad-rate"]
       .forEach((id) => setVal(id, ""));
-    $all('input[name="ad-tia"]').forEach((r) => (r.checked = r.value === "no"));
+    $all('input[name="ad-tia"]', $("#modal-add-driver")).forEach((r) => (r.checked = r.value === "no"));
     const addingFromMondelez = (state.activeLocation || state.driverListTab) === "mondelez";
     $all('input[name="ad-runs-out-of"]').forEach((c) => { c.checked = addingFromMondelez && c.value === "mondelez"; });
     const atlantaBoxes = $("#ad-atlanta-rate-boxes");
@@ -2990,7 +3215,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     setVal("ad-rate-booking", d.rateBooking || "");
     setVal("ad-notes", d.notes || "");
     setVal("ad-rate", d.normalRate || "");
-    $all('input[name="ad-tia"]').forEach((r) => (r.checked = r.value === (d.tia ? "yes" : "no")));
+    $all('input[name="ad-tia"]', $("#modal-add-driver")).forEach((r) => (r.checked = r.value === (d.tia ? "yes" : "no")));
     setVal("ad-tii-amount", d.tiiAmount != null ? d.tiiAmount : "");
     const runsOutOf = d.runsOutOf || [];
     $all('input[name="ad-runs-out-of"]').forEach((c) => { c.checked = runsOutOf.includes(c.value); });
@@ -3021,18 +3246,20 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
   }
 
   async function submitDriverForm() {
-    const name = $("#ad-name").value.trim();
-    const phone = $("#ad-phone").value.trim();
-    const mc = $("#ad-mc").value.trim();
-    const email = $("#ad-email").value.trim();
+    const name = getVal("ad-name").trim();
+    const phone = getVal("ad-phone").trim();
+    const mc = getVal("ad-mc").trim();
+    const email = getVal("ad-email").trim();
     let ok = true;
     [["ad-name", name], ["ad-phone", phone], ["ad-mc", mc], ["ad-email", email]].forEach(([id, val]) => {
-      const field = $("#" + id).closest(".field");
-      field.classList.toggle("has-error", !val);
+      const el = $("#" + id);
+      const field = el ? el.closest(".field") : null;
+      if (field) field.classList.toggle("has-error", !val);
       if (!val) ok = false;
     });
     if (mc && !/^\d+$/.test(mc)) {
-      $("#ad-mc").closest(".field").classList.add("has-error");
+      const mcField = $("#ad-mc");
+      if (mcField) mcField.closest(".field").classList.add("has-error");
       ok = false;
     }
     if (!ok) return;
@@ -3040,16 +3267,16 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     const isEdit = !!state.editingDriverId;
     const draft = {
       name, phone, mc, email,
-      dispatcherPhone: $("#ad-dispatcher-phone").value.trim(),
-      email2: $("#ad-email2").value.trim(),
-      rating: $("#ad-rating").value.trim() || null,
-      preference: $("#ad-preference").value || null,
-      notes: $("#ad-notes").value.trim(),
-      carrier: $("#ad-carrier").value.trim(),
-      rateBooking: $("#ad-rate-booking").value.trim(),
-      tia: $all('input[name="ad-tia"]').find((r) => r.checked).value === "yes",
-      tiiAmount: $("#ad-tii-amount").value.trim() ? Number($("#ad-tii-amount").value) : null,
-      normalRate: $("#ad-rate").value.trim() || null,
+      dispatcherPhone: getVal("ad-dispatcher-phone").trim(),
+      email2: getVal("ad-email2").trim(),
+      rating: getVal("ad-rating").trim() || null,
+      preference: getVal("ad-preference") || null,
+      notes: getVal("ad-notes").trim(),
+      carrier: getVal("ad-carrier").trim(),
+      rateBooking: getVal("ad-rate-booking").trim(),
+      tia: ($all('input[name="ad-tia"]', $("#modal-add-driver")).find((r) => r.checked) || {}).value === "yes",
+      tiiAmount: getVal("ad-tii-amount").trim() ? Number(getVal("ad-tii-amount")) : null,
+      normalRate: getVal("ad-rate").trim() || null,
       runsOutOf: $all('input[name="ad-runs-out-of"]').filter((c) => c.checked).map((c) => c.value),
       atlantaRateOverrides: readAtlantaRateOverridesFromForm(),
       location: isEdit ? state.editingDriverLocation : normalizeDriverLocationField(state.activeLocation || state.driverListTab),
@@ -3445,7 +3672,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     const displayName = drv ? drv.name : row.driverName;
     return `<tr id="${row.id}">
       <td class="col-availDriver">
-        <input class="cell-input" list="driverNamesList" placeholder="Type driver name…" data-avail-row="${row.id}" value="${escapeHtml(displayName)}">
+        <input class="cell-input" data-driver-ac="true" placeholder="Type driver name…" data-avail-row="${row.id}" value="${escapeHtml(displayName)}">
       </td>
       <td class="col-cell"><span class="static-text">${escapeHtml(drv && drv.phone ? drv.phone : "—")}</span></td>
       <td class="col-dispatcherPhone"><span class="static-text">${escapeHtml(drv && drv.dispatcherPhone ? drv.dispatcherPhone : "—")}</span></td>
@@ -3542,6 +3769,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     on("btn-available-add-row", "click", addAvailableRow);
 
     const table = $("#available-table");
+    table.addEventListener("keydown", (e) => handleRowAwareTab(e, "#available-table"));
     table.addEventListener("click", (e) => {
       const rmBtn = e.target.closest("[data-avail-remove]");
       if (rmBtn) removeAvailableRow(rmBtn.dataset.availRemove);
@@ -3556,10 +3784,26 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       const match = driversForLocation(state.activeLocation || "atlanta").find((d) => d.name.toLowerCase() === t.value.trim().toLowerCase());
       if (match) row.driverId = match.id;
       scheduleAvailableRowSave(row, state.activeLocation, state.activeDate);
+      if (t.dataset.driverAc === "true") updateDriverAutocomplete(t, state.activeLocation);
+    });
+    table.addEventListener("focusin", (e) => {
+      const t = e.target;
+      if (!(t.dataset && t.dataset.availRow && t.dataset.driverAc === "true")) return;
+      const rowId = t.dataset.availRow;
+      openDriverAutocomplete(t, state.activeLocation, (drv) => {
+        t.value = drv.name;
+        const row = getAvailableSheet(state.activeLocation, state.activeDate).find((r) => r.id === rowId);
+        if (row) {
+          row.driverName = drv.name;
+          row.driverId = drv.id;
+          scheduleAvailableRowSave(row, state.activeLocation, state.activeDate);
+        }
+      });
     });
     table.addEventListener("focusout", (e) => {
       const t = e.target;
       if (!t.dataset.availRow) return;
+      if (t.dataset.driverAc === "true") closeDriverAutocomplete();
       renderAvailableTable(); // refresh the driver-linked columns now that typing is done, without disrupting the datalist mid-type
     });
   }
@@ -3726,6 +3970,20 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
           const container = $("#ld-stop-fields");
           if (container) container.innerHTML = stopFieldsHtml(Math.max(0, parseInt(e.target.value, 10) || 0), loadDetailsState.editDraft.stops);
         }
+        if (e.target.id === "ld-ov-driver" || e.target.id === "ld-tr-driver") {
+          updateDriverAutocomplete(e.target, state.activeLocation);
+        }
+      });
+      $("#ld-tab-content").addEventListener("focusin", (e) => {
+        if (e.target.id !== "ld-ov-driver" && e.target.id !== "ld-tr-driver") return;
+        const input = e.target;
+        // these two fields are part of an edit draft committed via the modal's
+        // own Save button, not saved on every keystroke -- so picking a name
+        // here just fills the field in, same as typing it out by hand would
+        openDriverAutocomplete(input, state.activeLocation, (drv) => { input.value = drv.name; });
+      });
+      $("#ld-tab-content").addEventListener("focusout", (e) => {
+        if (e.target.id === "ld-ov-driver" || e.target.id === "ld-tr-driver") closeDriverAutocomplete();
       });
     }
 
@@ -3760,6 +4018,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     const boardTable = $("#board-table");
     boardTable.addEventListener("focusin", handleRowFocusIn);
     boardTable.addEventListener("focusout", handleRowFocusOut);
+    boardTable.addEventListener("keydown", (e) => handleRowAwareTab(e, "#board-table"));
     boardTable.addEventListener("click", (e) => {
       const sortHeader = e.target.closest("th[data-board-sort]");
       if (sortHeader) {
@@ -3792,9 +4051,24 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       const rowId = e.target.dataset && e.target.dataset.row;
       if (!rowId || (field !== "notes" && field !== "driverName")) return;
       focusValueSnapshots.set(`${rowId}:${field}`, e.target.value);
+      if (field === "driverName" && e.target.dataset.driverAc === "true") {
+        const input = e.target;
+        openDriverAutocomplete(input, state.activeLocation, (drv) => {
+          input.value = drv.name;
+          const found = findRowAnywhere(rowId);
+          if (found) {
+            found.row.driverNameText = drv.name;
+            found.row.driverId = drv.id;
+            updateDriverLinkedCellsInPlace(rowId);
+            scheduleShiftSave(found.row);
+            warnIfDriverAlreadyScheduled(found.row, drv.id);
+          }
+        });
+      }
     });
     boardTable.addEventListener("focusout", (e) => {
       const t = e.target;
+      if (t.dataset && t.dataset.driverAc === "true") closeDriverAutocomplete();
       const field = t.dataset && t.dataset.field;
       const rowId = t.dataset && t.dataset.row;
       if (rowId && (field === "notes" || field === "driverName")) {
@@ -3911,6 +4185,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
         updateDriverLinkedCellsInPlace(rowId);
         scheduleShiftSave(found.row);
         if (match) warnIfDriverAlreadyScheduled(found.row, match.id);
+        if (t.dataset.driverAc === "true") updateDriverAutocomplete(t, state.activeLocation);
         return;
       }
       if (t.dataset.field === "shiftStart") {
