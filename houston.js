@@ -4,7 +4,7 @@
      split) with entirely different columns. See chat for why this
      isn't just another branch in the existing board code.
      ================================================================ */
-import { state, supabaseClient, uid, findDriver, driversForLocation, setDriverSyncStatus, SAVE_DEBOUNCE_MS, escapeHtml, $, $all, addDays, keyToDate, dateKey, on, refreshDriverDatalist, renderBoardChrome, beginTextBatchFlow, textDriverPhone, openAddDriverModal, openAddLoadModal, closeAddLoadModal, closeDateDropdown, renderCalendarGrid, closeContextMenu, sendCurrentGroupBatchDirect, openCurrentGroupBatch, confirmGroupBatchSent, pick, handleRealtimeDriverChange, initAvailableSection, resetCalendarViewMonth, resetGroupTextState, refreshAvailableSection, openDriverAutocomplete, updateDriverAutocomplete, closeDriverAutocomplete, captureFocusForRerender, handleRowAwareTab, openEditDriverModal } from './loadboard.js';
+import { state, supabaseClient, uid, findDriver, driversForLocation, setDriverSyncStatus, SAVE_DEBOUNCE_MS, escapeHtml, $, $all, addDays, keyToDate, dateKey, on, refreshDriverDatalist, renderBoardChrome, beginTextBatchFlow, textDriverPhone, openAddDriverModal, openAddLoadModal, closeAddLoadModal, closeDateDropdown, renderCalendarGrid, closeContextMenu, sendCurrentGroupBatchDirect, openCurrentGroupBatch, confirmGroupBatchSent, pick, handleRealtimeDriverChange, initAvailableSection, resetCalendarViewMonth, resetGroupTextState, refreshAvailableSection, openDriverAutocomplete, updateDriverAutocomplete, closeDriverAutocomplete, captureFocusForRerender, handleRowAwareTab, openEditDriverModal, BOARD_IMAGE_BUCKET, rowImageDropzoneHtml, wireRowImageDropzone, batchSignImageUrls } from './loadboard.js';
 import { getBoardRateSettings } from './boardrates.js';
 export const HOUSTON_TABLE = "loads_houston";
   export const houstonState = { sheets: {}, datesWithData: new Set() };
@@ -24,6 +24,7 @@ export const HOUSTON_TABLE = "loads_houston";
       aljexNumber: "", comments: "", ttc: "", ttt: "", rating: "", time: "",
       driverPhone: "", timeOutRemarks: "", dispatcherPhone: "", carrier: "", mc: "", normalRate: defaultHoustonRate(),
       tonu: false, highlighted: false, shiftComplete: false, selected: false,
+      routeImagePath: "", routeImageUrl: "",
       createdAt: null, updatedAt: null, addedAt: null,
     };
   }
@@ -38,6 +39,8 @@ export const HOUSTON_TABLE = "loads_houston";
       carrier: r.carrier || "", mc: r.mc || "",
       normalRate: r.normal_rate != null ? String(r.normal_rate) : "",
       tonu: !!r.tonu, highlighted: !!r.highlighted, shiftComplete: !!r.shift_complete, selected: false,
+      routeImagePath: r.route_image_path || "",
+      routeImageUrl: "", // filled in by batchSignImageUrls after loading — see ensureHoustonSheetLoaded
       createdAt: r.created_at || null, updatedAt: r.updated_at || null, addedAt: null,
     };
   }
@@ -52,6 +55,7 @@ export const HOUSTON_TABLE = "loads_houston";
       dispatcher_phone: row.dispatcherPhone || null, carrier: row.carrier || null, mc: row.mc || null,
       normal_rate: row.normalRate === "" || row.normalRate == null ? null : Number(row.normalRate),
       tonu: !!row.tonu, highlighted: !!row.highlighted, shift_complete: !!row.shiftComplete,
+      route_image_path: row.routeImagePath || null,
     };
   }
   export function findHoustonRowAnywhere(rowId) {
@@ -78,6 +82,10 @@ export const HOUSTON_TABLE = "loads_houston";
       return;
     }
     const rows = (data || []).map(houstonRowFromDbRow);
+    const imagePaths = [];
+    const imageTargets = [];
+    rows.forEach((row) => { if (row.routeImagePath) { imagePaths.push(row.routeImagePath); imageTargets.push(row); } });
+    await batchSignImageUrls(BOARD_IMAGE_BUCKET, imagePaths, imageTargets);
     houstonState.sheets[dKey] = rows;
   }
 
@@ -129,7 +137,7 @@ export const HOUSTON_TABLE = "loads_houston";
         <input class="cell-input small" style="width:46px;" placeholder="Rate" data-row="${row.id}" data-field="normalRate" value="${escapeHtml(row.normalRate)}">
       </td>
       <td class="pin pin-pro${row.shiftComplete ? " shift-complete-tint" : ""}">
-        <input class="cell-input" placeholder="Aljex#" data-row="${row.id}" data-field="aljexNumber" value="${escapeHtml(row.aljexNumber)}">${row.aljexNumber ? `<button type="button" class="cell-link-btn" data-open-hou-load="${row.id}" title="Open load details">↗</button>` : ""}
+        <div class="cell-with-link"><input class="cell-input" placeholder="Aljex#" data-row="${row.id}" data-field="aljexNumber" value="${escapeHtml(row.aljexNumber)}">${row.aljexNumber ? `<button type="button" class="cell-link-btn" data-open-hou-load="${row.id}" title="Open load details">↗</button>` : ""}</div>
       </td>
       <td class="pin pin-driver">
         <div class="driver-name-wrap">
@@ -146,6 +154,7 @@ export const HOUSTON_TABLE = "loads_houston";
       <td class="col-hou-ttt"><input class="cell-input small" style="width:46px;" data-row="${row.id}" data-field="ttt" value="${escapeHtml(row.ttt)}"></td>
       <td class="col-hou-comments"><input class="cell-input" data-row="${row.id}" data-field="comments" value="${escapeHtml(row.comments)}"></td>
       <td class="col-hou-timeout"><input class="cell-input" data-row="${row.id}" data-field="timeOutRemarks" value="${escapeHtml(row.timeOutRemarks)}"></td>
+      <td class="col-routeImage">${rowImageDropzoneHtml(row, row.id)}</td>
     </tr>`;
   }
 
@@ -168,8 +177,9 @@ export const HOUSTON_TABLE = "loads_houston";
       <th class="col-hou-ttt">TTT</th>
       <th class="col-hou-comments">Comments</th>
       <th class="col-hou-timeout">Time Out / Remarks</th>
+      <th class="col-routeImage">Image</th>
     </tr></thead>`;
-    const totalHoustonCols = 15;
+    const totalHoustonCols = 16;
     const addRowHtml = `<tr class="quick-add-row"><td colspan="${totalHoustonCols}">
       <button type="button" class="quick-add-btn" id="btn-quick-add-row"><span class="quick-add-btn-label">+ Add Row</span></button>
       <button type="button" class="quick-add-btn quick-add-btn-secondary" id="btn-add-time-slots"><span class="quick-add-btn-label">+ Add Time Slots</span></button>
@@ -626,6 +636,13 @@ export const HOUSTON_TABLE = "loads_houston";
 
     const boardTable = $("#board-table");
     boardTable.addEventListener("keydown", (e) => handleRowAwareTab(e, "#board-table"));
+    wireRowImageDropzone(
+      boardTable,
+      (id) => { const found = findHoustonRowAnywhere(id); return found ? found.row : null; },
+      saveHoustonRowNow,
+      renderHoustonBoardTable,
+      (row) => row.aljexNumber || row.driverName || ""
+    );
     boardTable.addEventListener("click", (e) => {
       const textBtn = e.target.closest('[data-action="text-driver"]');
       if (textBtn) textHoustonDriverForRow(textBtn.dataset.row);

@@ -17,7 +17,7 @@ import { initAccountingPage, getAccountingRecordById } from './accounting.js';
 import { sendShiftToAccounting } from './accountingcalc.js';
 import { initHoustonBoardPage } from './houston.js';
 import { initMondelezPage } from './mondelez.js';
-import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_MIN, PRE_SHIFT_CALL_FOLLOWUP_MIN } from './alerts.js';
+import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_MIN, PRE_SHIFT_CALL_FOLLOWUP_MIN, PRE_SHIFT_ESCALATION_MIN, LAST_STOP_RETURN_FOLLOWUP_MIN } from './alerts.js';
 import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveTierRate, effectiveSetting, isTierOverridden, isSettingOverridden, isDriverTierOverridden, isDriverSettingOverridden } from './boardrates.js';
 
   /* ---------------- page map (single source of truth for nav) ---------------- */
@@ -71,6 +71,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     { key: "salvageBhaulRefusedBy",  label: "Refused By",          type: "text", group: "backhaul", pistachio: true },
     { key: "backhaulTrailerNumber",  label: "B/Haul Trailer #",    type: "text", group: "backhaul", pistachio: true },
     { key: "returnEtaToDc",          label: "Return ETA to DC",    type: "time", group: "backhaul", pistachio: true },
+    { key: "routeImage",      label: "Image",              type: "image" },
     { key: "routeEstHours",   label: "Route Est Hours",    type: "text", small: true, inputmode: "decimal", group: "estimate" },
     // Not in the latest specified order -- kept available (hidden by
     // default) rather than deleted, since removal wasn't explicit. Flagged
@@ -130,6 +131,32 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
   export const DRIVERS_TABLE = "atlanta_drivers";
   export const SHIFTS_TABLE = "loads_shifts";
   export const TRIPS_TABLE = "loads_trips";
+  // Same bucket Mondelez's route-image feature already uses -- reused here
+  // rather than a new one, since storage paths are namespaced by each row's
+  // own dbId regardless of which board it came from, so there's no
+  // collision risk, and it avoids needing a second bucket created in Supabase.
+  export const BOARD_IMAGE_BUCKET = "mondelez-routes";
+  const SIGNED_URL_EXPIRY_SECONDS = 3600; // 1 hour -- long enough to cover a normal session; refreshed on every reload anyway
+
+  // Private-bucket signed URLs, batched -- call once per sheet load with
+  // every image path that needs a URL and the object each one belongs on,
+  // in matching order. A public bucket could just build the URL directly
+  // with no network call; a private one has to ask Supabase to mint a
+  // temporary, expiring link for each file instead, since nothing is
+  // viewable without one.
+  export async function batchSignImageUrls(bucket, paths, targets) {
+    if (!paths.length || !supabaseClient) return;
+    try {
+      const { data, error } = await supabaseClient.storage.from(bucket).createSignedUrls(paths, SIGNED_URL_EXPIRY_SECONDS);
+      if (error) throw error;
+      (data || []).forEach((entry, i) => {
+        if (entry && entry.signedUrl && targets[i]) targets[i].routeImageUrl = entry.signedUrl;
+      });
+    } catch (e) {
+      console.error("batchSignImageUrls failed:", e);
+    }
+  }
+
   export const ACCOUNTING_TABLE = "loads_accounting";
   export const ACCOUNTING_ROUTES_TABLE = "loads_accounting_routes";
 
@@ -349,6 +376,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       return_eta_to_dc: trip.returnEtaToDc || null,
       return_drop_location: trip.returnDropLocation || null,
       ppwk_received: !!trip.ppwkReceived,
+      checked_in: !!trip.checkedIn,
       timesheet_start_time: trip.timesheetStartTime || null,
       timesheet_end_time: trip.timesheetEndTime || null,
       drop_location_text: trip.dropLocationText || null,
@@ -357,6 +385,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       time_to_final_stop: trip.timeToFinalStop || null,
       eta_to_final_stop: trip.etaToFinalStop || null,
       est_route_complete: trip.estRouteComplete || null,
+      route_image_path: trip.routeImagePath || null,
     };
   }
   function tripFromDbRow(dbRow) {
@@ -387,6 +416,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       returnEtaToDc: dbRow.return_eta_to_dc || "",
       returnDropLocation: dbRow.return_drop_location || "",
       ppwkReceived: !!dbRow.ppwk_received,
+      checkedIn: !!dbRow.checked_in,
       timesheetStartTime: dbRow.timesheet_start_time || "",
       timesheetEndTime: dbRow.timesheet_end_time || "",
       dropLocationText: dbRow.drop_location_text || "",
@@ -395,6 +425,9 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       timeToFinalStop: dbRow.time_to_final_stop || "",
       etaToFinalStop: dbRow.eta_to_final_stop || "",
       estRouteComplete: dbRow.est_route_complete || "",
+      hasStopTimes: false, // computed client-side after loading, see ensureSheetLoaded — not a real DB column
+      routeImagePath: dbRow.route_image_path || "",
+      routeImageUrl: "", // filled in by batchSignImageUrls after loading — see ensureSheetLoaded
     };
   }
 
@@ -548,8 +581,10 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       id: uid("trip"), dbId: null, routeId: "", tripId: "", trailerOut: "", routeMiles: "", stopCount: "", dispatchTime: "", salvage: false, backhaul: false, minimized: false, complete: false, driverId: null, notes: "",
       lastStopDepart: "", returnToDC: "",
       currentRouteStatus: "", currentBackhaulStatus: "", nextCallTime: "", backhaulLocation: "", salvageBhaulRefusedBy: "", backhaulTrailerNumber: "", backhaulType: "",
-      returnEtaToDc: "", returnDropLocation: "", ppwkReceived: false, timesheetStartTime: "", timesheetEndTime: "", dropLocationText: "", returnToDcText: "",
+      returnEtaToDc: "", returnDropLocation: "", ppwkReceived: false, checkedIn: false, timesheetStartTime: "", timesheetEndTime: "", dropLocationText: "", returnToDcText: "",
       routeEstHours: "", timeToFinalStop: "", etaToFinalStop: "", estRouteComplete: "",
+      hasStopTimes: false, // client-side only, not persisted -- computed from trip_stops presence, see ensureSheetLoaded / the Stop Times save flow
+      routeImagePath: "", routeImageUrl: "",
     };
   }
   function blankRow(driverId, driverNameText) {
@@ -602,12 +637,38 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
         console.error("Failed to load trip details:", tripErr);
         setDriverSyncStatus(`Loaded rows, but couldn't load their trip details (${tripErr.message}).`, "error");
       } else if (tripRows) {
+        // Which trips have REAL stop in/out times recorded -- used to flag
+        // a completed-but-undocumented trip's pill red (see
+        // routesChipsHtml). This has to check actual time_in/time_out
+        // values, not just whether a trip_stops row exists at all -- the
+        // save flow creates a row for every stop position as soon as a
+        // stop count is set, even before any time gets typed into it, so
+        // "row exists" alone would call an entirely blank trip "documented".
+        const tripDbIds = tripRows.map((t) => t.id);
+        let stopsByTripId = {};
+        if (tripDbIds.length) {
+          const { data: stopRows } = await supabaseClient.from("trip_stops").select("trip_id, time_in, time_out").in("trip_id", tripDbIds);
+          (stopRows || []).forEach((sr) => { if (sr.time_in || sr.time_out) stopsByTripId[sr.trip_id] = true; });
+        }
         rows.forEach((row, i) => {
           const dbId = shiftRows[i].id;
           const mine = tripRows.filter((t) => t.shift_id === dbId).sort((a, b) => a.trip_number - b.trip_number);
-          row.trips = mine.map(tripFromDbRow);
+          row.trips = mine.map((t) => {
+            const trip = tripFromDbRow(t);
+            trip.hasStopTimes = !!stopsByTripId[t.id];
+            return trip;
+          });
           if (!row.trips.length || row.trips[row.trips.length - 1].minimized) row.trips.push(blankTrip());
         });
+        // Every trip with an uploaded image needs a fresh signed URL each
+        // load, since the bucket is private -- collect them all and sign
+        // in one batch call rather than one request per trip.
+        const imagePaths = [];
+        const imageTargets = [];
+        rows.forEach((row) => row.trips.forEach((t) => {
+          if (t.routeImagePath) { imagePaths.push(t.routeImagePath); imageTargets.push(t); }
+        }));
+        await batchSignImageUrls(BOARD_IMAGE_BUCKET, imagePaths, imageTargets);
       }
     }
     state.sheets[k] = rows;
@@ -621,6 +682,19 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       if (r) return { row: r, sheetKey: k };
     }
     if (standaloneLoadedRows[rowId]) return { row: standaloneLoadedRows[rowId], sheetKey: null };
+    return null;
+  }
+
+  // Same idea as findRowAnywhere, but for a trip specifically — needed
+  // because saveTripNow wants the parent row and the trip's position
+  // (1-based) alongside the trip itself, not just the trip in isolation.
+  function findTripAnywhere(tripId) {
+    for (const k in state.sheets) {
+      for (const r of state.sheets[k]) {
+        const idx = r.trips.findIndex((t) => t.id === tripId);
+        if (idx !== -1) return { row: r, trip: r.trips[idx], tripNumber: idx + 1 };
+      }
+    }
     return null;
   }
 
@@ -674,6 +748,161 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
 
   // Handles both create (row.dbId is null) and update (row.dbId is set)
   // transparently — callers never need to branch on which one applies.
+  // ---------------- shared route-image upload/view/delete (all boards) ----------------
+  // Generic across every board's row type — takes the row's own save and
+  // render functions as callbacks rather than assuming any one board's
+  // shape, since Atlanta/Delaware/Building C, Houston, and Mondelez each
+  // have their own save/render pair.
+  export async function uploadRowImage(row, file, saveRowFn, renderFn) {
+    if (!supabaseClient) return;
+    if (!row.dbId) await saveRowFn(row);
+    if (!row.dbId) { setDriverSyncStatus("Couldn't save this load before uploading — try again.", "error"); return; }
+    const path = `${row.dbId}/${Date.now()}_${file.name}`;
+    try {
+      const { error: upErr } = await supabaseClient.storage.from(BOARD_IMAGE_BUCKET).upload(path, file);
+      if (upErr) throw upErr;
+      row.routeImagePath = path;
+      const { data: signed, error: signErr } = await supabaseClient.storage.from(BOARD_IMAGE_BUCKET).createSignedUrl(path, SIGNED_URL_EXPIRY_SECONDS);
+      if (signErr) throw signErr;
+      row.routeImageUrl = signed.signedUrl;
+      await saveRowFn(row);
+      renderFn();
+    } catch (e) {
+      console.error("uploadRowImage failed:", e);
+      setDriverSyncStatus(`Couldn't upload that image (${e.message || e}).`, "error");
+    }
+  }
+
+  export async function deleteRowImage(row, saveRowFn, renderFn) {
+    if (!row.routeImageUrl) return;
+    const oldPath = row.routeImagePath;
+    row.routeImagePath = "";
+    row.routeImageUrl = "";
+    renderFn();
+    try {
+      if (oldPath && supabaseClient) {
+        const { error } = await supabaseClient.storage.from(BOARD_IMAGE_BUCKET).remove([oldPath]);
+        if (error) throw error;
+      }
+      await saveRowFn(row);
+    } catch (e) {
+      console.error("deleteRowImage failed:", e);
+      setDriverSyncStatus(`Image removed here, but couldn't delete it from storage (${e.message || e}).`, "error");
+    }
+  }
+
+  export function viewRowImage(row, label) {
+    if (!row.routeImageUrl) return;
+    const overlay = document.createElement("div");
+    overlay.className = "overlay image-lightbox-overlay";
+    overlay.id = "board-image-overlay";
+    overlay.innerHTML = `
+      <div class="modal image-lightbox-content">
+        <div class="modal-header"><h3>Route — ${escapeHtml(label || "")}</h3><button class="modal-close" id="board-image-close">&times;</button></div>
+        <div class="modal-body" style="text-align:center; padding:12px;"><img src="${escapeHtml(row.routeImageUrl)}" alt="Route image"></div>
+        <div class="modal-footer"><button type="button" class="btn btn-ghost" id="board-image-delete" style="color:#b91c1c; border-color:#b91c1c;">Delete Image</button></div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+    $("#board-image-close").addEventListener("click", close);
+    document.addEventListener("keydown", function escHandler(e) {
+      if (e.key === "Escape") { close(); document.removeEventListener("keydown", escHandler); }
+    });
+    return close; // caller wires the Delete button itself, since it needs board-specific save/render callbacks
+  }
+
+  // Shared HTML for the image dropzone cell — same markup/behavior on
+  // every board, just parameterized by which row it belongs to.
+  export function rowImageDropzoneHtml(row, rowIdAttr) {
+    return `
+      <div class="mdz-image-dropzone" tabindex="0" data-action="row-image-dropzone" data-row-image-id="${rowIdAttr}" title="Click to browse, or drag/paste an image here">
+        ${row.routeImageUrl
+          ? `<div class="mdz-thumb-wrap">
+               <img src="${escapeHtml(row.routeImageUrl)}" class="mdz-route-thumb" data-action="view-row-image" data-row-image-id="${rowIdAttr}" alt="Route image" title="Click to view full size">
+               <button type="button" class="mdz-thumb-delete" data-action="delete-row-image" data-row-image-id="${rowIdAttr}" title="Delete image">&times;</button>
+             </div>`
+          : `<span class="mdz-upload-hint">Drop / paste / click</span>`}
+        <input type="file" accept="image/*" data-action="upload-row-image" data-row-image-id="${rowIdAttr}" class="mdz-hidden-file-input">
+      </div>`;
+  }
+
+  // Shared wiring for the dropzone's click/drag/drop/paste/change behavior
+  // — call once per table with a getRow(id) lookup and the board's own
+  // save/render functions, and every dropzone cell in that table works.
+  export function wireRowImageDropzone(table, getRowFn, saveRowFn, renderFn, labelFn) {
+    table.addEventListener("click", (e) => {
+      const viewBtn = e.target.closest("[data-action='view-row-image']");
+      const deleteBtn = e.target.closest("[data-action='delete-row-image']");
+      if (viewBtn) {
+        const row = getRowFn(viewBtn.dataset.rowImageId);
+        if (row) viewRowImage(row, labelFn ? labelFn(row) : "");
+        const delHandler = (ev) => {
+          if (ev.target.id === "board-image-delete") {
+            const overlay = document.getElementById("board-image-overlay");
+            if (overlay && confirm("Delete this route image? This can't be undone.")) {
+              overlay.remove();
+              if (row) deleteRowImage(row, saveRowFn, renderFn);
+            }
+          }
+        };
+        document.addEventListener("click", delHandler, { once: true });
+        return;
+      }
+      if (deleteBtn) {
+        const row = getRowFn(deleteBtn.dataset.rowImageId);
+        if (row && confirm("Delete this route image? This can't be undone.")) deleteRowImage(row, saveRowFn, renderFn);
+        return;
+      }
+      const dropzone = e.target.closest("[data-action='row-image-dropzone']");
+      if (dropzone && !viewBtn && !deleteBtn) {
+        const fileInput = dropzone.querySelector('input[type="file"]');
+        if (fileInput) fileInput.click();
+      }
+    });
+    table.addEventListener("change", (e) => {
+      if (e.target.dataset.action === "upload-row-image" && e.target.files && e.target.files[0]) {
+        const row = getRowFn(e.target.dataset.rowImageId);
+        if (row) uploadRowImage(row, e.target.files[0], saveRowFn, renderFn);
+      }
+    });
+    table.addEventListener("dragover", (e) => {
+      const dropzone = e.target.closest("[data-action='row-image-dropzone']");
+      if (!dropzone) return;
+      e.preventDefault();
+      dropzone.classList.add("mdz-dropzone-active");
+    });
+    table.addEventListener("dragleave", (e) => {
+      const dropzone = e.target.closest("[data-action='row-image-dropzone']");
+      if (dropzone) dropzone.classList.remove("mdz-dropzone-active");
+    });
+    table.addEventListener("drop", (e) => {
+      const dropzone = e.target.closest("[data-action='row-image-dropzone']");
+      if (!dropzone) return;
+      e.preventDefault();
+      dropzone.classList.remove("mdz-dropzone-active");
+      const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      const row = getRowFn(dropzone.dataset.rowImageId);
+      if (file && file.type.startsWith("image/") && row) uploadRowImage(row, file, saveRowFn, renderFn);
+    });
+    table.addEventListener("paste", (e) => {
+      const dropzone = e.target.closest("[data-action='row-image-dropzone']");
+      if (!dropzone) return;
+      const items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.type.startsWith("image/")) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          const row = getRowFn(dropzone.dataset.rowImageId);
+          if (file && row) uploadRowImage(row, file, saveRowFn, renderFn);
+          break;
+        }
+      }
+    });
+  }
+
+
   async function saveShiftNow(row) {
     if (!supabaseClient) return null;
     try {
@@ -780,24 +1009,66 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
 
   let stopTimesModalState = null; // { rowId, tripId, stopCount }
 
-  function openStopTimesModal(rowId, tripId) {
+  async function openStopTimesModal(rowId, tripId) {
     const found = findRowAnywhere(rowId);
     if (!found) return;
     const trip = found.row.trips.find((t) => t.id === tripId);
     if (!trip || !$("#modal-stop-times")) return;
     const stopCount = Math.max(0, parseInt(trip.stopCount, 10) || 0);
-    stopTimesModalState = { rowId, tripId, stopCount };
+    let existingStops = [];
+    let existingAttachments = [];
+    if (trip.dbId && supabaseClient) {
+      const [stopsResult, attachResult] = await Promise.all([
+        supabaseClient.from("trip_stops").select("*").eq("trip_id", trip.dbId),
+        found.row.dbId ? supabaseClient.from("load_attachments").select("*").eq("shift_id", found.row.dbId) : Promise.resolve({ data: [] }),
+      ]);
+      existingStops = (stopsResult.data || []).sort((a, b) => a.stop_number - b.stop_number)
+        .map((s) => ({ dbId: s.id, stopNumber: s.stop_number, timeIn: s.time_in || "", timeOut: s.time_out || "" }));
+      existingAttachments = attachResult.data || [];
+    }
+    stopTimesModalState = { rowId, tripId, stopCount, existingStops };
+    const dispatchInfoEl = $("#st-dispatch-info");
+    if (dispatchInfoEl) dispatchInfoEl.textContent = trip.dispatchTime ? `Dispatch Time: ${trip.dispatchTime}` : "";
     $("#st-stop-fields").innerHTML = stopCount
-      ? stopFieldsHtml(stopCount, [])
+      ? stopFieldsHtml(stopCount, existingStops)
       : `<div class="subtext">No stop count set on this trip — nothing to fill in, but you can still confirm or skip.</div>`;
+    const returnInfoEl = $("#st-return-info");
+    if (returnInfoEl) {
+      const returnTime = trip.returnEtaToDc || trip.returnToDC || "";
+      const parts = [];
+      if (returnTime) parts.push(`Return to DC: ${returnTime}`);
+      if (trip.tripId) parts.push(`Trip ID: ${trip.tripId}`);
+      if (trip.trailerOut) parts.push(`Trailer Out: ${trip.trailerOut}`);
+      if (trip.backhaulTrailerNumber) parts.push(`B/Haul Trailer #: ${trip.backhaulTrailerNumber}`);
+      returnInfoEl.textContent = parts.join("   ·   ");
+    }
     const ppwkCheckbox = $("#st-ppwk-received");
-    if (ppwkCheckbox) ppwkCheckbox.checked = true;
+    if (ppwkCheckbox) ppwkCheckbox.checked = !!trip.ppwkReceived;
+    const checkedInCheckbox = $("#st-checked-in");
+    if (checkedInCheckbox) checkedInCheckbox.checked = !!trip.checkedIn;
     const uploadInput = $("#st-ppwk-upload");
     if (uploadInput) uploadInput.value = "";
-    const statusEl = $("#st-upload-status");
-    if (statusEl) statusEl.textContent = "";
     const dropLocationInput = $("#st-trailer-drop-location");
-    if (dropLocationInput) dropLocationInput.value = found.row.trailerDropLocation || "";
+    if (dropLocationInput) dropLocationInput.value = trip.returnDropLocation || "";
+    const imageSlot = $("#st-image-slot");
+    if (imageSlot) imageSlot.innerHTML = rowImageDropzoneHtml(trip, trip.id);
+    const statusEl = $("#st-upload-status");
+    if (statusEl) {
+      statusEl.textContent = existingAttachments.length ? "Already on file: " : "";
+      if (existingAttachments.length && supabaseClient) {
+        const paths = existingAttachments.map((a) => a.file_path);
+        const { data: signedList } = await supabaseClient.storage.from("trip-sheets").createSignedUrls(paths, 3600);
+        (signedList || []).forEach((entry, i) => {
+          const a = document.createElement("a");
+          a.href = entry.signedUrl || "#";
+          a.target = "_blank";
+          a.rel = "noopener";
+          a.textContent = existingAttachments[i].file_name;
+          a.style.marginRight = "8px";
+          statusEl.appendChild(a);
+        });
+      }
+    }
     $("#modal-stop-times").classList.remove("hidden");
   }
 
@@ -830,7 +1101,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
 
   async function finalizeTripCompletion(saveStopTimes) {
     if (!stopTimesModalState) return;
-    const { rowId, tripId, stopCount } = stopTimesModalState;
+    const { rowId, tripId, stopCount, existingStops } = stopTimesModalState;
     const found = findRowAnywhere(rowId);
     if (!found) { closeStopTimesModal(); return; }
     const row = found.row;
@@ -838,14 +1109,22 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     if (!trip) { closeStopTimesModal(); return; }
 
     if (saveStopTimes && stopCount > 0 && supabaseClient && trip.dbId) {
+      trip.hasStopTimes = false;
       for (let i = 0; i < stopCount; i++) {
         const timeInEl = document.querySelector(`#modal-stop-times [data-stop-field="timeIn"][data-stop-index="${i}"]`);
         const timeOutEl = document.querySelector(`#modal-stop-times [data-stop-field="timeOut"][data-stop-index="${i}"]`);
         const timeIn = timeInEl ? timeInEl.value.trim() : "";
         const timeOut = timeOutEl ? timeOutEl.value.trim() : "";
-        if (!timeIn && !timeOut) continue; // nothing entered for this stop — don't create an empty record
+        const existing = (existingStops || []).find((s) => s.stopNumber === i + 1);
+        if (!timeIn && !timeOut && !existing) continue; // nothing entered and no prior record — don't create an empty one
         try {
-          await supabaseClient.from("trip_stops").insert({ trip_id: trip.dbId, stop_number: i + 1, time_in: timeIn || null, time_out: timeOut || null });
+          const payload = { trip_id: trip.dbId, stop_number: i + 1, time_in: timeIn || null, time_out: timeOut || null };
+          if (existing && existing.dbId) {
+            await supabaseClient.from("trip_stops").update(payload).eq("id", existing.dbId);
+          } else {
+            await supabaseClient.from("trip_stops").insert(payload);
+          }
+          if (timeIn || timeOut) trip.hasStopTimes = true; // at least one real stop record now exists — clears the red pill once paperwork's also in
         } catch (e) {
           console.error("Saving stop time failed:", e);
         }
@@ -854,13 +1133,14 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
 
     const ppwkCheckbox = $("#st-ppwk-received");
     if (ppwkCheckbox) trip.ppwkReceived = ppwkCheckbox.checked;
+    const checkedInCheckbox = $("#st-checked-in");
+    if (checkedInCheckbox) trip.checkedIn = checkedInCheckbox.checked;
     const dropLocationInput = $("#st-trailer-drop-location");
-    if (dropLocationInput) row.trailerDropLocation = dropLocationInput.value.trim();
+    if (dropLocationInput) trip.returnDropLocation = dropLocationInput.value.trim();
 
     trip.complete = true;
     trip.minimized = true;
     await saveTripNow(row, trip, row.trips.indexOf(trip) + 1);
-    await saveShiftNow(row); // persists the trailer drop location, which lives on the load, not the trip
     logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "route_complete", "false", "true");
     closeStopTimesModal();
     renderBoardTable();
@@ -947,21 +1227,35 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     const candidates = [];
     const shiftStartMin = parseHHMM(row.shiftStart);
     const hasRealTrip = row.trips.some((t) => (t.routeId || "").trim() || (t.tripId || "").trim());
+    const hasEta = !!(row.etaShiftReport || "").trim();
 
-    if (shiftStartMin != null && !hasRealTrip) candidates.push(shiftStartMin + IDLE_THRESHOLD_MIN);
-    if (shiftStartMin != null && !row.preShiftTextSent) candidates.push(shiftStartMin - PRE_SHIFT_TEXT_LEAD_MIN);
-    if (row.preShiftTextSent && row.preShiftTextSentAt) {
-      const sentDate = new Date(row.preShiftTextSentAt);
-      candidates.push(sentDate.getHours() * 60 + sentDate.getMinutes() + PRE_SHIFT_CALL_FOLLOWUP_MIN);
+    // Stages 1-3: pre-shift ETA cascade -- gated on the ETA being blank AND
+    // the driver not already having a real dispatched trip. A dispatched
+    // trip is proof they showed up, even if nobody filled in the ETA field
+    // itself, so tracking moves on instead of continuing to ask.
+    if (shiftStartMin != null && !hasEta && !hasRealTrip) {
+      candidates.push(shiftStartMin - PRE_SHIFT_TEXT_LEAD_MIN);
+      candidates.push(shiftStartMin - PRE_SHIFT_CALL_FOLLOWUP_MIN);
+      candidates.push(shiftStartMin - PRE_SHIFT_ESCALATION_MIN);
     }
-    row.trips.forEach((t) => {
-      if (t.minimized || t.complete || !String(t.routeId || "").trim()) return;
-      const dispatch = parseHHMM(t.dispatchTime);
-      const miles = parseFloat(t.routeMiles);
-      if (dispatch != null && !isNaN(miles) && miles > 0) {
-        const leg = (miles / AVG_MPH) * 60;
-        candidates.push(dispatch + leg + leg + 15); // matches the overdue-return threshold used elsewhere
-      }
+
+    // Stage 4: dispatch check, only once the ETA is actually confirmed
+    if (shiftStartMin != null && !hasRealTrip && hasEta) {
+      candidates.push(shiftStartMin + IDLE_THRESHOLD_MIN);
+    }
+
+    // Stages 5-6: per active dispatched trip that isn't superseded by a
+    // later one. Stage 5 (Last Stop Depart, asking for a return ETA) only
+    // applies while Return ETA to DC is still blank; Stage 6 (paperwork /
+    // drop-spot) only applies once we actually have that return ETA.
+    row.trips.forEach((t, idx) => {
+      if (t.minimized || t.complete || !String(t.routeId || t.tripId || "").trim()) return;
+      const laterDispatched = row.trips.some((t2, idx2) => idx2 > idx && String(t2.routeId || t2.tripId || "").trim());
+      if (laterDispatched) return;
+      const lastStopMin = parseHHMM(t.lastStopDepart);
+      const returnEtaMin = parseHHMM(t.returnEtaToDc);
+      if (lastStopMin != null && returnEtaMin == null) candidates.push(lastStopMin);
+      else if (returnEtaMin != null) candidates.push(returnEtaMin);
     });
 
     if (!candidates.length) return "";
@@ -1088,8 +1382,17 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     const done = row.trips.filter((t) => t.minimized && (String(t.routeId || "").trim() || String(t.tripId || "").trim()));
     return done.length
       ? done.map((t) => {
-          const statusCls = t.complete ? "trip-segment-done" : "";
-          const title = t.complete ? "Closed out — click to view" : "Click to view or edit";
+          const missing = [];
+          if (!t.ppwkReceived) missing.push("paperwork confirmation");
+          if (!t.hasStopTimes) missing.push("stop times");
+          if (!t.routeImagePath) missing.push("an image");
+          if (!String(t.returnDropLocation || "").trim()) missing.push("a drop location");
+          if (!t.checkedIn) missing.push("load checked in");
+          const undocumented = t.complete && missing.length > 0;
+          const statusCls = [t.complete ? "trip-segment-done" : "", undocumented ? "trip-chip-undocumented" : ""].filter(Boolean).join(" ");
+          const title = undocumented
+            ? `Closed out but missing: ${missing.join(", ")} — click to fix`
+            : (t.complete ? "Closed out — click to view" : "Click to view or edit");
           return `<button type="button" class="trip-chip ${statusCls}" data-action="restore-trip" data-row="${row.id}" data-trip="${t.id}" title="${title}">${escapeHtml(t.routeId || t.tripId)}</button>`;
         }).join(" ")
       : `<span class="subtext" style="font-size:11px;">—</span>`;
@@ -1109,6 +1412,9 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       }
       if (col.type === "calc") {
         return `<td class="col-${col.key}${pistachioCls}"><input class="cell-input calc" data-row="${row.id}" data-trip="${trip.id}" data-field="${col.key}" value="${escapeHtml(calc[col.key])}" readonly tabindex="-1"></td>`;
+      }
+      if (col.type === "image") {
+        return `<td class="col-${col.key}${pistachioCls}">${rowImageDropzoneHtml(trip, trip.id)}</td>`;
       }
       const placeholder = col.type === "time" ? "--:--" : "";
       const inputmode = col.inputmode ? ` inputmode="${col.inputmode}"` : "";
@@ -1507,9 +1813,19 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
 
     const domField = currentlyEditedField(parentRow.id, localTrip.id);
     const preserved = domField ? localTrip[domField] : undefined;
+    const preservedHasStopTimes = localTrip.hasStopTimes;
+    const preservedImagePath = localTrip.routeImagePath;
+    const preservedImageUrl = localTrip.routeImageUrl;
     const fresh = tripFromDbRow(dbTrip);
     Object.assign(localTrip, fresh, { id: localTrip.id });
     if (domField) localTrip[domField] = preserved;
+    // tripFromDbRow always resets these two to defaults (false / "") since
+    // neither is a real column -- hasStopTimes is computed separately from
+    // trip_stops, and routeImageUrl has to be freshly signed, not just read
+    // off the row. An unrelated field changing elsewhere on this trip
+    // shouldn't silently undo either one.
+    localTrip.hasStopTimes = preservedHasStopTimes;
+    if (localTrip.routeImagePath === preservedImagePath) localTrip.routeImageUrl = preservedImageUrl;
     recalcRowCalcCellsInPlace(parentRow.id);
   }
 
@@ -1835,6 +2151,25 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     if (newKey < state.minDate || newKey > state.maxDate) return;
     state.activeDate = newKey;
     loadAndRenderBoard();
+  }
+
+  // Alerts are always about today (scanForBoardAlerts only ever looks at
+  // today's shifts) — if the board happens to be showing a different date
+  // when one gets clicked, switch to today first and wait for that render
+  // before trying to find the row, otherwise it wouldn't exist in the DOM yet.
+  export async function scrollToAndOutlineShiftRow(dbId) {
+    if (state.activeDate !== state.todayKey) {
+      state.activeDate = state.todayKey;
+      await loadAndRenderBoard();
+    }
+    const rows = getSheet(state.activeLocation, state.activeDate);
+    const row = rows.find((r) => r.dbId === dbId);
+    if (!row) return;
+    const tr = document.getElementById(row.id);
+    if (!tr) return;
+    tr.scrollIntoView({ behavior: "smooth", block: "center" });
+    tr.classList.add("alert-outline-flash");
+    setTimeout(() => tr.classList.remove("alert-outline-flash"), 3000);
   }
 
   /* ---------------- TONU ---------------- */
@@ -2563,7 +2898,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
 
   export function stopFieldsHtml(stopCount, existingStops) {
     const rows = Array.from({ length: stopCount }, (_, i) => {
-      const s = existingStops[i] || { stopNumber: i + 1, timeIn: "", timeOut: "" };
+      const s = existingStops.find((x) => x.stopNumber === i + 1) || { stopNumber: i + 1, timeIn: "", timeOut: "" };
       return `<div class="ld-stop-edit-row">
         <span>Stop ${i + 1}</span>
         <input class="cell-input small" placeholder="Time In" data-stop-field="timeIn" data-stop-index="${i}" value="${escapeHtml(s.timeIn)}">
@@ -2976,15 +3311,19 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
         newStops.push({ stopNumber: i + 1, timeIn: timeIn ? timeIn.value.trim() : "", timeOut: timeOut ? timeOut.value.trim() : "" });
       }
       if (supabaseClient && trip.dbId) {
+        trip.hasStopTimes = false;
         try {
           for (const s of newStops) {
             const existing = (loadDetailsState.stopsByTrip[tabKey] || []).find((x) => x.stopNumber === s.stopNumber);
+            const hasTime = !!(s.timeIn || s.timeOut);
+            if (!hasTime && !existing) continue; // nothing entered and no prior record — don't create an empty one
             const payload = { trip_id: trip.dbId, stop_number: s.stopNumber, time_in: s.timeIn || null, time_out: s.timeOut || null };
             if (existing && existing.dbId) {
-              await supabaseClient.from("trip_stops").update(payload).eq("id", existing.dbId);
+              await supabaseClient.from("trip_stops").update(payload).eq("id", existing.dbId); // still update even if now blank, in case times were cleared out
             } else {
               await supabaseClient.from("trip_stops").insert(payload);
             }
+            if (hasTime) trip.hasStopTimes = true;
           }
         } catch (e) {
           setDriverSyncStatus(`Saved the trip, but couldn't save stop times (${e.message || e}).`, "error");
@@ -4026,6 +4365,45 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       $("#modal-stop-times").addEventListener("click", (e) => { if (e.target.id === "modal-stop-times") closeStopTimesModal(); });
       const ppwkUpload = $("#st-ppwk-upload");
       if (ppwkUpload) ppwkUpload.addEventListener("change", (e) => { if (e.target.files && e.target.files[0]) uploadPaperworkImage(e.target.files[0]); });
+      const ppwkDropzone = $("#st-ppwk-dropzone");
+      if (ppwkDropzone) {
+        ppwkDropzone.addEventListener("click", (e) => {
+          if (e.target.tagName !== "INPUT") ppwkUpload.click();
+        });
+        ppwkDropzone.addEventListener("dragover", (e) => { e.preventDefault(); ppwkDropzone.classList.add("mdz-dropzone-active"); });
+        ppwkDropzone.addEventListener("dragleave", () => ppwkDropzone.classList.remove("mdz-dropzone-active"));
+        ppwkDropzone.addEventListener("drop", (e) => {
+          e.preventDefault();
+          ppwkDropzone.classList.remove("mdz-dropzone-active");
+          const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+          if (file && file.type.startsWith("image/")) uploadPaperworkImage(file);
+        });
+        ppwkDropzone.addEventListener("paste", (e) => {
+          const items = e.clipboardData && e.clipboardData.items;
+          if (!items) return;
+          for (const item of items) {
+            if (item.type.startsWith("image/")) {
+              e.preventDefault();
+              const file = item.getAsFile();
+              if (file) uploadPaperworkImage(file);
+              break;
+            }
+          }
+        });
+      }
+      wireRowImageDropzone(
+        $("#modal-stop-times"),
+        (id) => { const f = findTripAnywhere(id); return f ? f.trip : null; },
+        (trip) => { const f = findTripAnywhere(trip.id); return f ? saveTripNow(f.row, f.trip, f.tripNumber) : Promise.resolve(); },
+        () => {
+          renderBoardTable(); // updates the pill underneath
+          if (stopTimesModalState && $("#st-image-slot")) {
+            const f = findTripAnywhere(stopTimesModalState.tripId);
+            if (f) $("#st-image-slot").innerHTML = rowImageDropzoneHtml(f.trip, f.trip.id);
+          }
+        },
+        (trip) => trip.routeId || trip.tripId || ""
+      );
     }
 
     if ($("#modal-timesheet-complete")) {
@@ -4118,6 +4496,13 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     boardTable.addEventListener("focusin", handleRowFocusIn);
     boardTable.addEventListener("focusout", handleRowFocusOut);
     boardTable.addEventListener("keydown", (e) => handleRowAwareTab(e, "#board-table"));
+    wireRowImageDropzone(
+      boardTable,
+      (id) => { const found = findTripAnywhere(id); return found ? found.trip : null; },
+      (trip) => { const found = findTripAnywhere(trip.id); return found ? saveTripNow(found.row, found.trip, found.tripNumber) : Promise.resolve(); },
+      renderBoardTable,
+      (trip) => trip.routeId || trip.tripId || ""
+    );
     boardTable.addEventListener("click", (e) => {
       const sortHeader = e.target.closest("th[data-board-sort]");
       if (sortHeader) {

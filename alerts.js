@@ -1,11 +1,13 @@
 /* ---------------- board alerts: bottom-right notification panel ---------------- */
 
-import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, parseHHMM, AVG_MPH, minsToClock, escapeHtml, $, openSendTextModal, currentFile, NAV_ORDER, PAGE_MAP, isAccountingUser, signOut} from './loadboard.js';
+import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, parseHHMM, AVG_MPH, minsToClock, escapeHtml, $, openSendTextModal, currentFile, NAV_ORDER, PAGE_MAP, isAccountingUser, signOut, scrollToAndOutlineShiftRow} from './loadboard.js';
 
-  const ALERT_LOCATIONS = ["atlanta", "buildingc", "delaware"];
-  export const IDLE_THRESHOLD_MIN = 45; // "45 minutes after check-in, if not dispatched"
-  export const PRE_SHIFT_TEXT_LEAD_MIN = 60; // text needed 60 min before shift start
-  export const PRE_SHIFT_CALL_FOLLOWUP_MIN = 30; // call nudge 30 min after the pre-shift text went out
+  const ALL_ALERT_LOCATIONS = ["atlanta", "buildingc", "delaware"];
+  export const IDLE_THRESHOLD_MIN = 45; // Stage 4: 45 min after shift start, no dispatch yet -- repeats every 45 min after that
+  export const PRE_SHIFT_TEXT_LEAD_MIN = 60; // Stage 1: pre-shift ETA text needed 60 min before shift start
+  export const PRE_SHIFT_CALL_FOLLOWUP_MIN = 30; // Stage 2: call nudge once we're inside 30 min of shift start with no ETA
+  export const PRE_SHIFT_ESCALATION_MIN = 15; // Stage 3: driver hasn't confirmed at all, inside 15 min of shift start with no ETA
+  export const LAST_STOP_RETURN_FOLLOWUP_MIN = 45; // Stage 6 repeat interval: once Return ETA to DC's time has arrived, re-check every 45 min until the trip's marked complete
   const PAPERWORK_FOLLOWUP_MIN = 15; // reach out within 15 min if a new route starts before the last one's paperwork is in
   let boardAlerts = []; // current alerts, each with a stable key + firstSeenAt timestamp
   let alertFirstSeenAt = {}; // key -> Date, persists across scans so timestamps don't reset
@@ -14,8 +16,18 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
   let alertPanelHasUnread = false;
 
   export function minsSinceMidnightNow() {
-    const d = new Date();
-    return d.getHours() * 60 + d.getMinutes();
+    // Every alert threshold and the Next Call Time column are all built on
+    // this one function -- it needs to reflect Atlanta's actual clock time,
+    // not whatever timezone the person viewing the board happens to be in.
+    // A dispatcher checking in from a different timezone (or a browser/
+    // system clock that's just off) would otherwise throw every threshold
+    // in this file off by however many hours that difference is.
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York", hour: "numeric", minute: "numeric", hour12: false,
+    }).formatToParts(new Date());
+    const hour = Number(parts.find((p) => p.type === "hour").value) % 24; // Intl can return "24" for midnight
+    const minute = Number(parts.find((p) => p.type === "minute").value);
+    return hour * 60 + minute;
   }
 
   export function driverPhoneForShift(s) {
@@ -29,9 +41,15 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
 
   export async function scanForBoardAlerts() {
     if (!supabaseClient) return [];
+    // Alerts are exclusive to whichever board tab is currently open --
+    // Atlanta only shows Atlanta's alerts, not Delaware's or Building C's,
+    // and pages outside these three (Houston, Mondelez, Driver List) don't
+    // show any of these at all, since none of this applies to them.
+    if (!ALL_ALERT_LOCATIONS.includes(state.activeLocation)) return [];
+    const thisLocation = [state.activeLocation];
     const todayKey = dateKey(new Date()); // existing helper — local YYYY-MM-DD
     const { data: shifts, error: shiftErr } = await supabaseClient
-      .from(SHIFTS_TABLE).select("*").in("location", ALERT_LOCATIONS).eq("shift_date", todayKey);
+      .from(SHIFTS_TABLE).select("*").in("location", thisLocation).eq("shift_date", todayKey);
     if (shiftErr || !shifts || !shifts.length) return [];
 
     const shiftIds = shifts.map((s) => s.id);
@@ -40,12 +58,15 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
     (trips || []).forEach((t) => { (tripsByShift[t.shift_id] = tripsByShift[t.shift_id] || []).push(t); });
 
     // trip_stops -- used by the missing-paperwork rule below to tell
-    // whether an open trip has any in/out times recorded at all yet.
+    // whether an open trip has any REAL in/out times recorded yet. Has to
+    // check actual time_in/time_out values, not just row existence -- a
+    // blank placeholder row gets created as soon as a stop count is set,
+    // before anyone's typed an actual time into it.
     const allTripIds = (trips || []).map((t) => t.id);
     let stopsByTrip = {};
     if (allTripIds.length) {
-      const { data: stopRows } = await supabaseClient.from("trip_stops").select("trip_id").in("trip_id", allTripIds);
-      (stopRows || []).forEach((s) => { stopsByTrip[s.trip_id] = (stopsByTrip[s.trip_id] || 0) + 1; });
+      const { data: stopRows } = await supabaseClient.from("trip_stops").select("trip_id, time_in, time_out").in("trip_id", allTripIds);
+      (stopRows || []).forEach((s) => { if (s.time_in || s.time_out) stopsByTrip[s.trip_id] = (stopsByTrip[s.trip_id] || 0) + 1; });
     }
 
     const nowMin = minsSinceMidnightNow();
@@ -59,41 +80,55 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
       const label = s.pro_number || s.driver_name_text || `Load on ${s.location}`;
       const driverName = driverNameForShift(s);
       const driverPhone = driverPhoneForShift(s);
-
-      // Rule: idle driver -- shift started 45+ min ago, still nothing dispatched
       const shiftStartMin = parseHHMM(s.shift_start);
-      if (shiftStartMin != null && !hasRealTrip) {
-        const idleFor = nowMin - shiftStartMin;
-        if (idleFor >= IDLE_THRESHOLD_MIN) {
-          alerts.push({
-            key: `idle-${s.id}`, type: "idle", location: s.location,
-            message: `${driverName} (${label}) — no load dispatched ${Math.floor(idleFor / 60)}h ${idleFor % 60}m after check-in`,
-            recipients: driverPhone ? [{ name: driverName, phone: driverPhone }] : [],
-            actionMessage: `This is D&L transportation, ${driverName}. You checked in but nothing's been dispatched yet — please call or text us for an update.`,
-          });
-        }
-      }
 
-      // Rule: pre-shift text needed -- 60 min before shift start, text not yet sent.
-      // Collected here, grouped by shift time further down (drivers sharing
-      // a shift time get one combined alert with one button for all of them).
-      if (shiftStartMin != null && !s.pre_shift_text_sent) {
+      // ---- Pre-shift ETA cascade (Stages 1-3) ----
+      // Gated on eta_shift_report being blank AND the driver not already
+      // having a real dispatched trip -- if they've been dispatched, that's
+      // strong proof they showed up and this is confirmed in every way that
+      // actually matters, even if nobody went back and manually filled in
+      // the ETA field itself. Tracking moves on to the next stage instead
+      // of continuing to ask a question that's already been answered.
+      const hasEta = !!(s.eta_shift_report || "").trim();
+      if (shiftStartMin != null && !hasEta && !hasRealTrip) {
         const minsUntilShift = shiftStartMin - nowMin;
-        if (minsUntilShift <= PRE_SHIFT_TEXT_LEAD_MIN && minsUntilShift > -180) { // don't keep flagging hours-old missed shifts forever
+        const clockLabel = minsToClock(shiftStartMin);
+        if (minsUntilShift <= PRE_SHIFT_ESCALATION_MIN && minsUntilShift > -180) {
+          // Stage 3: driver hasn't confirmed their shift at all
+          alerts.push({
+            key: `preshift-escalate-${s.id}`, type: "preshift_escalate", location: s.location, shiftDbId: s.id,
+            message: `${driverName} (${label}) — has not confirmed their ${clockLabel} shift today`,
+            recipients: driverPhone ? [{ name: driverName, phone: driverPhone }] : [],
+            actionMessage: `This is D&L Transportation, ${driverName} — we still haven't heard from you about your ${clockLabel} shift today. Please call or text us right away.`,
+          });
+        } else if (minsUntilShift <= PRE_SHIFT_CALL_FOLLOWUP_MIN && minsUntilShift > -180) {
+          // Stage 2: no ETA yet, prompt a call (no text button -- a text already went out in stage 1)
+          alerts.push({
+            key: `preshift-call-${s.id}`, type: "call_followup", location: s.location, shiftDbId: s.id,
+            message: `${driverName} (${label}) — no ETA yet for ${clockLabel} shift, please call`,
+            recipients: [],
+          });
+        } else if (minsUntilShift <= PRE_SHIFT_TEXT_LEAD_MIN && minsUntilShift > -180) {
+          // Stage 1: initial pre-shift ETA text, collected and grouped by shift time below
           preShiftTextNeeded.push({ shiftStartMin, driverName, driverPhone, label, shiftDbId: s.id });
         }
       }
 
-      // Rule: pre-shift call needed -- text was sent, 30+ min have passed.
-      // Framed honestly: no way to know if the driver actually replied,
-      // since replies land in TextBetter's mailbox, not this app.
-      if (s.pre_shift_text_sent && s.pre_shift_text_sent_at) {
-        const sentMinAgo = (Date.now() - new Date(s.pre_shift_text_sent_at).getTime()) / 60000;
-        if (sentMinAgo >= PRE_SHIFT_CALL_FOLLOWUP_MIN) {
+      // ---- Stage 4: dispatch check, 45 min after shift start, repeating ----
+      // Only starts once the ETA is actually confirmed -- if we're still
+      // waiting to hear from the driver at all, stages 1-3 above are the
+      // relevant ones, not this. Re-fires (re-triggers the unread/blink
+      // state) every IDLE_THRESHOLD_MIN by rolling a "tier" into the key --
+      // a new tier is a new key, which the panel treats as a fresh alert.
+      if (shiftStartMin != null && !hasRealTrip && hasEta) {
+        const idleFor = nowMin - shiftStartMin;
+        if (idleFor >= IDLE_THRESHOLD_MIN) {
+          const tier = Math.floor((idleFor - IDLE_THRESHOLD_MIN) / IDLE_THRESHOLD_MIN);
           alerts.push({
-            key: `call-${s.id}`, type: "call_followup", location: s.location,
-            message: `${driverName} (${label}) — pre-shift text sent ${Math.round(sentMinAgo)}m ago, call if there's been no reply`,
-            recipients: [], // no text action here on purpose -- a text already went out, this is a call nudge
+            key: `idle-${s.id}-${tier}`, type: "idle", location: s.location, shiftDbId: s.id,
+            message: `${driverName} (${label}) — no load dispatched ${Math.floor(idleFor / 60)}h ${idleFor % 60}m after check-in`,
+            recipients: driverPhone ? [{ name: driverName, phone: driverPhone }] : [],
+            actionMessage: `This is D&L transportation, ${driverName}. You checked in but nothing's been dispatched yet — please call or text us for an update.`,
           });
         }
       }
@@ -114,7 +149,7 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
         if (sinceLaterStarted >= PAPERWORK_FOLLOWUP_MIN) {
           const earlierLabel = earlier.trip_id || earlier.route_id;
           alerts.push({
-            key: `paperwork-${earlier.id}`, type: "missing_paperwork", location: s.location,
+            key: `paperwork-${earlier.id}`, type: "missing_paperwork", location: s.location, shiftDbId: s.id,
             message: `${driverName} (${label}) — started a new route but ${earlierLabel} is still open with no in/out times on file`,
             recipients: driverPhone ? [{ name: driverName, phone: driverPhone }] : [],
             actionMessage: `This is D&L transportation, ${driverName}. You've started your next route but we're still missing paperwork (in/out times) for ${earlierLabel}. Please send that over when you can.`,
@@ -122,36 +157,57 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
         }
       }
 
-      // Rules: missing dispatch time / overdue return, per active (non-minimized) trip
+      // Rules: missing dispatch time, and the Stage 5/6 last-stop cascade,
+      // per active (non-minimized, non-complete) trip. Each trip is its own
+      // independent cycle, so a driver starting a new route naturally
+      // starts a fresh cycle for that trip without any extra bookkeeping.
       for (const t of rowTrips) {
         if (t.minimized || t.complete) continue;
         const hasRoute = (t.route_id || "").trim() || (t.trip_id || "").trim();
-        if (!hasRoute) continue;
+        if (!hasRoute) continue; // not dispatched yet -- Stage 4 above covers that case
         const tripLabel = t.trip_id || t.route_id;
 
         if (!t.dispatch_time) {
           alerts.push({
-            key: `noeta-${t.id}`, type: "missing_eta", location: s.location,
+            key: `noeta-${t.id}`, type: "missing_eta", location: s.location, shiftDbId: s.id,
             message: `${driverName} (${label}, ${tripLabel}) — no dispatch time entered, can't calculate ETA`,
             recipients: [],
           });
-          continue; // no dispatch time means returnToDC can't be computed either — avoid a redundant second alert
+          continue; // no dispatch time means last-stop timing can't be evaluated either
         }
 
-        const dispatch = parseHHMM(t.dispatch_time);
-        const miles = parseFloat(t.route_miles);
-        if (dispatch != null && !isNaN(miles) && miles > 0) {
-          const leg = (miles / AVG_MPH) * 60;
-          const returnMin = dispatch + leg + leg + 15;
-          if (nowMin >= returnMin) {
-            const overdueBy = Math.round(nowMin - returnMin);
-            alerts.push({
-              key: `overdue-${t.id}`, type: "overdue_return", location: s.location,
-              message: `${driverName} (${label}, ${tripLabel}) — was due back ${overdueBy}m ago`,
-              recipients: driverPhone ? [{ name: driverName, phone: driverPhone }] : [],
-              actionMessage: `This is D&L transportation, ${driverName}. Your route ${tripLabel} was due back a bit ago — please send an updated ETA.`,
-            });
-          }
+        // if a later trip's already been dispatched, this trip's cycle is
+        // done regardless of what stage it was on -- the next trip's own
+        // cycle (checked independently, this same loop) takes over
+        const laterDispatched = rowTrips.some((t2) => t2.trip_number > t.trip_number && ((t2.route_id || "").trim() || (t2.trip_id || "").trim()));
+        if (laterDispatched) continue;
+
+        const lastStopMin = parseHHMM(t.last_stop_depart);
+        const returnEtaMin = parseHHMM(t.return_eta_to_dc);
+
+        if (lastStopMin != null && returnEtaMin == null && nowMin >= lastStopMin) {
+          // Stage 5: last-stop-depart time has arrived, no return ETA yet --
+          // this ONLY asks whether the driver made it and what their ETA
+          // back to the DC is. Paperwork/drop-spot isn't part of this one.
+          alerts.push({
+            key: `laststop-${t.id}`, type: "last_stop", location: s.location, shiftDbId: s.id,
+            message: `${driverName} (${label}, ${tripLabel}) — should be at their last stop, let's get an ETA to the DC`,
+            recipients: driverPhone ? [{ name: driverName, phone: driverPhone }] : [],
+            actionMessage: `This is D&L transportation, ${driverName}. Have you made it to your last stop? What's your ETA back to the DC?`,
+          });
+        } else if (returnEtaMin != null && nowMin >= returnEtaMin) {
+          // Stage 6: we HAVE a return ETA and that time has arrived --
+          // NOW is when paperwork and drop-spot location get asked for.
+          // Repeats every LAST_STOP_RETURN_FOLLOWUP_MIN until the trip's
+          // marked complete (or a later trip gets dispatched, caught above).
+          const sinceReturnEta = nowMin - returnEtaMin;
+          const tier = Math.floor(sinceReturnEta / LAST_STOP_RETURN_FOLLOWUP_MIN);
+          alerts.push({
+            key: `return-${t.id}-${tier}`, type: "overdue_return", location: s.location, shiftDbId: s.id,
+            message: `${driverName} (${label}, ${tripLabel}) — was scheduled to return previous load at ${minsToClock(returnEtaMin)}, let's check in for paperwork and drop spot location`,
+            recipients: driverPhone ? [{ name: driverName, phone: driverPhone }] : [],
+            actionMessage: `This is D&L transportation, ${driverName}. Checking in on paperwork and your drop spot location for ${tripLabel}.`,
+          });
         }
       }
     }
@@ -166,10 +222,10 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
       const withPhone = list.filter((d) => d.driverPhone);
       const recipients = withPhone.map((d) => ({ name: d.driverName, phone: d.driverPhone }));
       alerts.push({
-        key: `preshift-${shiftStartMin}`, type: "preshift_text", location: "atlanta", // grouped alerts aren't location-specific; link falls back to Atlanta
+        key: `preshift-${shiftStartMin}`, type: "preshift_text", location: state.activeLocation,
         message: `${list.length > 1 ? `${list.length} drivers` : names} due for a pre-shift check-in text — ${clockLabel} shift${list.length > 1 ? "s" : ""} (${names})`,
         recipients,
-        actionMessage: `This is D&L transportation, please provide an ETA for your ${clockLabel} shift.`,
+        actionMessage: `This is D&L Transportation, could we have an ETA for your ${clockLabel} kroger shift`,
         markShiftIdsOnSent: withPhone.map((d) => d.shiftDbId), // Pre Shift Text Sent gets marked automatically once this actually sends
       });
     });
@@ -206,17 +262,20 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
       body.innerHTML = `<div class="alert-empty">Nothing needs attention right now.</div>`;
       return;
     }
-    const ICONS = { idle: "⏱", overdue_return: "↩", missing_eta: "❓", preshift_text: "📋", call_followup: "📞", missing_paperwork: "📄" };
+    const ICONS = { idle: "⏱", overdue_return: "↩", missing_eta: "❓", preshift_text: "📋", preshift_escalate: "🚨", call_followup: "📞", missing_paperwork: "📄", last_stop: "🏁" };
     // newest first
     const sorted = [...boardAlerts].sort((a, b) => alertFirstSeenAt[b.key] - alertFirstSeenAt[a.key]);
-    body.innerHTML = sorted.map((a) => `
-      <a class="alert-chat-item" href="${a.location === "buildingc" ? "buildingc.html" : a.location + ".html"}">
+    body.innerHTML = sorted.map((a) => {
+      const targetIds = a.markShiftIdsOnSent && a.markShiftIdsOnSent.length ? a.markShiftIdsOnSent : (a.shiftDbId != null ? [a.shiftDbId] : []);
+      return `
+      <div class="alert-chat-item" ${targetIds.length ? `data-alert-jump-ids="${targetIds.join(",")}"` : ""}>
         <span class="alert-chat-icon">${ICONS[a.type] || "•"}</span>
         <span class="alert-chat-text">${escapeHtml(a.message)}</span>
         <span class="alert-chat-time">${formatAlertTimestamp(alertFirstSeenAt[a.key] || new Date())}</span>
         ${a.recipients && a.recipients.length ? `<button type="button" class="alert-action-btn" data-alert-action-key="${a.key}" title="Text ${a.recipients.length > 1 ? "these drivers" : "this driver"}">Text</button>` : ""}
-      </a>
-    `).join("");
+      </div>
+    `;
+    }).join("");
   }
 
   export async function refreshBoardAlerts() {
@@ -352,12 +411,21 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
     // listeners attached directly to them would be lost each time.
     el.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-alert-action-key]");
-      if (!btn) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const alert = boardAlerts.find((a) => a.key === btn.dataset.alertActionKey);
-      if (alert && alert.recipients && alert.recipients.length) {
-        openSendTextModal(alert.recipients, alert.actionMessage || "", alert.markShiftIdsOnSent || null);
+      if (btn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const alert = boardAlerts.find((a) => a.key === btn.dataset.alertActionKey);
+        if (alert && alert.recipients && alert.recipients.length) {
+          openSendTextModal(alert.recipients, alert.actionMessage || "", alert.markShiftIdsOnSent || null);
+        }
+        return;
+      }
+      // clicking the alert itself (not its Text button) jumps to and
+      // outlines the row it's about, instead of navigating anywhere
+      const item = e.target.closest("[data-alert-jump-ids]");
+      if (item) {
+        const ids = item.dataset.alertJumpIds.split(",").map(Number).filter((n) => !isNaN(n));
+        ids.forEach((id) => scrollToAndOutlineShiftRow(id));
       }
     });
   }

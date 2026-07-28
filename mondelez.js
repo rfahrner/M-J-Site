@@ -25,7 +25,7 @@ import {
   refreshDriverDatalist, closeDateDropdown, renderCalendarGrid, resetCalendarViewMonth,
   closeContextMenu, handleRealtimeDriverChange, pick, textDriverPhone, openAddDriverModal,
   openDriverAutocomplete, updateDriverAutocomplete, closeDriverAutocomplete, captureFocusForRerender,
-  handleRowAwareTab, openEditDriverModal,
+  handleRowAwareTab, openEditDriverModal, batchSignImageUrls,
 } from './loadboard.js';
 
 export const MONDELEZ_TABLE = "mondelez_loads";
@@ -123,7 +123,7 @@ function mondelezRowFromDbRow(r) {
     revenueTotal: r.revenue_total != null ? String(r.revenue_total) : "",
     revenueManual: !!r.revenue_manual,
     routeImagePath: r.route_image_path || "",
-    routeImageUrl: r.route_image_path && supabaseClient ? supabaseClient.storage.from(MONDELEZ_IMAGE_BUCKET).getPublicUrl(r.route_image_path).data.publicUrl : "",
+    routeImageUrl: "", // filled in by batchSignImageUrls after loading — see ensureMondelezDateLoaded
     tonu: !!r.tonu, highlighted: !!r.highlighted, shiftComplete: !!r.shift_complete, selected: false,
     createdAt: r.created_at || null, updatedAt: r.updated_at || null, addedAt: null,
   };
@@ -224,7 +224,12 @@ async function ensureMondelezDateLoaded(dKey) {
     mondelezState.rowsByDate[dKey] = [];
     return;
   }
-  mondelezState.rowsByDate[dKey] = (data || []).map(mondelezRowFromDbRow);
+  const rows = (data || []).map(mondelezRowFromDbRow);
+  const imagePaths = [];
+  const imageTargets = [];
+  rows.forEach((row) => { if (row.routeImagePath) { imagePaths.push(row.routeImagePath); imageTargets.push(row); } });
+  await batchSignImageUrls(MONDELEZ_IMAGE_BUCKET, imagePaths, imageTargets);
+  mondelezState.rowsByDate[dKey] = rows;
 }
 
 export async function loadMondelezDatesWithData() {
@@ -360,12 +365,15 @@ function mondelezRowHtml(row) {
     <td class="col-mdz-revenue"><input class="cell-input small" style="width:70px; font-weight:800;" data-mdz-row="${row.id}" data-mdz-field="revenueTotal" value="${escapeHtml(row.revenueTotal)}" title="${row.revenueManual ? "Manually overridden" : "Auto-calculated"}"></td>
     <td class="col-mdz-notes"><input class="cell-input" placeholder="Status / Notes" data-mdz-row="${row.id}" data-mdz-field="notes" value="${escapeHtml(row.notes)}"></td>
     <td class="col-mdz-image">
-      ${row.routeImageUrl
-        ? `<div class="mdz-thumb-wrap">
-             <img src="${escapeHtml(row.routeImageUrl)}" class="mdz-route-thumb" data-action="view-route-image" data-mdz-row="${row.id}" alt="Route image" title="Click to view full size">
-             <button type="button" class="mdz-thumb-delete" data-action="delete-route-image" data-mdz-row="${row.id}" title="Delete image">&times;</button>
-           </div>`
-        : `<label class="btn btn-ghost" style="padding:3px 8px; font-size:10.5px; cursor:pointer;">Upload<input type="file" accept="image/*" data-action="upload-route-image" data-mdz-row="${row.id}" style="display:none;"></label>`}
+      <div class="mdz-image-dropzone" tabindex="0" data-action="image-dropzone" data-mdz-row="${row.id}" title="Click to browse, or drag/paste an image here">
+        ${row.routeImageUrl
+          ? `<div class="mdz-thumb-wrap">
+               <img src="${escapeHtml(row.routeImageUrl)}" class="mdz-route-thumb" data-action="view-route-image" data-mdz-row="${row.id}" alt="Route image" title="Click to view full size">
+               <button type="button" class="mdz-thumb-delete" data-action="delete-route-image" data-mdz-row="${row.id}" title="Delete image">&times;</button>
+             </div>`
+          : `<span class="mdz-upload-hint">Drop / paste / click</span>`}
+        <input type="file" accept="image/*" data-action="upload-route-image" data-mdz-row="${row.id}" class="mdz-hidden-file-input">
+      </div>
     </td>
     <td class="col-availRemove"><button type="button" class="available-remove-btn" data-action="delete-mdz-row" data-mdz-row="${row.id}" title="Delete">&times;</button></td>
   </tr>`;
@@ -467,7 +475,9 @@ async function uploadRouteImage(rowId, file) {
     const { error: upErr } = await supabaseClient.storage.from(MONDELEZ_IMAGE_BUCKET).upload(path, file);
     if (upErr) throw upErr;
     row.routeImagePath = path;
-    row.routeImageUrl = supabaseClient.storage.from(MONDELEZ_IMAGE_BUCKET).getPublicUrl(path).data.publicUrl;
+    const { data: signed, error: signErr } = await supabaseClient.storage.from(MONDELEZ_IMAGE_BUCKET).createSignedUrl(path, 3600);
+    if (signErr) throw signErr;
+    row.routeImageUrl = signed.signedUrl;
     await saveMondelezRowNow(row);
     renderMondelezTable();
   } catch (e) {
@@ -856,6 +866,14 @@ export async function initMondelezPage() {
     if (deleteImgBtn) {
       if (confirm("Delete this route image? This can't be undone.")) deleteRouteImage(deleteImgBtn.dataset.mdzRow);
     }
+    // clicking the empty dropzone (no image yet) opens the file picker --
+    // if there's already a thumbnail, the view/delete handlers above catch
+    // those clicks first and this never fires for them
+    const dropzone = e.target.closest("[data-action='image-dropzone']");
+    if (dropzone && !viewBtn && !deleteImgBtn) {
+      const fileInput = dropzone.querySelector('input[type="file"]');
+      if (fileInput) fileInput.click();
+    }
     const textBtn = e.target.closest("[data-action='text-mdz-driver']");
     if (textBtn) textMondelezDriverForRow(textBtn.dataset.mdzRow);
     const emailBtn = e.target.closest("[data-action='email-mdz-driver']");
@@ -878,6 +896,44 @@ export async function initMondelezPage() {
       uploadRouteImage(t.dataset.mdzRow, t.files[0]);
     }
   });
+  // Drag-and-drop and paste for route images -- the point of both is
+  // skipping the "save the image to disk, then browse for it" round trip.
+  // A file dragged in, or an image copied to the clipboard (e.g. a
+  // screenshot, or "copy image" from wherever the route photo showed up),
+  // uploads directly. The existing file-picker click still works too.
+  table.addEventListener("dragover", (e) => {
+    const dropzone = e.target.closest("[data-action='image-dropzone']");
+    if (!dropzone) return;
+    e.preventDefault(); // required or the browser refuses to allow a drop at all
+    dropzone.classList.add("mdz-dropzone-active");
+  });
+  table.addEventListener("dragleave", (e) => {
+    const dropzone = e.target.closest("[data-action='image-dropzone']");
+    if (dropzone) dropzone.classList.remove("mdz-dropzone-active");
+  });
+  table.addEventListener("drop", (e) => {
+    const dropzone = e.target.closest("[data-action='image-dropzone']");
+    if (!dropzone) return;
+    e.preventDefault();
+    dropzone.classList.remove("mdz-dropzone-active");
+    const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (file && file.type.startsWith("image/")) uploadRouteImage(dropzone.dataset.mdzRow, file);
+  });
+  table.addEventListener("paste", (e) => {
+    const dropzone = e.target.closest("[data-action='image-dropzone']");
+    if (!dropzone) return;
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith("image/")) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file) uploadRouteImage(dropzone.dataset.mdzRow, file);
+        break;
+      }
+    }
+  });
+
   table.addEventListener("focusin", (e) => {
     const t = e.target;
     if (!(t.dataset && t.dataset.mdzRow && t.dataset.driverAc === "true")) return;
