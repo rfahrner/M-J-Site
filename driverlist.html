@@ -159,6 +159,7 @@
         <div id="ad-tab-notes" class="hidden"></div>
       </div>
       <div class="modal-footer">
+        <button class="btn btn-ghost hidden" id="ad-delete" style="color:#b91c1c; border-color:#b91c1c; margin-right:auto;">Delete Driver</button>
         <button class="btn btn-ghost" id="ad-cancel">Cancel</button>
         <button class="btn" id="ad-submit">Add</button>
       </div>
@@ -175,8 +176,8 @@
       <div class="modal-body">
         <div id="tg-setup-step" data-selected-group="">
           <div class="field" id="tg-group-tabs-wrap">
-            <label>Group (by rating)</label>
-            <div id="tg-group-tabs" class="tg-group-tabs"></div>
+            <label for="tg-group-select">Who to text</label>
+            <select id="tg-group-select" class="cell-input"></select>
           </div>
           <div class="field">
             <label for="tg-message">Message</label>

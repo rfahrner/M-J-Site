@@ -452,7 +452,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     todayKey: dateKey(todayDate()),
     pendingAddLoadDriverId: null,
     addDriverNestedFromLoad: false,
-    driverSort: { key: null, dir: "asc" },
+    driverSort: { key: "rating", dir: "asc" },
     boardSort: { key: "shiftStart", dir: "asc" },
     driverListTab: "atlanta", // only meaningful on the Driver List page — its 3 tabs
     datesWithData: new Set(), // which days in the browsable range have any loads — for the date dropdown
@@ -2272,42 +2272,49 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
   // reassign an imported `let` binding directly.
   export function resetGroupTextState() { groupTextState = null; }
 
-  function driverGroupKey(drv) {
-    const m = /^[A-Za-z]/.exec(drv.rating || "");
-    return m ? m[0].toUpperCase() : null;
+  // Known classifications up front, in a sensible order — DNU checked before
+  // the generic letter match, since "DNU" would otherwise match the same as
+  // a plain "D" rating (both start with the same letter) and the two need
+  // to stay separate: DNU means specifically not to use that driver.
+  const KNOWN_DRIVER_CLASSES = ["A", "B", "C", "D", "DNU", "R"];
+  function driverClassification(drv) {
+    const rating = (drv.rating || "").trim().toUpperCase();
+    if (!rating) return null;
+    if (rating.startsWith("DNU")) return "DNU";
+    const m = /^[A-Z]/.exec(rating);
+    return m ? m[0] : null;
   }
 
-  function availableRatingGroups() {
-    const keys = new Set();
-    driversForLocation(state.driverListTab || "atlanta").forEach((d) => { const k = driverGroupKey(d); if (k) keys.add(k); });
-    return [...keys].sort();
+  function availableDriverClasses() {
+    const pool = driversForLocation(state.driverListTab || "atlanta");
+    const found = new Set();
+    pool.forEach((d) => { const k = driverClassification(d); if (k) found.add(k); });
+    // known classes first (in their fixed order, even if no driver currently
+    // has that rating -- picking it just sends to nobody, no harm), then
+    // anything else actually present in the data that isn't in the known list
+    const extras = [...found].filter((k) => !KNOWN_DRIVER_CLASSES.includes(k)).sort();
+    return [...KNOWN_DRIVER_CLASSES, ...extras];
   }
 
   function openTextGroupModal() {
     const modal = $("#modal-text-group");
     if (!modal) return;
     groupTextState = null;
-    if ($("#tg-group-tabs-wrap")) $("#tg-group-tabs-wrap").classList.remove("hidden");
-    modal.dataset.mode = "rating-group";
-    const groups = availableRatingGroups();
-    const tabsEl = $("#tg-group-tabs");
-    if (tabsEl) {
-      tabsEl.innerHTML = groups.length
-        ? groups.map((g) => `<button type="button" class="tg-group-tab" data-group="${g}">Group ${g}</button>`).join("")
-        : `<div class="subtext">No drivers have a rating on file yet.</div>`;
+    const selectEl = $("#tg-group-select");
+    if (selectEl) {
+      const classes = availableDriverClasses();
+      selectEl.innerHTML = [
+        `<option value="ALL">All Drivers</option>`,
+        ...classes.map((c) => `<option value="${c}">${c === "DNU" ? "DNU" : "Rating " + c}</option>`),
+      ].join("");
+      selectEl.value = "ALL";
     }
     const msgEl = $("#tg-message");
     if (msgEl) msgEl.value = "";
     $("#tg-setup-step").classList.remove("hidden");
-    $("#tg-setup-step").dataset.selectedGroup = "";
     $("#tg-progress-step").classList.add("hidden");
     $("#tg-error").classList.add("hidden");
     modal.classList.remove("hidden");
-  }
-
-  function selectTextGroup(groupKey) {
-    $all(".tg-group-tab").forEach((btn) => btn.classList.toggle("is-active", btn.dataset.group === groupKey));
-    $("#tg-setup-step").dataset.selectedGroup = groupKey;
   }
 
   export function beginTextBatchFlow(members, label, message) {
@@ -2333,15 +2340,17 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
   }
 
   function startGroupTexting() {
-    const groupKey = $("#tg-setup-step").dataset.selectedGroup;
+    const groupKey = ($("#tg-group-select") || {}).value || "";
     const message = $("#tg-message").value.trim();
     const errEl = $("#tg-error");
-    if (!groupKey) { errEl.textContent = "Pick a group first."; errEl.classList.remove("hidden"); return; }
+    if (!groupKey) { errEl.textContent = "Pick who to text first."; errEl.classList.remove("hidden"); return; }
     if (!message) { errEl.textContent = "Write a message first."; errEl.classList.remove("hidden"); return; }
     errEl.classList.add("hidden");
 
-    const members = driversForLocation(state.driverListTab || "atlanta").filter((d) => driverGroupKey(d) === groupKey);
-    beginTextBatchFlow(members, `Group ${groupKey}`, message);
+    const pool = driversForLocation(state.driverListTab || "atlanta");
+    const members = groupKey === "ALL" ? pool : pool.filter((d) => driverClassification(d) === groupKey);
+    const label = groupKey === "ALL" ? "All Drivers" : (groupKey === "DNU" ? "DNU" : `Rating ${groupKey}`);
+    beginTextBatchFlow(members, label, message);
   }
 
   function renderGroupTextProgress() {
@@ -3172,6 +3181,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     const notesEl = $("#ad-tab-notes"); if (notesEl) notesEl.classList.add("hidden");
     ["ad-name", "ad-phone", "ad-mc", "ad-dispatcher-phone", "ad-email", "ad-email2", "ad-rating", "ad-preference", "ad-carrier", "ad-rate-booking", "ad-notes", "ad-tii-amount", "ad-rate"]
       .forEach((id) => setVal(id, ""));
+    const mcFieldAdd = $("#ad-mc"); if (mcFieldAdd) mcFieldAdd.dataset.lastCheckedMc = "";
     $all('input[name="ad-tia"]', $("#modal-add-driver")).forEach((r) => (r.checked = r.value === "no"));
     const addingFromMondelez = (state.activeLocation || state.driverListTab) === "mondelez";
     $all('input[name="ad-runs-out-of"]').forEach((c) => { c.checked = addingFromMondelez && c.value === "mondelez"; });
@@ -3181,6 +3191,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     $all(".field", modalEl).forEach((f) => f.classList.remove("has-error"));
     setText("ad-modal-title", "Add Driver");
     setText("ad-submit", "Add");
+    const deleteBtn = $("#ad-delete"); if (deleteBtn) deleteBtn.classList.add("hidden");
     const nameEl = $("#ad-name");
     if (nameEl) nameEl.focus();
   }
@@ -3206,6 +3217,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     setVal("ad-name", d.name || "");
     setVal("ad-phone", d.phone || "");
     setVal("ad-mc", d.mc || "");
+    const mcFieldEdit = $("#ad-mc"); if (mcFieldEdit) mcFieldEdit.dataset.lastCheckedMc = d.mc || "";
     setVal("ad-dispatcher-phone", d.dispatcherPhone || "");
     setVal("ad-email", d.email || "");
     setVal("ad-email2", d.email2 || "");
@@ -3225,6 +3237,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     $all(".field", modalEl).forEach((f) => f.classList.remove("has-error"));
     setText("ad-modal-title", `${d.name} — Driver Profile`);
     setText("ad-submit", "Save");
+    const deleteBtn = $("#ad-delete"); if (deleteBtn) deleteBtn.classList.remove("hidden");
     const nameEl = $("#ad-name");
     if (nameEl) nameEl.focus();
   }
@@ -3232,6 +3245,33 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
   function closeAddDriverModal() {
     $("#modal-add-driver").classList.add("hidden");
     driverProfileState = null;
+  }
+
+  async function deleteDriverFromModal() {
+    const driverId = state.editingDriverId;
+    if (!driverId) return;
+    const d = findDriver(driverId);
+    if (!d) return;
+    if (!confirm(`Delete ${d.name}? This can't be undone, and any load rows still showing their name will fall back to plain text (the assignment itself isn't removed from those loads).`)) return;
+
+    const deleteBtn = $("#ad-delete");
+    if (deleteBtn) deleteBtn.disabled = true;
+    try {
+      if (supabaseClient) {
+        const { error } = await supabaseClient.from("atlanta_drivers").delete().eq("id", driverId);
+        if (error) throw error;
+      }
+      const idx = state.drivers.findIndex((x) => x.id === driverId);
+      if (idx !== -1) state.drivers.splice(idx, 1);
+      closeAddDriverModal();
+      refreshDriverDatalist();
+      if (currentFile() === "driverlist.html") renderDriverList();
+      else if (state.activeLocation) renderBoardTable();
+    } catch (e) {
+      console.error("deleteDriverFromModal failed:", e);
+      setDriverSyncStatus(`Couldn't delete this driver (${e.message || e}).`, "error");
+      if (deleteBtn) deleteBtn.disabled = false;
+    }
   }
 
   // The single-value `location` field only makes sense for "atlanta" /
@@ -3243,6 +3283,62 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
   function normalizeDriverLocationField(context) {
     if (context === "buildingc" || context === "mondelez") return "atlanta";
     return context || "atlanta";
+  }
+
+  // Drivers under the same MC# are typically the same carrier company, so
+  // their carrier-level details (email, dispatcher line, contract rate,
+  // interchange terms) are usually identical even though they're different
+  // people. When adding a new driver, if the MC they just entered already
+  // exists on file, pull those fields from that match instead of making the
+  // dispatcher re-type the same carrier info every time. Add-mode only
+  // (editing an existing driver's own MC shouldn't trigger this), and never
+  // overwrites a field the person has already filled in themselves.
+  function autofillFromMatchingMC() {
+    const mcField = $("#ad-mc");
+    const mc = getVal("ad-mc").trim();
+    if (!mc) return;
+    // don't re-trigger on every blur if the MC hasn't actually changed since
+    // the last check -- otherwise re-focusing/blurring this field without
+    // editing it would keep stomping on fields the person has since customized
+    if (mcField && mcField.dataset.lastCheckedMc === mc) return;
+    if (mcField) mcField.dataset.lastCheckedMc = mc;
+
+    const isEdit = !!state.editingDriverId;
+    const match = state.drivers.find((d) => (d.mc || "").trim() === mc && d.id !== state.editingDriverId);
+    if (!match) return;
+
+    const applyField = (id, val) => {
+      const el = $("#" + id);
+      if (!el) return;
+      if (isEdit) {
+        // editing: they're correcting this driver's MC to a known carrier,
+        // so adopt that carrier's info wholesale, not just fill gaps
+        el.value = val == null ? "" : val;
+      } else if (val != null && val !== "" && !el.value.trim()) {
+        // adding: only fill genuinely blank fields, never overwrite something typed
+        el.value = val;
+      }
+    };
+    applyField("ad-email", match.email);
+    applyField("ad-dispatcher-phone", match.dispatcherPhone);
+    applyField("ad-rate", match.normalRate);
+    applyField("ad-tii-amount", match.tiiAmount);
+
+    const radios = $all('input[name="ad-tia"]', $("#modal-add-driver"));
+    const noRadio = radios.find((r) => r.value === "no");
+    const yesRadio = radios.find((r) => r.value === "yes");
+    if (isEdit) {
+      // editing: mirror the match's interchange status exactly, either way
+      if (match.tia) { if (yesRadio) yesRadio.checked = true; }
+      else if (noRadio) noRadio.checked = true;
+    } else if (match.tia && yesRadio && noRadio && noRadio.checked) {
+      // adding: radios always have something checked (defaults to "no"), so
+      // there's no true "blank" state -- only flip it if still on that
+      // default, so a deliberate choice never gets overridden
+      yesRadio.checked = true;
+    }
+
+    setDriverSyncStatus(`Filled in from ${match.name}'s carrier info (MC ${mc} already on file) — check it over before saving.`, "info");
   }
 
   async function submitDriverForm() {
@@ -3832,7 +3928,10 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       on("ad-close", "click", closeAddDriverModal);
       on("ad-cancel", "click", closeAddDriverModal);
       on("ad-submit", "click", submitDriverForm);
+      on("ad-delete", "click", deleteDriverFromModal);
       on("modal-add-driver", "click", (e) => { if (e.target.id === "modal-add-driver") closeAddDriverModal(); });
+      const mcField = $("#ad-mc");
+      if (mcField) mcField.addEventListener("blur", autofillFromMatchingMC);
       const atlantaRunsCheckbox = $('input[name="ad-runs-out-of"][value="atlanta"]');
       if (atlantaRunsCheckbox) atlantaRunsCheckbox.addEventListener("change", updateAtlantaRateSectionVisibility);
       $all("[data-ad-tab]").forEach((btn) => btn.addEventListener("click", () => switchAddDriverTab(btn.dataset.adTab)));
@@ -4301,10 +4400,6 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     });
 
     if ($("#btn-text-group")) $("#btn-text-group").addEventListener("click", openTextGroupModal);
-    if ($("#tg-group-tabs")) $("#tg-group-tabs").addEventListener("click", (e) => {
-      const btn = e.target.closest(".tg-group-tab");
-      if (btn) selectTextGroup(btn.dataset.group);
-    });
     on("tg-start", "click", startGroupTexting);
     on("tg-send-now", "click", sendCurrentGroupBatchDirect);
       on("tg-open-batch", "click", openCurrentGroupBatch);

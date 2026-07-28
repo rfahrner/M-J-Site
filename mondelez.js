@@ -342,7 +342,7 @@ function mondelezRowHtml(row) {
       ${MDZ_EMAIL_LOCATIONS.has(row.location) ? `<button class="text-btn" data-action="email-mdz-driver" data-mdz-row="${row.id}" title="Email route info">Email</button>` : ""}
     </td>
     ${showLocationCol ? `<td class="col-mdz-location"><span class="static-text">${escapeHtml(mondelezLocationLabel(row.location))}</span></td>` : ""}
-    <td class="pin pin-pro${row.shiftComplete ? " shift-complete-tint" : ""}"><input class="cell-input" placeholder="Aljex#" data-mdz-row="${row.id}" data-mdz-field="aljexNumber" value="${escapeHtml(row.aljexNumber)}">${row.aljexNumber ? `<button type="button" class="cell-link-btn" data-open-mdz-load="${row.id}" title="Open load details">↗</button>` : ""}</td>
+    <td class="pin pin-pro${row.shiftComplete ? " shift-complete-tint" : ""}"><div class="cell-with-link"><input class="cell-input" placeholder="Aljex#" data-mdz-row="${row.id}" data-mdz-field="aljexNumber" value="${escapeHtml(row.aljexNumber)}">${row.aljexNumber ? `<button type="button" class="cell-link-btn" data-open-mdz-load="${row.id}" title="Open load details">↗</button>` : ""}</div></td>
     <td class="col-mdz-group"><input class="cell-input" placeholder="Delivery Group" data-mdz-row="${row.id}" data-mdz-field="deliveryGroup" value="${escapeHtml(row.deliveryGroup)}"></td>
     <td class="pin pin-driver">
       <div class="driver-name-wrap"><input class="cell-input" data-driver-ac="true" placeholder="Type driver name…" data-mdz-row="${row.id}" data-mdz-field="driverName" value="${escapeHtml(displayName)}"></div>
@@ -361,7 +361,10 @@ function mondelezRowHtml(row) {
     <td class="col-mdz-notes"><input class="cell-input" placeholder="Status / Notes" data-mdz-row="${row.id}" data-mdz-field="notes" value="${escapeHtml(row.notes)}"></td>
     <td class="col-mdz-image">
       ${row.routeImageUrl
-        ? `<img src="${escapeHtml(row.routeImageUrl)}" class="mdz-route-thumb" data-action="view-route-image" data-mdz-row="${row.id}" alt="Route image" title="Click to view full size">`
+        ? `<div class="mdz-thumb-wrap">
+             <img src="${escapeHtml(row.routeImageUrl)}" class="mdz-route-thumb" data-action="view-route-image" data-mdz-row="${row.id}" alt="Route image" title="Click to view full size">
+             <button type="button" class="mdz-thumb-delete" data-action="delete-route-image" data-mdz-row="${row.id}" title="Delete image">&times;</button>
+           </div>`
         : `<label class="btn btn-ghost" style="padding:3px 8px; font-size:10.5px; cursor:pointer;">Upload<input type="file" accept="image/*" data-action="upload-route-image" data-mdz-row="${row.id}" style="display:none;"></label>`}
     </td>
     <td class="col-availRemove"><button type="button" class="available-remove-btn" data-action="delete-mdz-row" data-mdz-row="${row.id}" title="Delete">&times;</button></td>
@@ -483,14 +486,39 @@ function viewRouteImage(rowId) {
     <div class="modal image-lightbox-content">
       <div class="modal-header"><h3>Route — ${escapeHtml(row.aljexNumber || "")}</h3><button class="modal-close" id="mdz-image-close">&times;</button></div>
       <div class="modal-body" style="text-align:center; padding:12px;"><img src="${escapeHtml(row.routeImageUrl)}" alt="Route image"></div>
+      <div class="modal-footer"><button type="button" class="btn btn-ghost" id="mdz-image-delete" style="color:#b91c1c; border-color:#b91c1c;">Delete Image</button></div>
     </div>`;
   document.body.appendChild(overlay);
   const close = () => overlay.remove();
   overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
   $("#mdz-image-close").addEventListener("click", close);
+  $("#mdz-image-delete").addEventListener("click", async () => {
+    if (!confirm("Delete this route image? This can't be undone.")) return;
+    close();
+    await deleteRouteImage(rowId);
+  });
   document.addEventListener("keydown", function escHandler(e) {
     if (e.key === "Escape") { close(); document.removeEventListener("keydown", escHandler); }
   });
+}
+
+async function deleteRouteImage(rowId) {
+  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
+  if (!row || !row.routeImageUrl) return;
+  const oldPath = row.routeImagePath;
+  row.routeImagePath = "";
+  row.routeImageUrl = "";
+  renderMondelezTable();
+  try {
+    if (oldPath && supabaseClient) {
+      const { error } = await supabaseClient.storage.from(MONDELEZ_IMAGE_BUCKET).remove([oldPath]);
+      if (error) throw error;
+    }
+    await saveMondelezRowNow(row);
+  } catch (e) {
+    console.error("deleteRouteImage failed:", e);
+    setDriverSyncStatus(`Image removed here, but couldn't delete it from storage (${e.message || e}).`, "error");
+  }
 }
 
 /* ---------------- row actions ---------------- */
@@ -616,7 +644,7 @@ function textMondelezDriverForRow(rowId) {
 // block is a fixed reference list for all three regardless of which one
 // the row itself is at, since it's about which mobile-app organization
 // the driver logs into, not something that varies load to load.
-const MDZ_EMAIL_LOCATIONS = new Set(["morris", "addison", "indianapolis"]);
+const MDZ_EMAIL_LOCATIONS = new Set(["morris", "addison", "indianapolis", "westchester"]);
 
 function buildMondelezRouteEmailBody(row, driverName) {
   const line = (label, val) => `${label} ${val || ""}`.trimEnd();
@@ -641,6 +669,7 @@ function buildMondelezRouteEmailBody(row, driverName) {
     "Morris IL - 6104",
     "Addison IL - 6136",
     "Indianapolis - 6116",
+    "West Chester OH - 6104",
     line("Your user ID:", row.driverAppId),
     "iOS: https://apps.apple.com/app/id1008328213",
     "Android: https://play.google.com/store/apps/details?id=com.descartes.mobilelink&pcampaignid=web_share",
@@ -823,6 +852,10 @@ export async function initMondelezPage() {
     if (delBtn) deleteMondelezRow(delBtn.dataset.mdzRow);
     const viewBtn = e.target.closest("[data-action='view-route-image']");
     if (viewBtn) viewRouteImage(viewBtn.dataset.mdzRow);
+    const deleteImgBtn = e.target.closest("[data-action='delete-route-image']");
+    if (deleteImgBtn) {
+      if (confirm("Delete this route image? This can't be undone.")) deleteRouteImage(deleteImgBtn.dataset.mdzRow);
+    }
     const textBtn = e.target.closest("[data-action='text-mdz-driver']");
     if (textBtn) textMondelezDriverForRow(textBtn.dataset.mdzRow);
     const emailBtn = e.target.closest("[data-action='email-mdz-driver']");

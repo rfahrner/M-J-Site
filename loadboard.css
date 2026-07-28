@@ -937,6 +937,7 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
 }
 
 /* Route image thumbnail (Mondelez) — small, clickable, opens the lightbox */
+.mdz-thumb-wrap { position: relative; display: inline-block; }
 .mdz-route-thumb {
   width: 40px; height: 40px;
   object-fit: cover;
@@ -946,6 +947,20 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
   transition: transform 0.12s ease;
 }
 .mdz-route-thumb:hover { transform: scale(1.08); }
+.mdz-thumb-delete {
+  position: absolute;
+  top: -6px; right: -6px;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: #b91c1c;
+  color: #fff;
+  border: 1px solid #fff;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.mdz-thumb-delete:hover { background: #991b1b; }
 
 /* Image lightbox — grows in from the center rather than just appearing,
    and sized to fill most of the screen so it's actually readable
@@ -1373,8 +1388,9 @@ fieldset.rate-tier-box.is-overridden {
    Mondelez board
    ============================================================ */
 .col-mdz-location { min-width: 110px; }
-.col-mdz-group { min-width: 110px; }
-.col-mdz-driverapp { width: 80px; min-width: 80px; }
+.col-mdz-group { width: 55px; min-width: 55px; }
+.col-mdz-driverapp { width: 110px; min-width: 110px; }
+.col-mdz-driverapp .cell-input.small { width: 100%; }
 .col-mdz-trailer { width: 80px; min-width: 80px; }
 .col-mdz-miles { width: 56px; min-width: 56px; }
 .col-mdz-stops { width: 46px; min-width: 46px; }
@@ -1389,13 +1405,13 @@ fieldset.rate-tier-box.is-overridden {
    scoped to #mondelez-table specifically so this doesn't affect the
    shared .pin-text/.pin-pro/.pin-driver sizing used elsewhere. */
 #mondelez-table .pin-text {
-  width: 94px; min-width: 94px;
+  width: 108px; min-width: 108px;
 }
 #mondelez-table td.pin-text {
   display: flex; align-items: center; justify-content: center; gap: 4px;
 }
-#mondelez-table .pin-pro { left: 168px; }
-#mondelez-table .pin-driver { left: 260px; }
+#mondelez-table .pin-pro { left: 182px; }
+#mondelez-table .pin-driver { left: 274px; }
 
 /* Add Time Slots modal */
 .ats-slot-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
