@@ -8,6 +8,7 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
   export const PRE_SHIFT_CALL_FOLLOWUP_MIN = 30; // Stage 2: call nudge once we're inside 30 min of shift start with no ETA
   export const PRE_SHIFT_ESCALATION_MIN = 15; // Stage 3: driver hasn't confirmed at all, inside 15 min of shift start with no ETA
   export const LAST_STOP_RETURN_FOLLOWUP_MIN = 45; // Stage 6 repeat interval: once Return ETA to DC's time has arrived, re-check every 45 min until the trip's marked complete
+  export const AT_DC_FOLLOWUP_MIN = 45; // repeat interval for "still waiting at the DC, not yet dispatched on their next load"
   const PAPERWORK_FOLLOWUP_MIN = 15; // reach out within 15 min if a new route starts before the last one's paperwork is in
   let boardAlerts = []; // current alerts, each with a stable key + firstSeenAt timestamp
   let alertFirstSeenAt = {}; // key -> Date, persists across scans so timestamps don't reset
@@ -26,6 +27,19 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
       timeZone: "America/New_York", hour: "numeric", minute: "numeric", hour12: false,
     }).formatToParts(new Date());
     const hour = Number(parts.find((p) => p.type === "hour").value) % 24; // Intl can return "24" for midnight
+    const minute = Number(parts.find((p) => p.type === "minute").value);
+    return hour * 60 + minute;
+  }
+
+  // Same idea, but for an arbitrary timestamp instead of always "now" --
+  // needed to compare a trip's completed_at against its return_eta_to_dc
+  // on the same Atlanta-local clock, for the "at DC" alert below.
+  function minsSinceMidnightAtTimestamp(isoString) {
+    if (!isoString) return null;
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York", hour: "numeric", minute: "numeric", hour12: false,
+    }).formatToParts(new Date(isoString));
+    const hour = Number(parts.find((p) => p.type === "hour").value) % 24;
     const minute = Number(parts.find((p) => p.type === "minute").value);
     return hour * 60 + minute;
   }
@@ -210,6 +224,38 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
           });
         }
       }
+
+      // Stage 7: driver waiting at the DC between trips -- every trip on
+      // this shift is closed out, but the shift itself isn't complete,
+      // meaning they're sitting idle waiting on their next dispatch.
+      // Repeats every AT_DC_FOLLOWUP_MIN, same tiered-key trick as the
+      // other repeating alerts above.
+      if (!s.shift_complete && hasRealTrip) {
+        const allDone = rowTrips.every((t) => t.minimized || !String(t.route_id || t.trip_id || "").trim());
+        if (allDone) {
+          const lastReal = [...rowTrips].reverse().find((t) => String(t.route_id || t.trip_id || "").trim());
+          if (lastReal) {
+            const etaMin = parseHHMM(lastReal.return_eta_to_dc);
+            const completedMin = minsSinceMidnightAtTimestamp(lastReal.completed_at);
+            let atDcMin = null;
+            if (etaMin != null && completedMin != null) atDcMin = Math.max(etaMin, completedMin);
+            else if (etaMin != null) atDcMin = etaMin;
+            else if (completedMin != null) atDcMin = completedMin;
+            if (atDcMin != null) {
+              const waitingFor = nowMin - atDcMin;
+              if (waitingFor >= AT_DC_FOLLOWUP_MIN) {
+                const tier = Math.floor(waitingFor / AT_DC_FOLLOWUP_MIN);
+                alerts.push({
+                  key: `atdc-${s.id}-${tier}`, type: "at_dc_waiting", location: s.location, shiftDbId: s.id,
+                  message: `${driverName} (${label}) — has been at the DC ${Math.floor(waitingFor / 60)}h ${waitingFor % 60}m, let's see if they've been dispatched`,
+                  recipients: driverPhone ? [{ name: driverName, phone: driverPhone }] : [],
+                  actionMessage: `This is D&L transportation, ${driverName}. Have you been dispatched on your next load yet?`,
+                });
+              }
+            }
+          }
+        }
+      }
     }
 
     // Group pre-shift-text-needed drivers by shift time -- same time means
@@ -262,7 +308,7 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
       body.innerHTML = `<div class="alert-empty">Nothing needs attention right now.</div>`;
       return;
     }
-    const ICONS = { idle: "⏱", overdue_return: "↩", missing_eta: "❓", preshift_text: "📋", preshift_escalate: "🚨", call_followup: "📞", missing_paperwork: "📄", last_stop: "🏁" };
+    const ICONS = { idle: "⏱", overdue_return: "↩", missing_eta: "❓", preshift_text: "📋", preshift_escalate: "🚨", call_followup: "📞", missing_paperwork: "📄", last_stop: "🏁", at_dc_waiting: "🅿️" };
     // newest first
     const sorted = [...boardAlerts].sort((a, b) => alertFirstSeenAt[b.key] - alertFirstSeenAt[a.key]);
     body.innerHTML = sorted.map((a) => {

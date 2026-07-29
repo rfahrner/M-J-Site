@@ -458,6 +458,16 @@ td.pin-pro.shift-complete-tint {
 }
 table.board tbody tr:hover td.pin-pro.shift-complete-tint { background: rgba(34, 197, 94, 0.28) !important; }
 
+/* Fully documented — every trip clean (no red pill) AND the time sheet is
+   in. A stricter, more saturated green than the basic completion tint
+   above, since a shift can be "complete" while a trip is still missing
+   something (paperwork, an image, etc). */
+td.pin-pro.pro-fully-documented {
+  background: rgba(21, 128, 61, 0.32) !important;
+  border-color: #15803d !important;
+}
+table.board tbody tr:hover td.pin-pro.pro-fully-documented { background: rgba(21, 128, 61, 0.42) !important; }
+
 .trip-chip.shift-complete-tint { background: rgba(34, 197, 94, 0.18) !important; }
 @keyframes tripCompletedFlash {
   0% { background: rgba(34, 197, 94, 0.55); }
@@ -1219,7 +1229,6 @@ table.board td.col-tripId, table.board th.col-tripId {
 
 /* Narrower columns, per request — roughly half their previous auto width */
 table.board td.col-trailerOut, table.board th.col-trailerOut,
-table.board td.col-nextCallTimeCalc, table.board th.col-nextCallTimeCalc,
 table.board td.col-dispatchTime, table.board th.col-dispatchTime,
 table.board td.col-lastStopDepart, table.board th.col-lastStopDepart,
 table.board td.col-returnToDC, table.board th.col-returnToDC,
@@ -1227,6 +1236,12 @@ table.board td.col-salvageBhaulRefusedBy, table.board th.col-salvageBhaulRefused
 table.board td.col-backhaulTrailerNumber, table.board th.col-backhaulTrailerNumber,
 table.board td.col-returnEtaToDc, table.board th.col-returnEtaToDc {
   width: 55px;
+}
+
+/* Wider than the other short time-ish columns — this one sometimes shows
+   "At DC since: HH:MM" instead of just a bare clock time. */
+table.board td.col-nextCallTimeCalc, table.board th.col-nextCallTimeCalc {
+  width: 128px;
 }
 
 /* Overview tab: existing fields on the left, Rate panel as a narrow
@@ -1260,6 +1275,25 @@ fieldset.field-box legend {
   color: var(--navy-950);
 }
 fieldset.field-box .static-text { font-size: 13.5px; }
+
+/* Missing-field highlighting inside Load Details tabs */
+fieldset.field-box.field-box-missing {
+  border-color: #b91c1c;
+  background: rgba(239, 68, 68, 0.06);
+}
+fieldset.field-box.field-box-missing legend { color: #b91c1c; }
+
+/* Status banner at the top of a Load Details tab */
+.ld-status-banner {
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 13px;
+  margin-bottom: 12px;
+  text-align: center;
+}
+.ld-status-banner-green { background: rgba(34, 197, 94, 0.18); color: #15803d; }
+.ld-status-banner-red { background: rgba(239, 68, 68, 0.14); color: #b91c1c; }
 fieldset.field-box input.cell-input {
   border: 1px solid var(--line);
   padding: 6px 8px;

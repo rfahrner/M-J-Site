@@ -364,6 +364,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       backhaul: !!trip.backhaul,
       minimized: !!trip.minimized,
       complete: !!trip.complete,
+      completed_at: trip.completedAt || null,
       driver_id: trip.driverId ? Number(trip.driverId) : null,
       notes: trip.notes || null,
       current_route_status: trip.currentRouteStatus || null,
@@ -428,6 +429,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       hasStopTimes: false, // computed client-side after loading, see ensureSheetLoaded — not a real DB column
       routeImagePath: dbRow.route_image_path || "",
       routeImageUrl: "", // filled in by batchSignImageUrls after loading — see ensureSheetLoaded
+      completedAt: dbRow.completed_at || null,
     };
   }
 
@@ -584,7 +586,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       returnEtaToDc: "", returnDropLocation: "", ppwkReceived: false, checkedIn: false, timesheetStartTime: "", timesheetEndTime: "", dropLocationText: "", returnToDcText: "",
       routeEstHours: "", timeToFinalStop: "", etaToFinalStop: "", estRouteComplete: "",
       hasStopTimes: false, // client-side only, not persisted -- computed from trip_stops presence, see ensureSheetLoaded / the Stop Times save flow
-      routeImagePath: "", routeImageUrl: "",
+      routeImagePath: "", routeImageUrl: "", completedAt: null,
     };
   }
   function blankRow(driverId, driverNameText) {
@@ -984,12 +986,13 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
   async function restoreTrip(rowId, tripId) {
     const found = findRowAnywhere(rowId);
     if (!found) return;
-    const row = found.row;
-    const trip = row.trips.find((t) => t.id === tripId);
+    const trip = found.row.trips.find((t) => t.id === tripId);
     if (!trip) return;
-    trip.minimized = false;
-    await saveTripNow(row, trip, row.trips.indexOf(trip) + 1);
-    renderBoardTable();
+    // Opens straight into Load Details on this trip's tab rather than
+    // un-minimizing it back onto the active row — matches what the pill's
+    // own tooltip already promises ("click to fix" / "click to view").
+    await openLoadDetailsModal(rowId, tripId);
+    if (tripMissingFields(trip).length) startLoadDetailsEdit(tripId);
   }
 
   function addNewTrip(rowId) {
@@ -999,12 +1002,13 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     renderBoardTable();
   }
 
-  function completeTrip(rowId, tripId) {
+  async function completeTrip(rowId, tripId) {
     const found = findRowAnywhere(rowId);
     if (!found) return;
     const trip = found.row.trips.find((t) => t.id === tripId);
     if (!trip || !String(trip.routeId || "").trim()) return;
-    openStopTimesModal(rowId, tripId);
+    await openLoadDetailsModal(rowId, tripId);
+    startLoadDetailsEdit(tripId);
   }
 
   let stopTimesModalState = null; // { rowId, tripId, stopCount }
@@ -1222,8 +1226,43 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
   // of the row/trip objects already loaded on the board -- pulling that in
   // live per-row isn't practical, so this column only reflects the other
   // four rule types.
+  // Same idea as alerts.js's minsSinceMidnightNow, but for an arbitrary
+  // timestamp instead of always "now" -- needed to compare a trip's
+  // completedAt against its returnEtaToDc on the same Atlanta-local clock.
+  function minsSinceMidnightAtlanta(isoString) {
+    if (!isoString) return null;
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York", hour: "numeric", minute: "numeric", hour12: false,
+    }).formatToParts(new Date(isoString));
+    const hour = Number(parts.find((p) => p.type === "hour").value) % 24;
+    const minute = Number(parts.find((p) => p.type === "minute").value);
+    return hour * 60 + minute;
+  }
+
+  // A driver is "at the DC" once every trip on the shift is closed out and
+  // the shift itself isn't complete yet -- the pause between routes. The
+  // reference time is whichever is later: the ETA they actually provided,
+  // or the moment the last trip got marked complete (covers the case
+  // where nobody gave an ETA at all, or showed up earlier than promised).
+  function atDcSinceMinForRow(row) {
+    const hasRealTrip = row.trips.some((t) => (t.routeId || "").trim() || (t.tripId || "").trim());
+    if (row.shiftComplete || !hasRealTrip) return null;
+    const allDone = row.trips.every((t) => t.minimized || !String(t.routeId || t.tripId || "").trim());
+    if (!allDone) return null;
+    const lastReal = [...row.trips].reverse().find((t) => String(t.routeId || t.tripId || "").trim());
+    if (!lastReal) return null;
+    const etaMin = parseHHMM(lastReal.returnEtaToDc);
+    const completedMin = minsSinceMidnightAtlanta(lastReal.completedAt);
+    if (etaMin == null && completedMin == null) return null;
+    if (etaMin == null) return completedMin;
+    if (completedMin == null) return etaMin;
+    return Math.max(etaMin, completedMin);
+  }
+
   function computeNextCallTimeForRow(row) {
     if (row.shiftComplete) return "";
+    const atDcMin = atDcSinceMinForRow(row);
+    if (atDcMin != null) return minsToClock(atDcMin);
     const candidates = [];
     const shiftStartMin = parseHHMM(row.shiftStart);
     const hasRealTrip = row.trips.some((t) => (t.routeId || "").trim() || (t.tripId || "").trim());
@@ -1260,6 +1299,16 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
 
     if (!candidates.length) return "";
     return minsToClock(Math.min(...candidates));
+  }
+
+  // Display version of the above — same value, sortable Next Call Time
+  // stays a plain clock string for parseHHMM, but what actually shows in
+  // the cell gets the "At DC since:" label when that's the situation.
+  function nextCallTimeDisplayForRow(row) {
+    if (row.shiftComplete) return "Complete";
+    const atDcMin = atDcSinceMinForRow(row);
+    if (atDcMin != null) return `At DC since: ${minsToClock(atDcMin)}`;
+    return computeNextCallTimeForRow(row);
   }
 
   // Give Last Stop Depart / Return to DC a starting value once Dispatch
@@ -1372,6 +1421,19 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     return [fresh];
   }
 
+  // What a trip needs before it's genuinely "done" — shared by the board
+  // pill (routesChipsHtml) and the Load Details trip tab's banner/field
+  // highlighting, so the two can never disagree about what's missing.
+  function tripMissingFields(trip) {
+    const missing = [];
+    if (!trip.ppwkReceived) missing.push({ key: "ppwk", label: "paperwork confirmation" });
+    if (!trip.hasStopTimes) missing.push({ key: "stops", label: "stop times" });
+    if (!trip.routeImagePath) missing.push({ key: "image", label: "an image" });
+    if (!String(trip.returnDropLocation || "").trim()) missing.push({ key: "dropLocation", label: "a drop location" });
+    if (!trip.checkedIn) missing.push({ key: "checkedIn", label: "load checked in" });
+    return missing;
+  }
+
   function routesChipsHtml(row) {
     // A minimized trip only counts as a "route" worth showing here if it
     // actually has a Route ID or Trip ID — an empty trip that got
@@ -1382,12 +1444,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     const done = row.trips.filter((t) => t.minimized && (String(t.routeId || "").trim() || String(t.tripId || "").trim()));
     return done.length
       ? done.map((t) => {
-          const missing = [];
-          if (!t.ppwkReceived) missing.push("paperwork confirmation");
-          if (!t.hasStopTimes) missing.push("stop times");
-          if (!t.routeImagePath) missing.push("an image");
-          if (!String(t.returnDropLocation || "").trim()) missing.push("a drop location");
-          if (!t.checkedIn) missing.push("load checked in");
+          const missing = tripMissingFields(t).map((m) => m.label);
           const undocumented = t.complete && missing.length > 0;
           const statusCls = [t.complete ? "trip-segment-done" : "", undocumented ? "trip-chip-undocumented" : ""].filter(Boolean).join(" ");
           const title = undocumented
@@ -1442,6 +1499,8 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     const displayName = drv ? drv.name : row.driverNameText;
     const proLinkBtn = row.proNumber ? `<button type="button" class="cell-link-btn" data-open-pro="${row.id}" title="Open load details">↗</button>` : "";
     const rs = rowspan > 1 ? ` rowspan="${rowspan}"` : "";
+    const allTripsDocumented = row.trips.every((t) => !t.complete || tripMissingFields(t).length === 0);
+    const fullyDocumented = row.shiftComplete && allTripsDocumented;
     return `
       <td class="pin pin-select"${rs}>
         <input type="checkbox" class="chk" data-action="toggle-row-select" data-row="${row.id}" ${row.selected ? "checked" : ""} title="Select">
@@ -1451,7 +1510,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       </td>
       <td class="col-email"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.email, row.emailSnapshot))}</span></td>
       <td class="col-dispatcherPhone"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.dispatcherPhone, row.dispatcherPhoneSnapshot))}</span></td>
-      <td class="pin pin-pro${row.shiftComplete ? " shift-complete-tint" : ""}"${rs}>
+      <td class="pin pin-pro${row.shiftComplete ? " shift-complete-tint" : ""}${fullyDocumented ? " pro-fully-documented" : ""}"${rs} title="${fullyDocumented ? "All trips documented and time sheet complete" : ""}">
         <div class="cell-with-link">
           <input class="cell-input" placeholder="PRO#" data-row="${row.id}" data-field="proNumber" value="${escapeHtml(row.proNumber)}">${proLinkBtn}
         </div>
@@ -1473,7 +1532,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       <td class="col-shiftStart"${rs}><input class="cell-input small" style="width:46px;" placeholder="--:--" data-row="${row.id}" data-field="shiftStart" value="${escapeHtml(row.shiftStart)}"></td>
       <td class="col-etaShiftReport"${rs}><input class="cell-input small" style="width:46px;" placeholder="--:--" data-row="${row.id}" data-field="etaShiftReport" value="${escapeHtml(row.etaShiftReport)}"></td>
       <td class="col-shiftHosLeft"${rs}><input class="cell-input calc" data-row="${row.id}" data-field="shiftHosLeft" value="${escapeHtml(computeShiftLevelHosLeft(row))}" readonly tabindex="-1"></td>
-      <td class="col-nextCallTimeCalc"${rs}><input class="cell-input calc" data-row="${row.id}" data-field="nextCallTimeCalc" value="${escapeHtml(computeNextCallTimeForRow(row))}" readonly tabindex="-1"></td>
+      <td class="col-nextCallTimeCalc"${rs}><input class="cell-input calc" data-row="${row.id}" data-field="nextCallTimeCalc" value="${escapeHtml(nextCallTimeDisplayForRow(row))}" readonly tabindex="-1"></td>
       <td class="col-revLevel"${rs}><input class="cell-input small" style="width:42px;" placeholder="Rev" data-row="${row.id}" data-field="revLevel" value="${escapeHtml(row.revLevel)}"></td>
       ${row.location === "buildingc" ? `
       <td class="col-birm"${rs}>
@@ -1716,7 +1775,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       });
     });
     const nextCallEl = document.querySelector(`input[data-row="${rowId}"][data-field="nextCallTimeCalc"]`);
-    if (nextCallEl) nextCallEl.value = computeNextCallTimeForRow(row);
+    if (nextCallEl) nextCallEl.value = nextCallTimeDisplayForRow(row);
     const hosEl = document.querySelector(`input[data-row="${rowId}"][data-field="shiftHosLeft"]`);
     if (hosEl) hosEl.value = computeShiftLevelHosLeft(row);
   }
@@ -3011,15 +3070,20 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
 
     if (tab === "overview") {
       const editing = loadDetailsState.editMode === "overview";
+      const timesheetMissing = !row.timesheetReceived || !String(row.timesheetStartTime || "").trim() || !String(row.timesheetEndTime || "").trim();
+      const banner = row.shiftComplete
+        ? `<div class="ld-status-banner ld-status-banner-green">Load Complete</div>`
+        : `<div class="ld-status-banner ld-status-banner-red">Load Open</div>`;
       let mainHtml;
       if (!editing) {
         mainHtml = `
+          ${banner}
           <div class="ld-edit-bar"><button type="button" class="btn btn-ghost" data-ld-edit="overview">Edit</button></div>
           <div class="field-box-grid">
             <fieldset class="field-box"><legend>Driver</legend><div class="static-text">${escapeHtml(drv ? drv.name : (row.driverNameText || "—"))}${drv ? ` <button type="button" class="cell-link-btn" data-action="edit-driver" data-driver-id="${drv.id}" title="Open driver profile">↗</button>` : ""}</div></fieldset>
             <fieldset class="field-box"><legend>Status</legend><div class="static-text">${row.shiftComplete ? "Complete" : "Active"}</div></fieldset>
             <fieldset class="field-box"><legend>Trips</legend><div class="static-text">${row.trips.length}</div></fieldset>
-            <fieldset class="field-box" style="grid-column: span 2;">
+            <fieldset class="field-box${timesheetMissing ? " field-box-missing" : ""}" style="grid-column: span 2;">
               <legend>Time Sheet</legend>
               <div class="ov-timesheet-row">
                 <div><label>Received</label><div class="static-text">${row.timesheetReceived ? "Yes" : "—"}</div></div>
@@ -3027,16 +3091,16 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
                 <div><label>Finish</label><div class="static-text">${escapeHtml(row.timesheetEndTime || "—")}</div></div>
               </div>
             </fieldset>
-            <fieldset class="field-box"><legend>Trailer Drop Location</legend><div class="static-text">${escapeHtml(row.trailerDropLocation || "—")}</div></fieldset>
           </div>
           <div class="calc-note" style="margin-top:10px;">Time sheet info travels with this load — visible here and on the Accounting page once it's sent over.</div>
         `;
       } else {
         const d = loadDetailsState.editDraft;
         mainHtml = `
+          ${banner}
           <div class="field-box-grid">
             <fieldset class="field-box"><legend>Driver</legend><input class="cell-input" id="ld-ov-driver" data-driver-ac="true" value="${escapeHtml(d.driverName)}"></fieldset>
-            <fieldset class="field-box" style="grid-column: span 2;">
+            <fieldset class="field-box${timesheetMissing ? " field-box-missing" : ""}" style="grid-column: span 2;">
               <legend>Time Sheet</legend>
               <div class="ov-timesheet-row">
                 <div style="display:flex; align-items:center; gap:6px;">
@@ -3047,7 +3111,6 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
                 <div><label>Finish</label><input class="cell-input" id="ld-ov-timesheet-end" placeholder="--:--" value="${escapeHtml(d.timesheetEndTime)}"></div>
               </div>
             </fieldset>
-            <fieldset class="field-box"><legend>Trailer Drop Location</legend><input class="cell-input" id="ld-ov-trailer-drop-location" value="${escapeHtml(d.trailerDropLocation)}"></fieldset>
           </div>
           <div class="ld-edit-bar">
             <button type="button" class="btn btn-ghost" data-ld-cancel="overview">Cancel</button>
@@ -3085,6 +3148,13 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       if (!trip) { body.innerHTML = `<div class="subtext">Trip not found.</div>`; return; }
       const editing = loadDetailsState.editMode === tripLocalId;
       const stops = loadDetailsState.stopsByTrip[tripLocalId] || [];
+      const missing = tripMissingFields(trip);
+      const missingKeys = new Set(missing.map((m) => m.key));
+      const missCls = (key) => missingKeys.has(key) ? " field-box-missing" : "";
+      const banner = trip.checkedIn
+        ? `<div class="ld-status-banner ld-status-banner-green">Checked Out</div>`
+        : `<div class="ld-status-banner ld-status-banner-red">Not Checked Out${missing.length ? ` — missing: ${missing.map((m) => m.label).join(", ")}` : ""}</div>`;
+      const returnTime = trip.returnEtaToDc || trip.returnToDC || "";
 
       if (!editing) {
         const tripDrv = trip.driverId ? findDriver(trip.driverId) : null;
@@ -3092,6 +3162,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
           ? stops.map((s) => `<div class="ld-stop-row"><span>Stop ${s.stopNumber}</span><span>In: ${escapeHtml(s.timeIn || "—")}</span><span>Out: ${escapeHtml(s.timeOut || "—")}</span></div>`).join("")
           : `<div class="subtext">No stop times recorded yet.</div>`;
         body.innerHTML = `
+          ${banner}
           <div class="ld-edit-bar"><button type="button" class="btn btn-ghost" data-ld-edit="${tripLocalId}">Edit</button></div>
           <div class="field-box-grid">
             <fieldset class="field-box"><legend>Route ID</legend><div class="static-text">${escapeHtml(trip.routeId || "—")}</div></fieldset>
@@ -3102,13 +3173,23 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
             <fieldset class="field-box"><legend>Status</legend><div class="static-text">${trip.minimized ? "Completed" : "Active"}</div></fieldset>
             <fieldset class="field-box" style="grid-column: span 2;"><legend>Driver on this trip</legend><div class="static-text">${escapeHtml(tripDrv ? tripDrv.name : (drv ? drv.name : (row.driverNameText || "—")))}</div></fieldset>
             <fieldset class="field-box" style="grid-column: span 2;"><legend>Notes on this route</legend><div class="static-text" style="white-space:pre-wrap;">${escapeHtml(trip.notes || "—")}</div></fieldset>
-            <fieldset class="field-box" style="grid-column: span 2;"><legend>Stop In/Out Times</legend>${stopsHtml}</fieldset>
+            <fieldset class="field-box${missCls("stops")}" style="grid-column: span 2;">
+              <legend>Stop In/Out Times</legend>
+              <div class="ld-stop-row" style="font-weight:700;"><span>Dispatch Time</span><span>${escapeHtml(trip.dispatchTime || "—")}</span><span></span></div>
+              ${stopsHtml}
+              <div class="ld-stop-row" style="font-weight:700; border-top:1px solid var(--line); margin-top:4px; padding-top:4px;"><span>Return to DC</span><span>${escapeHtml(returnTime || "—")}</span><span></span></div>
+            </fieldset>
+            <fieldset class="field-box${missCls("ppwk")}"><legend>Paperwork Received</legend><div class="static-text">${trip.ppwkReceived ? "Yes" : "—"}</div></fieldset>
+            <fieldset class="field-box${missCls("checkedIn")}"><legend>Load Checked In</legend><div class="static-text">${trip.checkedIn ? "Yes" : "—"}</div></fieldset>
+            <fieldset class="field-box${missCls("dropLocation")}"><legend>Trailer Drop Location</legend><div class="static-text">${escapeHtml(trip.returnDropLocation || "—")}</div></fieldset>
+            <fieldset class="field-box${missCls("image")}" style="grid-column: span 2;"><legend>Image</legend>${rowImageDropzoneHtml(trip, trip.id)}</fieldset>
           </div>
         `;
       } else {
         const d = loadDetailsState.editDraft;
         const stopCount = Math.max(0, parseInt(d.stopCount, 10) || 0);
         body.innerHTML = `
+          ${banner}
           <div class="field-box-grid">
             <fieldset class="field-box"><legend>Route ID</legend><input class="cell-input" id="ld-tr-routeId" value="${escapeHtml(d.routeId)}"></fieldset>
             <fieldset class="field-box"><legend>Trip ID</legend><input class="cell-input" id="ld-tr-tripId" value="${escapeHtml(d.tripId)}"></fieldset>
@@ -3117,11 +3198,27 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
             <fieldset class="field-box"><legend>Stops</legend><input class="cell-input" id="ld-tr-stopCount" value="${escapeHtml(d.stopCount)}"></fieldset>
             <fieldset class="field-box"><legend>Reassign Driver</legend><input class="cell-input" id="ld-tr-driver" data-driver-ac="true" value="${escapeHtml(d.driverName)}"><div class="subtext" style="margin-top:4px;">Leave blank to keep the load's driver</div></fieldset>
             <fieldset class="field-box" style="grid-column: span 2;"><legend>Notes on this route</legend><textarea class="cell-input" id="ld-tr-notes" rows="3" style="width:100%;">${escapeHtml(d.notes)}</textarea></fieldset>
-            <fieldset class="field-box" style="grid-column: span 2;"><legend>Stop In/Out Times</legend><div id="ld-stop-fields">${stopFieldsHtml(stopCount, d.stops)}</div></fieldset>
+            <fieldset class="field-box${missCls("stops")}" style="grid-column: span 2;">
+              <legend>Stop In/Out Times</legend>
+              <div class="ld-stop-row" style="font-weight:700;"><span>Dispatch Time</span><input class="cell-input" id="ld-tr-dispatch-time" placeholder="--:--" value="${escapeHtml(d.dispatchTime)}" style="max-width:90px;"><span></span></div>
+              <div id="ld-stop-fields">${stopFieldsHtml(stopCount, d.stops)}</div>
+              <div class="ld-stop-row" style="font-weight:700; border-top:1px solid var(--line); margin-top:4px; padding-top:4px;"><span>Return to DC</span><input class="cell-input" id="ld-tr-return-eta" placeholder="${escapeHtml(trip.returnToDC || '--:--')}" value="${escapeHtml(d.returnEtaToDc)}" style="max-width:90px;"><span></span></div>
+            </fieldset>
+            <fieldset class="field-box${missCls("ppwk")}">
+              <legend>Paperwork Received</legend>
+              <label style="display:flex; align-items:center; gap:8px; margin:0;"><input type="checkbox" id="ld-tr-ppwk-received" ${d.ppwkReceived ? "checked" : ""}><span>Received</span></label>
+            </fieldset>
+            <fieldset class="field-box${missCls("checkedIn")}">
+              <legend>Load Checked In</legend>
+              <label style="display:flex; align-items:center; gap:8px; margin:0;"><input type="checkbox" id="ld-tr-checked-in" ${d.checkedIn ? "checked" : ""}><span>Checked In</span></label>
+            </fieldset>
+            <fieldset class="field-box${missCls("dropLocation")}"><legend>Trailer Drop Location</legend><input class="cell-input" id="ld-tr-drop-location" placeholder="Where was the trailer dropped?" value="${escapeHtml(d.returnDropLocation)}"></fieldset>
+            <fieldset class="field-box${missCls("image")}" style="grid-column: span 2;"><legend>Image</legend>${rowImageDropzoneHtml(trip, trip.id)}</fieldset>
           </div>
           <div class="ld-edit-bar">
             <button type="button" class="btn btn-ghost" data-ld-cancel="${tripLocalId}">Cancel</button>
-            <button type="button" class="btn" data-ld-save="${tripLocalId}">Save</button>
+            <button type="button" class="btn btn-ghost" data-ld-save="${tripLocalId}">Save</button>
+            <button type="button" class="btn" data-ld-save-complete="${tripLocalId}">${trip.complete ? "Save (already complete)" : "Save & Complete Trip"}</button>
           </div>
         `;
       }
@@ -3176,6 +3273,9 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
         routeMiles: trip.routeMiles || "", stopCount: trip.stopCount || "",
         driverName: tripDrv ? tripDrv.name : "", notes: trip.notes || "",
         stops: (loadDetailsState.stopsByTrip[tabKey] || []).map((s) => ({ ...s })),
+        ppwkReceived: !!trip.ppwkReceived, checkedIn: !!trip.checkedIn,
+        returnDropLocation: trip.returnDropLocation || "",
+        dispatchTime: trip.dispatchTime || "", returnEtaToDc: trip.returnEtaToDc || "",
       };
     }
     renderLoadDetailsTabContent();
@@ -3264,7 +3364,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     renderBoardTable();
   }
 
-  export async function saveLoadDetailsEdit(tabKey) {
+  export async function saveLoadDetailsEdit(tabKey, markComplete) {
     if (!loadDetailsState) return;
     const found = findRowAnywhere(loadDetailsState.rowId);
     if (!found) return;
@@ -3280,8 +3380,25 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       row.timesheetReceived = $("#ld-ov-timesheet-received").checked;
       row.timesheetStartTime = $("#ld-ov-timesheet-start").value.trim();
       row.timesheetEndTime = $("#ld-ov-timesheet-end").value.trim();
-      row.trailerDropLocation = $("#ld-ov-trailer-drop-location").value.trim();
-      await saveShiftNow(row);
+      const timesheetNowComplete = row.timesheetReceived && !!row.timesheetStartTime && !!row.timesheetEndTime;
+      if (timesheetNowComplete && !row.shiftComplete) {
+        // Same safety check the dedicated Complete Shift button already
+        // uses — don't silently send a load to Accounting with trips still
+        // open just because the time sheet happened to get filled in here.
+        const open = openTripsForRow(row);
+        if (open.length) {
+          const names = open.map((t, i) => t.routeId || t.tripId || `Route ${i + 1}`).join(", ");
+          if (confirm(`Time sheet is filled in, but this load still has ${open.length} trip(s) not closed out yet (${names}) — likely still waiting on paperwork. Mark the load complete and send to Accounting anyway?`)) {
+            await finalizeShiftCompletion(row);
+          } else {
+            await saveShiftNow(row);
+          }
+        } else {
+          await finalizeShiftCompletion(row);
+        }
+      } else {
+        await saveShiftNow(row);
+      }
     } else if (tabKey === "notes") {
       row.notes = $("#ld-notes-text").value.trim();
       await saveShiftNow(row);
@@ -3300,8 +3417,33 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
         const match = driversForLocation(row.location || state.activeLocation || "atlanta").find((x) => x.name.toLowerCase() === driverNameVal.toLowerCase());
         if (match) trip.driverId = match.id;
       }
+      const ppwkEl = $("#ld-tr-ppwk-received");
+      if (ppwkEl) trip.ppwkReceived = ppwkEl.checked;
+      const checkedInEl = $("#ld-tr-checked-in");
+      if (checkedInEl) trip.checkedIn = checkedInEl.checked;
+      const dropLocEl = $("#ld-tr-drop-location");
+      if (dropLocEl) trip.returnDropLocation = dropLocEl.value.trim();
+      const dispatchTimeEl = $("#ld-tr-dispatch-time");
+      if (dispatchTimeEl) trip.dispatchTime = dispatchTimeEl.value.trim();
+      const returnEtaEl = $("#ld-tr-return-eta");
+      if (returnEtaEl) trip.returnEtaToDc = returnEtaEl.value.trim();
+      if (markComplete) {
+        trip.complete = true;
+        trip.minimized = true;
+        trip.completedAt = new Date().toISOString();
+      }
       await saveTripNow(row, trip, row.trips.indexOf(trip) + 1);
       recomputeRowRate(row);
+
+      // This might have just been the last open trip — if the time sheet
+      // was already filled in (e.g. saved before this trip got closed
+      // out), the shift-completion check that runs when saving Overview
+      // never got a chance to pass. Catch that here too, so completion
+      // doesn't depend on which of the two happened last.
+      if (markComplete && !row.shiftComplete && openTripsForRow(row).length === 0
+          && row.timesheetReceived && String(row.timesheetStartTime || "").trim() && String(row.timesheetEndTime || "").trim()) {
+        await finalizeShiftCompletion(row);
+      }
 
       const stopCount = Math.max(0, parseInt(trip.stopCount, 10) || 0);
       const newStops = [];
@@ -4437,6 +4579,8 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
         if (cancelBtn) cancelLoadDetailsEdit();
         const saveBtn = e.target.closest("[data-ld-save]");
         if (saveBtn) saveLoadDetailsEdit(saveBtn.dataset.ldSave);
+        const saveCompleteBtn = e.target.closest("[data-ld-save-complete]");
+        if (saveCompleteBtn) saveLoadDetailsEdit(saveCompleteBtn.dataset.ldSaveComplete, true);
         if (e.target.id === "ld-rate-reset") resetRateToCalculated();
         const profileBtn = e.target.closest('[data-action="edit-driver"]');
         if (profileBtn) openEditDriverModal(profileBtn.dataset.driverId);
@@ -4462,6 +4606,13 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       $("#ld-tab-content").addEventListener("focusout", (e) => {
         if (e.target.id === "ld-ov-driver" || e.target.id === "ld-tr-driver") closeDriverAutocomplete();
       });
+      wireRowImageDropzone(
+        $("#ld-tab-content"),
+        (id) => { const f = findTripAnywhere(id); return f ? f.trip : null; },
+        (trip) => { const f = findTripAnywhere(trip.id); return f ? saveTripNow(f.row, f.trip, f.tripNumber) : Promise.resolve(); },
+        () => { renderBoardTable(); renderLoadDetailsTabContent(); },
+        (trip) => trip.routeId || trip.tripId || ""
+      );
     }
 
 
