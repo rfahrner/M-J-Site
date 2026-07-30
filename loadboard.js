@@ -32,7 +32,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     "driverlist.html": { type: "driverlist",  label: "Driver List" },
     "historics.html":  { type: "historics",   label: "Historics" },
   };
-  export const NAV_ORDER = ["index.html", "dalaware.html", "buildingc.html", "houston.html", "mondelez.html", "accounting.html", "driverlist.html", "historics.html"];
+  export const NAV_ORDER = ["index.html", "dalaware.html", "buildingc.html", "houston.html", "mondelez.html", "accounting.html", "driverlist.html"];
   const LOCATIONS = NAV_ORDER
     .filter((f) => PAGE_MAP[f].type === "board" || PAGE_MAP[f].type === "houston-board")
     .map((f) => ({ file: f, ...PAGE_MAP[f] }));
@@ -45,7 +45,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
   /* ---------------- constants ---------------- */
 
   const HIGHLIGHT_MS = 30 * 60 * 1000; // 30 minutes, per spec
-  const HISTORY_DAYS = 21;              // 3 weeks live on the board; older goes to Historics
+  const HISTORY_DAYS = 730;             // ~2 years back — covers all imported historic data with room to spare, no separate Historics page needed
   const FUTURE_DAYS = 14;               // how far ahead loads can be pre-scheduled
   export const AVG_MPH = 45;                   // placeholder speed for calc columns
 
@@ -159,6 +159,51 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
 
   export const ACCOUNTING_TABLE = "loads_accounting";
   export const ACCOUNTING_ROUTES_TABLE = "loads_accounting_routes";
+
+  // Shared editable "notes" system — a small free-form textarea, same idea
+  // on every page: rate cards, reminders, anything worth having on hand
+  // right next to the page title. One row per key in location_notes —
+  // accounting uses its location tabs ("atlanta" etc) as the key, board
+  // pages use their own page-based key.
+  let sharedNotesCache = {}; // key -> notes text
+
+  export async function loadLocationNotes() {
+    if (!supabaseClient) return;
+    const { data, error } = await supabaseClient.from("location_notes").select("*");
+    if (error) { console.error("Failed to load location notes:", error); return; }
+    sharedNotesCache = {};
+    (data || []).forEach((r) => { sharedNotesCache[r.location] = r.notes || ""; });
+  }
+
+  export function openLocationNotesModal(key, label) {
+    const modal = $("#modal-location-notes");
+    if (!modal) return;
+    if ($("#ln-title")) $("#ln-title").textContent = `${label || key} — Notes`;
+    if ($("#ln-textarea")) $("#ln-textarea").value = sharedNotesCache[key] || "";
+    modal.dataset.location = key;
+    modal.classList.remove("hidden");
+  }
+
+  export function closeLocationNotesModal() {
+    const modal = $("#modal-location-notes");
+    if (modal) modal.classList.add("hidden");
+  }
+
+  export async function saveLocationNotes() {
+    const modal = $("#modal-location-notes");
+    if (!modal) return;
+    const key = modal.dataset.location;
+    const notes = $("#ln-textarea") ? $("#ln-textarea").value : "";
+    sharedNotesCache[key] = notes;
+    closeLocationNotesModal();
+    try {
+      const { error } = await supabaseClient.from("location_notes").upsert({ location: key, notes, updated_at: new Date().toISOString() }, { onConflict: "location" });
+      if (error) throw error;
+    } catch (e) {
+      console.error("saveLocationNotes failed:", e);
+      setDriverSyncStatus(`Couldn't save the notes (${e.message || e}).`, "error");
+    }
+  }
 
   // Starts as null so module evaluation itself never blocks or waits on
   // anything — initSupabaseClient() (called from init(), after
@@ -4471,6 +4516,14 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     loadDatesWithData(info.key).catch((e) => console.error("loadDatesWithData() failed:", e));
     initAvailableSection();
 
+    if ($("#modal-location-notes")) {
+      on("btn-page-info", "click", () => openLocationNotesModal(info.key, info.label));
+      on("ln-close", "click", closeLocationNotesModal);
+      on("ln-cancel", "click", closeLocationNotesModal);
+      on("ln-save", "click", saveLocationNotes);
+      $("#modal-location-notes").addEventListener("click", (e) => { if (e.target.id === "modal-location-notes") closeLocationNotesModal(); });
+    }
+
     $("#date-prev").addEventListener("click", () => setActiveDate(dateKey(addDays(keyToDate(state.activeDate), -1))));
     $("#date-next").addEventListener("click", () => setActiveDate(dateKey(addDays(keyToDate(state.activeDate), 1))));
     $("#date-input").addEventListener("change", (e) => setActiveDate(e.target.value));
@@ -4913,6 +4966,13 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     state.driverListTab = "atlanta";
     renderDriverList();
     setupDriverListRealtimeSync();
+    if ($("#modal-location-notes")) {
+      on("btn-page-info", "click", () => openLocationNotesModal("driverlist", "Driver List"));
+      on("ln-close", "click", closeLocationNotesModal);
+      on("ln-cancel", "click", closeLocationNotesModal);
+      on("ln-save", "click", saveLocationNotes);
+      $("#modal-location-notes").addEventListener("click", (e) => { if (e.target.id === "modal-location-notes") closeLocationNotesModal(); });
+    }
     if ($("#driverlist-location-tabs")) {
       $("#driverlist-location-tabs").addEventListener("click", (e) => {
         const btn = e.target.closest(".location-tab");
@@ -4966,6 +5026,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     }
 
     try { renderNav(); } catch (e) { console.error("renderNav() failed:", e); }
+    try { await loadLocationNotes(); } catch (e) { console.error("loadLocationNotes() failed:", e); }
     try { startAlertScanning(); } catch (e) { console.error("startAlertScanning() failed:", e); }
     try { wireModals(); } catch (e) { console.error("wireModals() failed:", e); }
     try { await loadBoardRateData(); } catch (e) { console.error("loadBoardRateData() failed:", e); }

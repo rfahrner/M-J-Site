@@ -21,11 +21,12 @@
    ================================================================ */
 import {
   state, supabaseClient, uid, findDriver, driversForLocation, setDriverSyncStatus,
-  SAVE_DEBOUNCE_MS, escapeHtml, $, $all, keyToDate, addDays, dateKey,
+  SAVE_DEBOUNCE_MS, escapeHtml, $, $all, keyToDate, addDays, dateKey, on,
   refreshDriverDatalist, closeDateDropdown, renderCalendarGrid, resetCalendarViewMonth,
   closeContextMenu, handleRealtimeDriverChange, pick, textDriverPhone, openAddDriverModal,
   openDriverAutocomplete, updateDriverAutocomplete, closeDriverAutocomplete, captureFocusForRerender,
   handleRowAwareTab, openEditDriverModal, batchSignImageUrls,
+  openLocationNotesModal, closeLocationNotesModal, saveLocationNotes,
 } from './loadboard.js';
 
 export const MONDELEZ_TABLE = "mondelez_loads";
@@ -786,6 +787,14 @@ export async function initMondelezPage() {
     const btn = e.target.closest("[data-mdz-tab]");
     if (btn) switchMondelezTab(btn.dataset.mdzTab);
   });
+
+  if ($("#modal-location-notes")) {
+    on("btn-page-info", "click", () => openLocationNotesModal("mondelez", "Mondelez"));
+    on("ln-close", "click", closeLocationNotesModal);
+    on("ln-cancel", "click", closeLocationNotesModal);
+    on("ln-save", "click", saveLocationNotes);
+    $("#modal-location-notes").addEventListener("click", (e) => { if (e.target.id === "modal-location-notes") closeLocationNotesModal(); });
+  }
 
   $("#date-prev").addEventListener("click", () => setMondelezActiveDate(dateKey(addDays(keyToDate(state.activeDate), -1))));
   $("#date-next").addEventListener("click", () => setMondelezActiveDate(dateKey(addDays(keyToDate(state.activeDate), 1))));

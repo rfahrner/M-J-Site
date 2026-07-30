@@ -6,10 +6,20 @@ import {
   uploadTripSheetImages, removeTripSheetImage, startLoadDetailsEdit, cancelLoadDetailsEdit,
   saveLoadDetailsEdit, stopFieldsHtml, openLoadDetailsFromAccounting,
   commitRateOverride, resetRateToCalculated, changeRouteType, setHostlerHours, commitRateBoxOverride, openEditDriverModal,
+  loadLocationNotes, openLocationNotesModal, closeLocationNotesModal, saveLocationNotes,
 } from './loadboard.js';
 import { ACCOUNTING_TABLE, ACCOUNTING_ROUTES_TABLE, loadPricingData, calcRoute, getPricingTiers, getPricingSettings } from './accountingcalc.js';
 
 let accountingRecords = [];
+
+  // Date descending (most recent first), then status within the same date
+  // — active loads before released ones, since those are the ones more
+  // likely to still need attention.
+  function acctSortCompare(a, b) {
+    if (a.shift_date !== b.shift_date) return a.shift_date < b.shift_date ? 1 : -1;
+    if (a.status !== b.status) return a.status === "active" ? -1 : 1;
+    return 0;
+  }
 
   let acctTripsByShiftId = {}; // source_shift_id -> [trips], used for the Delaware "Routes" column
 
@@ -24,7 +34,7 @@ let accountingRecords = [];
     if (!supabaseClient) return;
     const { data, error } = await supabaseClient.from(ACCOUNTING_TABLE).select("*");
     if (error) { console.error("Failed to load accounting records:", error); setDriverSyncStatus(`Couldn't load Accounting (${error.message}).`, "error"); return; }
-    accountingRecords = (data || []).sort((a, b) => (a.shift_date < b.shift_date ? 1 : -1));
+    accountingRecords = (data || []).sort(acctSortCompare);
 
     const shiftIds = [...new Set(accountingRecords.filter((r) => r.location === "delaware" && r.source_shift_id).map((r) => r.source_shift_id))];
     if (shiftIds.length) {
@@ -53,11 +63,13 @@ let accountingRecords = [];
 
   const LOCATIONS_WITH_LEVELS = ["atlanta"]; // only these use Cost/Revenue Level tiers — everyone else has a set rate
   const LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST = ["delaware"]; // flat-rate locations: show Routes, hide Total Cost/Revenue/FSC
+  const LOCATIONS_WITHOUT_FSC = ["atlanta"]; // Atlanta keeps Total Cost/Revenue but doesn't need its own FSC column
 
   export function acctTableHeaderHtml() {
     const loc = state.acctLocationTab || "atlanta";
     const showLevels = LOCATIONS_WITH_LEVELS.includes(loc);
     const showRoutesInstead = LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST.includes(loc);
+    const showFsc = !showRoutesInstead && !LOCATIONS_WITHOUT_FSC.includes(loc);
     return `<tr>
       <th>Date</th>
       <th>Aljex #</th>
@@ -67,8 +79,9 @@ let accountingRecords = [];
       ${showRoutesInstead ? `<th>Routes</th>` : ""}
       <th>Total Miles</th>
       <th>Total Stops</th>
-      ${showRoutesInstead ? "" : `<th>Total Cost</th><th>Total Revenue</th><th>FSC Payment</th>`}
+      ${showRoutesInstead ? "" : `<th>Total Cost</th><th>Total Revenue</th>${showFsc ? "<th>FSC Payment</th>" : ""}`}
       <th>Total Carrier Pay</th>
+      <th>Day Type</th>
       <th>Status</th>
     </tr>`;
   }
@@ -76,8 +89,10 @@ let accountingRecords = [];
   export function accountingRowHtml(rec) {
     const showLevels = LOCATIONS_WITH_LEVELS.includes(rec.location);
     const showRoutesInstead = LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST.includes(rec.location);
+    const showFsc = !showRoutesInstead && !LOCATIONS_WITHOUT_FSC.includes(rec.location);
     const levelOptions = (selected) => [1, 2, 3, 4].map((n) => `<option value="${n}" ${n === selected ? "selected" : ""}>${n}${n === 4 ? " (Market)" : ""}</option>`).join("");
     const statusOptions = ["active", "released"].map((s) => `<option value="${s}" ${s === rec.status ? "selected" : ""}>${s[0].toUpperCase() + s.slice(1)}</option>`).join("");
+    const dayTypeOptions = ["weekday", "weekend", "holiday"].map((d) => `<option value="${d}" ${d === (rec.day_type || "weekday") ? "selected" : ""}>${d[0].toUpperCase() + d.slice(1)}</option>`).join("");
     return `<tr id="acct-${rec.id}">
       <td>${escapeHtml(rec.shift_date)}</td>
       <td>${rec.aljex_load_number ? `<button type="button" class="cell-link-btn" style="width:auto; padding:2px 10px;" data-open-acct-load="${rec.id}">${escapeHtml(rec.aljex_load_number)} ↗</button>` : "—"}</td>
@@ -89,8 +104,9 @@ let accountingRecords = [];
       ${showRoutesInstead ? `<td>${acctRoutesChipsHtml(rec)}</td>` : ""}
       <td>${escapeHtml(rec.total_miles != null ? String(rec.total_miles) : "—")}</td>
       <td>${escapeHtml(rec.total_stops != null ? String(rec.total_stops) : "—")}</td>
-      ${showRoutesInstead ? "" : `<td>${fmtMoney(rec.total_cost)}</td><td>${fmtMoney(rec.total_revenue)}</td><td>${fmtMoney(rec.fsc_payment)}</td>`}
+      ${showRoutesInstead ? "" : `<td>${fmtMoney(rec.total_cost)}</td><td>${fmtMoney(rec.total_revenue)}</td>${showFsc ? `<td>${fmtMoney(rec.fsc_payment)}</td>` : ""}`}
       <td><input class="cell-input" style="width:90px;" data-action="acct-carrier-pay" data-id="${rec.id}" value="${rec.total_carrier_pay != null ? rec.total_carrier_pay : ""}"></td>
+      <td><select class="cell-input" data-action="acct-day-type" data-id="${rec.id}">${dayTypeOptions}</select></td>
       <td><select class="cell-input" data-action="acct-status" data-id="${rec.id}">${statusOptions}</select></td>
     </tr>`;
   }
@@ -110,7 +126,8 @@ let accountingRecords = [];
     if ($("#accounting-table-head")) $("#accounting-table-head").innerHTML = acctTableHeaderHtml();
     const showLevels = LOCATIONS_WITH_LEVELS.includes(loc);
     const showRoutesInstead = LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST.includes(loc);
-    const colspan = showLevels ? 13 : (showRoutesInstead ? 9 : 11);
+    const showFsc = !showRoutesInstead && !LOCATIONS_WITHOUT_FSC.includes(loc);
+    const colspan = (showLevels ? (showFsc ? 13 : 12) : (showRoutesInstead ? 9 : (showFsc ? 11 : 10))) + 1;
     body.innerHTML = filtered.length
       ? filtered.map(accountingRowHtml).join("")
       : `<tr><td colspan="${colspan}" class="subtext" style="padding:16px;">No completed loads ${state.acctDateFilter ? "for this day" : ""} here yet — mark a shift complete on the ${loc} board and it'll show up here.</td></tr>`;
@@ -218,6 +235,7 @@ let accountingRecords = [];
     const initialSettings = getPricingSettings();
     if (initialSettings && $("#fsc-rate-input")) $("#fsc-rate-input").value = initialSettings.fsc_rate || "";
     await loadAccountingRecords();
+    await loadLocationNotes();
     renderAccountingTable();
     setupAccountingRealtimeSync();
 
@@ -227,6 +245,18 @@ let accountingRecords = [];
         if (btn) switchAcctLocationTab(btn.dataset.location);
       });
       switchAcctLocationTab("atlanta");
+    }
+
+    if ($("#modal-location-notes")) {
+      on("btn-location-info", "click", () => {
+        const loc = state.acctLocationTab || "atlanta";
+        const label = { atlanta: "Atlanta", buildingc: "Building C", delaware: "Delaware", houston: "Houston" }[loc] || loc;
+        openLocationNotesModal(loc, label);
+      });
+      on("ln-close", "click", closeLocationNotesModal);
+      on("ln-cancel", "click", closeLocationNotesModal);
+      on("ln-save", "click", saveLocationNotes);
+      $("#modal-location-notes").addEventListener("click", (e) => { if (e.target.id === "modal-location-notes") closeLocationNotesModal(); });
     }
 
     if ($("#acct-view-toggle")) {
@@ -278,8 +308,17 @@ let accountingRecords = [];
           const rec = accountingRecords.find((r) => r.id == t.dataset.id);
           if (!rec) return;
           rec.status = t.value;
+          accountingRecords.sort(acctSortCompare); // status is now part of the sort order
+          renderAccountingTable();
           supabaseClient.from(ACCOUNTING_TABLE).update({ status: t.value }).eq("id", rec.id)
             .catch((err) => setDriverSyncStatus(`Couldn't save status (${err.message || err}).`, "error"));
+        }
+        else if (t.dataset.action === "acct-day-type") {
+          const rec = accountingRecords.find((r) => r.id == t.dataset.id);
+          if (!rec) return;
+          rec.day_type = t.value;
+          supabaseClient.from(ACCOUNTING_TABLE).update({ day_type: t.value }).eq("id", rec.id)
+            .catch((err) => setDriverSyncStatus(`Couldn't save day type (${err.message || err}).`, "error"));
         }
       });
       table.addEventListener("input", (e) => {
@@ -348,7 +387,7 @@ let accountingRecords = [];
       if (payload.eventType === "DELETE") return;
       const idx = accountingRecords.findIndex((r) => r.id === payload.new.id);
       if (idx !== -1) accountingRecords[idx] = payload.new; else accountingRecords.push(payload.new);
-      accountingRecords.sort((a, b) => (a.shift_date < b.shift_date ? 1 : -1));
+      accountingRecords.sort(acctSortCompare);
       renderAccountingTable();
     });
     channel.subscribe();

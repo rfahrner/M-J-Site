@@ -4,7 +4,7 @@
      split) with entirely different columns. See chat for why this
      isn't just another branch in the existing board code.
      ================================================================ */
-import { state, supabaseClient, uid, findDriver, driversForLocation, setDriverSyncStatus, SAVE_DEBOUNCE_MS, escapeHtml, $, $all, addDays, keyToDate, dateKey, on, refreshDriverDatalist, renderBoardChrome, beginTextBatchFlow, textDriverPhone, openAddDriverModal, openAddLoadModal, closeAddLoadModal, closeDateDropdown, renderCalendarGrid, closeContextMenu, sendCurrentGroupBatchDirect, openCurrentGroupBatch, confirmGroupBatchSent, pick, handleRealtimeDriverChange, initAvailableSection, resetCalendarViewMonth, resetGroupTextState, refreshAvailableSection, openDriverAutocomplete, updateDriverAutocomplete, closeDriverAutocomplete, captureFocusForRerender, handleRowAwareTab, openEditDriverModal, BOARD_IMAGE_BUCKET, rowImageDropzoneHtml, wireRowImageDropzone, batchSignImageUrls } from './loadboard.js';
+import { state, supabaseClient, uid, findDriver, driversForLocation, setDriverSyncStatus, SAVE_DEBOUNCE_MS, escapeHtml, $, $all, addDays, keyToDate, dateKey, on, refreshDriverDatalist, renderBoardChrome, beginTextBatchFlow, textDriverPhone, openAddDriverModal, openAddLoadModal, closeAddLoadModal, closeDateDropdown, renderCalendarGrid, closeContextMenu, sendCurrentGroupBatchDirect, openCurrentGroupBatch, confirmGroupBatchSent, pick, handleRealtimeDriverChange, initAvailableSection, resetCalendarViewMonth, resetGroupTextState, refreshAvailableSection, openDriverAutocomplete, updateDriverAutocomplete, closeDriverAutocomplete, captureFocusForRerender, handleRowAwareTab, openEditDriverModal, BOARD_IMAGE_BUCKET, rowImageDropzoneHtml, wireRowImageDropzone, batchSignImageUrls, openLocationNotesModal, closeLocationNotesModal, saveLocationNotes } from './loadboard.js';
 import { getBoardRateSettings } from './boardrates.js';
 export const HOUSTON_TABLE = "loads_houston";
   export const houstonState = { sheets: {}, datesWithData: new Set() };
@@ -595,6 +595,14 @@ export const HOUSTON_TABLE = "loads_houston";
     setupHoustonRealtimeSync();
     loadHoustonDatesWithData().catch((e) => console.error("loadHoustonDatesWithData() failed:", e));
     initAvailableSection();
+
+    if ($("#modal-location-notes")) {
+      on("btn-page-info", "click", () => openLocationNotesModal("houston", "Houston"));
+      on("ln-close", "click", closeLocationNotesModal);
+      on("ln-cancel", "click", closeLocationNotesModal);
+      on("ln-save", "click", saveLocationNotes);
+      $("#modal-location-notes").addEventListener("click", (e) => { if (e.target.id === "modal-location-notes") closeLocationNotesModal(); });
+    }
 
     $("#date-prev").addEventListener("click", () => setHoustonActiveDate(dateKey(addDays(keyToDate(state.activeDate), -1))));
     $("#date-next").addEventListener("click", () => setHoustonActiveDate(dateKey(addDays(keyToDate(state.activeDate), 1))));

@@ -19,7 +19,10 @@
   <div id="driverlist-view" class="panel">
     <div class="toolbar" style="padding-left:0;padding-right:0;border-bottom:none;">
       <div class="toolbar-left">
-        <h1 style="margin-top:0;">Driver List</h1>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <h1 style="margin:0;">Driver List</h1>
+          <button type="button" class="btn btn-ghost" id="btn-page-info" title="Notes for this page" style="padding:3px 10px; font-size:12.5px;">ℹ️ Info</button>
+        </div>
         <div class="subtext">Every driver on file, live from Supabase. Newly added drivers stay highlighted for 30 minutes.</div>
       </div>
       <div class="toolbar-actions">
@@ -198,6 +201,24 @@
         <button class="btn btn-ghost hidden" id="tg-open-batch">Open in Outlook Instead</button>
         <button class="btn hidden" id="tg-confirm-sent">Sent — Next Batch</button>
         <button class="btn hidden" id="tg-finish">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= Page Notes modal (free-form, editable, next to the page title) ================= -->
+  <div class="overlay hidden" id="modal-location-notes">
+    <div class="modal modal-large">
+      <div class="modal-header">
+        <h3 id="ln-title">Notes</h3>
+        <button class="modal-close" id="ln-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="subtext" style="margin-bottom:10px;">Free-form notes for this page — anyone can edit this.</div>
+        <textarea class="cell-input" id="ln-textarea" rows="20" style="width:100%; font-family:monospace; font-size:12.5px; white-space:pre;"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="ln-cancel">Cancel</button>
+        <button class="btn" id="ln-save">Save</button>
       </div>
     </div>
   </div>

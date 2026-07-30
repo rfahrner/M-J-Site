@@ -93,6 +93,7 @@ button {
   gap: 2px;
   height: 100%;
   overflow-x: auto;
+  flex: 1;
 }
 
 /* Bottom-right notification widget — chat-window style, always visible

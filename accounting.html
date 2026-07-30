@@ -33,6 +33,7 @@
       <button type="button" class="location-tab" data-location="buildingc">Building C</button>
       <button type="button" class="location-tab" data-location="delaware">Delaware</button>
       <button type="button" class="location-tab" data-location="houston">Houston</button>
+      <button type="button" class="btn btn-ghost" id="btn-location-info" title="Rate info for this location" style="margin-left:8px;">ℹ️ Info</button>
     </div>
     <div class="date-nav" style="position:relative; padding: 0 0 14px 0;">
       <button id="date-prev" title="Previous day">&lsaquo;</button>
@@ -87,6 +88,25 @@
     </div>
   </div>
 
+  <!-- ================= Location Rate Info modal (editable notes, per accounting tab) ================= -->
+  <div class="overlay hidden" id="modal-location-notes">
+    <div class="modal modal-large">
+      <div class="modal-header">
+        <h3 id="ln-title">Rate Info</h3>
+        <button class="modal-close" id="ln-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="subtext" style="margin-bottom:10px;">Free-form notes — rate cards, effective dates, anything worth having on hand for this location. Anyone can edit this.</div>
+        <textarea class="cell-input" id="ln-textarea" rows="20" style="width:100%; font-family:monospace; font-size:12.5px; white-space:pre;"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="ln-cancel">Cancel</button>
+        <button class="btn" id="ln-save">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script type="module" src="loadboard.js" defer></script>
 </body>
 </html>

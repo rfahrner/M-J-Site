@@ -19,7 +19,10 @@
   <div id="board-view">
     <div class="toolbar">
       <div class="toolbar-left">
-        <h1 id="sheet-title">Atlanta Spreadsheet</h1>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <h1 id="sheet-title" style="margin:0;">Atlanta Spreadsheet</h1>
+          <button type="button" class="btn btn-ghost" id="btn-page-info" title="Notes for this page" style="padding:3px 10px; font-size:12.5px;">ℹ️ Info</button>
+        </div>
         <div class="subtext" id="sheet-subtext"></div>
       </div>
       <div class="date-nav" style="position:relative;">
@@ -393,6 +396,23 @@
     </div>
   </div>
 
+  <!-- ================= Page Notes modal (free-form, editable, next to the page title) ================= -->
+  <div class="overlay hidden" id="modal-location-notes">
+    <div class="modal modal-large">
+      <div class="modal-header">
+        <h3 id="ln-title">Notes</h3>
+        <button class="modal-close" id="ln-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="subtext" style="margin-bottom:10px;">Free-form notes for this page — anyone can edit this.</div>
+        <textarea class="cell-input" id="ln-textarea" rows="20" style="width:100%; font-family:monospace; font-size:12.5px; white-space:pre;"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="ln-cancel">Cancel</button>
+        <button class="btn" id="ln-save">Save</button>
+      </div>
+    </div>
+  </div>
 
   <script type="module" src="loadboard.js" defer></script>
 </body>
