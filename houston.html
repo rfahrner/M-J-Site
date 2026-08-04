@@ -286,113 +286,94 @@
       </div>
     </div>
   </div>
-<!--
-  Add Time Slots modal — paste this just before the closing </body> tag in
-  houston.html, alongside your other modals, IF it's not already there.
 
-  The button and all the JS logic for this were already built and wired up
-  (openAddHoustonTimeSlotsModal / submitAddHoustonTimeSlots / etc in
-  houston.js) — clicking "+ Add Time Slots" was silently doing nothing only
-  because this specific piece, the modal markup itself, was never added to
-  the page. If you already have a #modal-add-time-slots block in
-  houston.html, you don't need this — check first before pasting, since a
-  duplicate would cause the same "two Add Load blocks" kind of problem seen
-  earlier with the other boards.
--->
-<div class="overlay hidden" id="modal-add-time-slots">
-  <div class="modal">
-    <div class="modal-header">
-      <h3>Add Time Slots</h3>
-      <button type="button" class="modal-close" id="ats-close">&times;</button>
-    </div>
-    <div class="modal-body">
-      <p class="subtext" style="margin-bottom:12px;">Add a batch of blank rows at once, each pre-filled with a start time — e.g. 5 rows at 0900, 5 at 1300.</p>
-      <div id="ats-rows"></div>
-      <button type="button" class="btn btn-ghost" id="ats-add-slot-row" style="margin-top:8px;">+ Add another time</button>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-ghost" id="ats-cancel">Cancel</button>
-      <button class="btn" id="ats-submit">Add Rows</button>
+  <!-- ================= Houston Load Details modal ================= -->
+  <div class="overlay hidden" id="modal-houston-load-details">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Load Details</h3>
+        <button type="button" class="modal-close" id="hou-ld-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <label for="hou-ld-driver">Driver</label>
+          <input class="cell-input" id="hou-ld-driver" data-driver-ac="true" placeholder="Type driver name…">
+          <button type="button" id="hou-ld-view-profile" class="cell-link-btn hidden" title="Open driver profile" style="margin-top:4px;">↗</button>
+        </div>
+        <div class="field">
+          <label for="hou-ld-aljex">Aljex #</label>
+          <input class="cell-input" id="hou-ld-aljex">
+        </div>
+        <div class="field">
+          <label for="hou-ld-time">Time</label>
+          <input class="cell-input" id="hou-ld-time" placeholder="--:--">
+        </div>
+        <div class="field">
+          <label for="hou-ld-carrier">Carrier</label>
+          <input class="cell-input" id="hou-ld-carrier">
+        </div>
+        <div class="field">
+          <label for="hou-ld-mc">MC #</label>
+          <input class="cell-input" id="hou-ld-mc">
+        </div>
+        <div class="field">
+          <label for="hou-ld-rating">Rating</label>
+          <input class="cell-input" id="hou-ld-rating" placeholder="e.g. A1">
+        </div>
+        <div class="field">
+          <label for="hou-ld-cell">Driver Cell</label>
+          <input class="cell-input" id="hou-ld-cell">
+        </div>
+        <div class="field">
+          <label for="hou-ld-dispatcher">Dispatcher Phone</label>
+          <input class="cell-input" id="hou-ld-dispatcher">
+        </div>
+        <div class="field">
+          <label for="hou-ld-rate">Rate</label>
+          <input class="cell-input" id="hou-ld-rate" type="number" min="0" step="0.01">
+        </div>
+        <div class="field">
+          <label for="hou-ld-ttc">TTC</label>
+          <input class="cell-input" id="hou-ld-ttc">
+        </div>
+        <div class="field">
+          <label for="hou-ld-ttt">TTT</label>
+          <input class="cell-input" id="hou-ld-ttt">
+        </div>
+        <div class="field">
+          <label for="hou-ld-comments">Comments</label>
+          <textarea class="cell-input" id="hou-ld-comments" rows="3"></textarea>
+        </div>
+        <div class="field">
+          <label for="hou-ld-timeout">Time Out / Remarks</label>
+          <textarea class="cell-input" id="hou-ld-timeout" rows="3"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="hou-ld-cancel">Cancel</button>
+        <button class="btn" id="hou-ld-save">Save</button>
+      </div>
     </div>
   </div>
-</div>
-<!--
-  Houston Load Details modal — paste this just before the closing </body>
-  tag in houston.html, alongside your other modals.
 
-  This is separate from the existing "Load History" modal (that one's
-  read-only, just shows created/updated timestamps) — this is the editable
-  one, same idea as the other boards' Load Details / Mondelez's version.
-  Opens via the new "↗" icon next to Aljex#, or "Load Details" in the
-  right-click menu.
--->
-<div class="overlay hidden" id="modal-houston-load-details">
-  <div class="modal">
-    <div class="modal-header">
-      <h3>Load Details</h3>
-      <button type="button" class="modal-close" id="hou-ld-close">&times;</button>
-    </div>
-    <div class="modal-body">
-      <div class="field">
-        <label for="hou-ld-driver">Driver</label>
-        <input class="cell-input" id="hou-ld-driver" data-driver-ac="true" placeholder="Type driver name…">
-        <button type="button" id="hou-ld-view-profile" class="cell-link-btn hidden" title="Open driver profile" style="margin-top:4px;">↗</button>
+  <!-- ================= Page Notes modal (free-form, editable, next to the page title) ================= -->
+  <div class="overlay hidden" id="modal-location-notes">
+    <div class="modal modal-large">
+      <div class="modal-header">
+        <h3 id="ln-title">Notes</h3>
+        <button class="modal-close" id="ln-close">&times;</button>
       </div>
-      <div class="field">
-        <label for="hou-ld-aljex">Aljex #</label>
-        <input class="cell-input" id="hou-ld-aljex">
+      <div class="modal-body">
+        <div class="subtext" style="margin-bottom:10px;">Free-form notes for this page — anyone can edit this.</div>
+        <textarea class="cell-input" id="ln-textarea" rows="20" style="width:100%; font-family:monospace; font-size:12.5px; white-space:pre;"></textarea>
       </div>
-      <div class="field">
-        <label for="hou-ld-time">Time</label>
-        <input class="cell-input" id="hou-ld-time" placeholder="--:--">
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="ln-cancel">Cancel</button>
+        <button class="btn" id="ln-save">Save</button>
       </div>
-      <div class="field">
-        <label for="hou-ld-carrier">Carrier</label>
-        <input class="cell-input" id="hou-ld-carrier">
-      </div>
-      <div class="field">
-        <label for="hou-ld-mc">MC #</label>
-        <input class="cell-input" id="hou-ld-mc">
-      </div>
-      <div class="field">
-        <label for="hou-ld-rating">Rating</label>
-        <input class="cell-input" id="hou-ld-rating" placeholder="e.g. A1">
-      </div>
-      <div class="field">
-        <label for="hou-ld-cell">Driver Cell</label>
-        <input class="cell-input" id="hou-ld-cell">
-      </div>
-      <div class="field">
-        <label for="hou-ld-dispatcher">Dispatcher Phone</label>
-        <input class="cell-input" id="hou-ld-dispatcher">
-      </div>
-      <div class="field">
-        <label for="hou-ld-rate">Rate</label>
-        <input class="cell-input" id="hou-ld-rate" type="number" min="0" step="0.01">
-      </div>
-      <div class="field">
-        <label for="hou-ld-ttc">TTC</label>
-        <input class="cell-input" id="hou-ld-ttc">
-      </div>
-      <div class="field">
-        <label for="hou-ld-ttt">TTT</label>
-        <input class="cell-input" id="hou-ld-ttt">
-      </div>
-      <div class="field">
-        <label for="hou-ld-comments">Comments</label>
-        <textarea class="cell-input" id="hou-ld-comments" rows="3"></textarea>
-      </div>
-      <div class="field">
-        <label for="hou-ld-timeout">Time Out / Remarks</label>
-        <textarea class="cell-input" id="hou-ld-timeout" rows="3"></textarea>
-      </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-ghost" id="hou-ld-cancel">Cancel</button>
-      <button class="btn" id="hou-ld-save">Save</button>
     </div>
   </div>
-</div>
+
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script type="module" src="loadboard.js" defer></script>
 </body>

@@ -382,6 +382,24 @@
     </div>
   </div>
 
+  <!-- ================= Page Notes modal (free-form, editable, next to the page title) ================= -->
+  <div class="overlay hidden" id="modal-location-notes">
+    <div class="modal modal-large">
+      <div class="modal-header">
+        <h3 id="ln-title">Notes</h3>
+        <button class="modal-close" id="ln-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="subtext" style="margin-bottom:10px;">Free-form notes for this page — anyone can edit this.</div>
+        <textarea class="cell-input" id="ln-textarea" rows="20" style="width:100%; font-family:monospace; font-size:12.5px; white-space:pre;"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="ln-cancel">Cancel</button>
+        <button class="btn" id="ln-save">Save</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script type="module" src="loadboard.js" defer></script>
 </body>

@@ -939,6 +939,12 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
    Details modals, so it was losing that fight even though it's opened
    more recently and should be the one on top. */
 #modal-add-driver { z-index: 150; }
+/* Load Details, opened FROM WITHIN the driver profile's History tab (a
+   PRO#/Load# link) — needs to render above #modal-add-driver (z-index
+   150) in that specific case. Only applied via the ld-in-front class,
+   added by openLoadFromDriverHistory() and removed on close, so a
+   normal (non-nested) open of Load Details is unaffected. */
+#modal-load-details.ld-in-front { z-index: 200; }
 .hidden { display: none !important; }
 
 .modal {

@@ -560,14 +560,40 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
   // TRIP_SUBCOLS (defined above) doubles as the trip-column toggle list —
   // toggling one hides that column across all 5 trip blocks at once.
 
+  // What "the rate" means for a driver depends on which Driver List tab
+  // you're looking at. On Atlanta (which shares its pool with Building C),
+  // dispatchers actually mean the 61-140mi tier rate when they say "a
+  // driver's rate" — not the flat normalRate field, which is really just
+  // a cross-location fallback. Everywhere else (Delaware, Houston,
+  // Mondelez), there's no mileage-tier structure, so normalRate IS the
+  // rate. This is the single place that distinction gets made, so the
+  // sort and the displayed column can never disagree with each other.
+  function getDriverDisplayRate(d) {
+    if (state.driverListTab === "atlanta") {
+      const tiers = (getBoardRateTiers() && getBoardRateTiers().atlanta) || [];
+      const tier = tiers.find((t) => t.min === 61 && t.max === 140);
+      if (tier) {
+        const override = d.atlantaRateOverrides && d.atlantaRateOverrides.tiers ? d.atlantaRateOverrides.tiers[tier.id] : undefined;
+        return override != null ? override : tier.rate;
+      }
+    }
+    return d.normalRate !== "" && d.normalRate != null ? Number(d.normalRate) : null;
+  }
+
   function compareForSort(a, b, key, dir) {
-    const av = a[key], bv = b[key];
+    let av, bv;
+    if (key === "displayRate") {
+      av = getDriverDisplayRate(a);
+      bv = getDriverDisplayRate(b);
+    } else {
+      av = a[key]; bv = b[key];
+    }
     const aEmpty = av === null || av === undefined || av === "";
     const bEmpty = bv === null || bv === undefined || bv === "";
     if (aEmpty && bEmpty) return 0;
     if (aEmpty) return 1;  // blanks always sort last, regardless of direction
     if (bEmpty) return -1;
-    const cmp = (key === "mc" || key === "normalRate")
+    const cmp = (key === "mc" || key === "normalRate" || key === "displayRate")
       ? Number(av) - Number(bv)
       : String(av).localeCompare(String(bv), undefined, { sensitivity: "base", numeric: true });
     return dir === "desc" ? -cmp : cmp;
@@ -611,6 +637,14 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     // Mondelez alongside their normal home base), so this needs its own check.
     if (locationKey === "mondelez") {
       return state.drivers.filter((d) => Array.isArray(d.runsOutOf) && d.runsOutOf.includes("mondelez"));
+    }
+    // Houston works the same way as Mondelez now — a driver shows up here
+    // if EITHER their primary location is houston OR the Houston box is
+    // checked in runs_out_of, so checking the box is enough on its own
+    // without needing to also flip their primary location (and risk
+    // knocking them off whichever board that used to put them on).
+    if (locationKey === "houston") {
+      return state.drivers.filter((d) => d.location === "houston" || (Array.isArray(d.runsOutOf) && d.runsOutOf.includes("houston")));
     }
     const group = locationGroupFor(locationKey);
     return state.drivers.filter((d) => group.includes(d.location));
@@ -1181,7 +1215,13 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     }
 
     const ppwkCheckbox = $("#st-ppwk-received");
-    if (ppwkCheckbox) trip.ppwkReceived = ppwkCheckbox.checked;
+    if (ppwkCheckbox) {
+      const beforePpwk = trip.ppwkReceived;
+      trip.ppwkReceived = ppwkCheckbox.checked;
+      if (beforePpwk !== trip.ppwkReceived) {
+        logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "ppwk_received", beforePpwk, trip.ppwkReceived);
+      }
+    }
     const checkedInCheckbox = $("#st-checked-in");
     if (checkedInCheckbox) trip.checkedIn = checkedInCheckbox.checked;
     const dropLocationInput = $("#st-trailer-drop-location");
@@ -2223,7 +2263,9 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
   function renderDriverList() {
     const body = $("#driverlist-table-body");
     if (!body) return;
-    const tbody = getSortedDrivers().map((d) => `
+    const tbody = getSortedDrivers().map((d) => {
+      const displayRate = getDriverDisplayRate(d);
+      return `
       <tr id="dl-${d.id}" class="${d.addedAt ? "is-new" : ""}">
         <td><button type="button" class="cell-link-btn" data-action="edit-driver" data-driver-id="${d.id}" title="Open driver profile">↗</button></td>
         <td>${escapeHtml(d.name)}</td>
@@ -2233,13 +2275,14 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
         <td>${escapeHtml(d.email)}</td>
         <td>${escapeHtml(d.email2 || "—")}</td>
         <td>${escapeHtml(d.rating || "—")}</td>
-        <td>${d.normalRate ? `$${Number(d.normalRate).toLocaleString()}` : "—"}</td>
+        <td>${displayRate != null ? `$${Number(displayRate).toLocaleString()}` : "—"}</td>
         <td>${escapeHtml(d.carrier || "—")}</td>
         <td>${escapeHtml(d.rateBooking || "—")}</td>
         <td><span class="badge ${d.tia ? "badge-yes" : "badge-no"}">${d.tia ? "Yes" : "No"}</span></td>
         <td>${d.tiiAmount != null ? `$${Number(d.tiiAmount).toLocaleString()}` : "—"}</td>
         <td>${escapeHtml(d.notes || "—")}</td>
-      </tr>`).join("");
+      </tr>`;
+    }).join("");
     body.innerHTML = tbody || `<tr><td colspan="14" style="text-align:center;color:var(--slate-500);padding:24px;">No drivers on file yet.</td></tr>`;
     refreshDriverDatalist();
     $all('th[data-sort]').forEach((th) => {
@@ -2934,6 +2977,39 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     }
   }
 
+  // Opens a load straight from the Driver Profile's History tab (PRO#/
+  // Load# link). Reuses the same standaloneLoadedRows path Accounting's
+  // opener uses above, and marks the modal to render above the driver
+  // profile modal (#modal-add-driver is z-index 150 — see loadboard.css)
+  // via the ld-in-front class, since the person is drilling in from a
+  // modal that's already open rather than starting from a blank page.
+  // Houston and Mondelez loads live in separate tables/modals that this
+  // doesn't wire up to yet — flagged rather than guessed at.
+  export async function openLoadFromDriverHistory(kind, dbId) {
+    if (kind !== "shift") {
+      setDriverSyncStatus("Opening Houston or Mondelez loads from driver history isn't wired up yet — Atlanta, Delaware, and Building C loads work.", "error");
+      return;
+    }
+    if (!supabaseClient) return;
+    try {
+      const { data: shiftRows, error: shiftErr } = await supabaseClient.from(SHIFTS_TABLE).select("*").eq("id", dbId);
+      if (shiftErr || !shiftRows || !shiftRows[0]) throw shiftErr || new Error("Load not found");
+      const row = shiftFromDbRow(shiftRows[0]);
+      const { data: tripRows } = await supabaseClient.from(TRIPS_TABLE).select("*").eq("shift_id", row.dbId);
+      const sortedTrips = (tripRows || []).sort((a, b) => a.trip_number - b.trip_number).map(tripFromDbRow);
+      row.trips = sortedTrips.length ? sortedTrips : [blankTrip()];
+      standaloneLoadedRows[row.id] = row;
+      state.activeLocation = row.location || state.activeLocation;
+      refreshDriverDatalist();
+      await openLoadDetailsModal(row.id);
+      const ldModal = $("#modal-load-details");
+      if (ldModal) ldModal.classList.add("ld-in-front");
+    } catch (e) {
+      console.error("openLoadFromDriverHistory failed:", e);
+      setDriverSyncStatus(`Couldn't open this load (${e.message || e}).`, "error");
+    }
+  }
+
   async function openLoadDetailsModal(rowId, jumpToTripId, forceTab) {
     const found = findRowAnywhere(rowId);
     const modal = $("#modal-load-details");
@@ -2975,6 +3051,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
 
   export function closeLoadDetailsModal() {
     $("#modal-load-details").classList.add("hidden");
+    $("#modal-load-details").classList.remove("ld-in-front");
     loadDetailsState = null;
   }
 
@@ -3391,7 +3468,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       row.rateManual = true;
       await saveShiftNow(row);
     }
-    if (before !== row.rate) logChange(row.dbId, labelForRow(row), "rate", before, row.rate);
+    if (before !== row.rate) logChange(row.dbId, labelForRow(row), "carrier_rate_manual", before, row.rate);
     renderLoadDetailsTabContent();
     renderBoardTable();
   }
@@ -3445,11 +3522,16 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
         await saveShiftNow(row);
       }
     } else if (tabKey === "notes") {
+      const beforeNotesTab = row.notes;
       row.notes = $("#ld-notes-text").value.trim();
       await saveShiftNow(row);
+      if (beforeNotesTab !== row.notes) logChange(row.dbId, labelForRow(row), "notes", beforeNotesTab, row.notes);
     } else {
       const trip = row.trips.find((t) => t.id === tabKey);
       if (!trip) return;
+      const beforeRouteId = trip.routeId;
+      const beforeTrailerOut = trip.trailerOut;
+      const beforeTripNotes = trip.notes;
       trip.routeId = $("#ld-tr-routeId").value.trim();
       trip.tripId = $("#ld-tr-tripId").value.trim();
       trip.trailerOut = $("#ld-tr-trailerOut").value.trim();
@@ -3463,6 +3545,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
         if (match) trip.driverId = match.id;
       }
       const ppwkEl = $("#ld-tr-ppwk-received");
+      const beforePpwkReceived = trip.ppwkReceived;
       if (ppwkEl) trip.ppwkReceived = ppwkEl.checked;
       const checkedInEl = $("#ld-tr-checked-in");
       if (checkedInEl) trip.checkedIn = checkedInEl.checked;
@@ -3479,6 +3562,11 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       }
       await saveTripNow(row, trip, row.trips.indexOf(trip) + 1);
       recomputeRowRate(row);
+
+      if (beforeRouteId !== trip.routeId) logChange(row.dbId, labelForRow(row), "route_id", beforeRouteId, trip.routeId);
+      if (beforeTrailerOut !== trip.trailerOut) logChange(row.dbId, labelForRow(row), "trailer_out", beforeTrailerOut, trip.trailerOut);
+      if (beforeTripNotes !== trip.notes) logChange(row.dbId, labelForRow(row), "notes", beforeTripNotes, trip.notes);
+      if (beforePpwkReceived !== trip.ppwkReceived) logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "ppwk_received", beforePpwkReceived, trip.ppwkReceived);
 
       // This might have just been the last open trip — if the time sheet
       // was already filled in (e.g. saved before this trip got closed
@@ -3730,7 +3818,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     state.addDriverNestedFromLoad = false;
     state.editingDriverId = driverId;
     state.editingDriverLocation = d.location || "atlanta";
-    driverProfileState = { driverId, activeTab: "edit", history: null, notes: null };
+    driverProfileState = { driverId, activeTab: "edit", history: null, notes: null, rateHistory: null };
     modalEl.classList.remove("hidden"); // open first — a missing field below should never block this
     const tabStrip = $("#ad-modal-tabs");
     if (tabStrip) {
@@ -3887,6 +3975,8 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     if (!ok) return;
 
     const isEdit = !!state.editingDriverId;
+    const beforeDriver = isEdit ? findDriver(state.editingDriverId) : null;
+    const beforeRate = beforeDriver ? beforeDriver.normalRate : null;
     const draft = {
       name, phone, mc, email,
       dispatcherPhone: getVal("ad-dispatcher-phone").trim(),
@@ -3935,6 +4025,15 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     if (isEdit) {
       const idx = state.drivers.findIndex((x) => x.id === driver.id);
       if (idx !== -1) state.drivers[idx] = driver; else state.drivers.push(driver);
+      if ((beforeRate || "") !== (driver.normalRate || "")) {
+        supabaseClient.from(DRIVER_RATE_HISTORY_TABLE).insert({
+          driver_id: Number(driver.id),
+          old_rate: beforeRate !== "" && beforeRate != null ? Number(beforeRate) : null,
+          new_rate: driver.normalRate !== "" && driver.normalRate != null ? Number(driver.normalRate) : null,
+          changed_by: currentUserLabel || "unknown user",
+        }).then(() => {}).catch((e) => console.error("Failed to log driver rate history:", e));
+        if (driverProfileState && driverProfileState.driverId === driver.id) driverProfileState.rateHistory = null;
+      }
     } else {
       state.drivers.push(driver);
     }
@@ -3962,16 +4061,31 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     if (!supabaseClient) return [];
     const idNum = Number(driverId);
     const [shiftsRes, houstonRes, mondelezRes] = await Promise.all([
-      supabaseClient.from(SHIFTS_TABLE).select("pro_number, shift_date, location").eq("driver_id", idNum).order("shift_date", { ascending: false }).limit(50),
-      supabaseClient.from("loads_houston").select("aljex_number, shift_date").eq("driver_id", idNum).order("shift_date", { ascending: false }).limit(50),
-      supabaseClient.from("mondelez_loads").select("aljex_number, shift_date, location").eq("driver_id", idNum).order("shift_date", { ascending: false }).limit(50),
+      supabaseClient.from(SHIFTS_TABLE).select("id, pro_number, shift_date, location").eq("driver_id", idNum).order("shift_date", { ascending: false }).limit(50),
+      supabaseClient.from("loads_houston").select("id, aljex_number, shift_date").eq("driver_id", idNum).order("shift_date", { ascending: false }).limit(50),
+      supabaseClient.from("mondelez_loads").select("id, aljex_number, shift_date, location").eq("driver_id", idNum).order("shift_date", { ascending: false }).limit(50),
     ]);
     const entries = [];
-    (shiftsRes.data || []).forEach((r) => entries.push({ label: r.pro_number || "(no PRO#)", date: r.shift_date, board: r.location || "board" }));
-    (houstonRes.data || []).forEach((r) => entries.push({ label: r.aljex_number || "(no Aljex#)", date: r.shift_date, board: "houston" }));
-    (mondelezRes.data || []).forEach((r) => entries.push({ label: r.aljex_number || "(no Aljex#)", date: r.shift_date, board: `mondelez — ${r.location}` }));
+    // dbId/kind let the History tab render a clickable link straight to the
+    // load (see openLoadFromDriverHistory) — Houston/Mondelez are included
+    // in the list either way, but only "shift" entries are clickable for now.
+    (shiftsRes.data || []).forEach((r) => entries.push({ label: r.pro_number || "(no PRO#)", date: r.shift_date, board: r.location || "board", dbId: r.id, kind: "shift" }));
+    (houstonRes.data || []).forEach((r) => entries.push({ label: r.aljex_number || "(no Aljex#)", date: r.shift_date, board: "houston", dbId: r.id, kind: "houston" }));
+    (mondelezRes.data || []).forEach((r) => entries.push({ label: r.aljex_number || "(no Aljex#)", date: r.shift_date, board: `mondelez — ${r.location}`, dbId: r.id, kind: "mondelez" }));
     entries.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
     return entries;
+  }
+
+  // Newest-first log of rate changes for a driver's own "usual rate"
+  // (normal_rate), separate from load_change_history since those entries
+  // are scoped to a load, not a driver. Populated by submitDriverForm
+  // whenever normalRate changes on an edit.
+  const DRIVER_RATE_HISTORY_TABLE = "driver_rate_history";
+  async function loadDriverRateHistory(driverId) {
+    if (!supabaseClient) return [];
+    const { data, error } = await supabaseClient.from(DRIVER_RATE_HISTORY_TABLE).select("*").eq("driver_id", Number(driverId)).order("changed_at", { ascending: false });
+    if (error) { console.error("Failed to load driver rate history:", error); return []; }
+    return data || [];
   }
 
   async function loadDriverProfileNotes(driverId) {
@@ -4006,17 +4120,43 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     if (!body) return;
 
     if (activeTab === "history") {
-      if (driverProfileState.history === null) {
+      if (driverProfileState.history === null || driverProfileState.rateHistory === null) {
         body.innerHTML = `<div class="subtext">Loading…</div>`;
-        const history = await loadDriverProfileHistory(driverProfileState.driverId);
+        const [history, rateHistory] = await Promise.all([
+          driverProfileState.history === null ? loadDriverProfileHistory(driverProfileState.driverId) : Promise.resolve(driverProfileState.history),
+          driverProfileState.rateHistory === null ? loadDriverRateHistory(driverProfileState.driverId) : Promise.resolve(driverProfileState.rateHistory),
+        ]);
         if (!driverProfileState || driverProfileState.activeTab !== "history") return; // closed or switched tabs mid-fetch
         driverProfileState.history = history;
+        driverProfileState.rateHistory = rateHistory;
       }
       const rows = driverProfileState.history;
-      body.innerHTML = rows.length
+      const rateRows = driverProfileState.rateHistory;
+      const pastLoadsHtml = rows.length
         ? `<div class="ld-history-row" style="grid-template-columns: 110px 150px 1fr;"><span>Date</span><span>Board</span><span>PRO# / Load #</span></div>` +
-          rows.map((r) => `<div class="ld-history-row" style="grid-template-columns: 110px 150px 1fr;"><span>${escapeHtml(r.date || "—")}</span><span>${escapeHtml(r.board || "—")}</span><span>${escapeHtml(r.label)}</span></div>`).join("")
+          rows.map((r) => {
+            const label = (r.kind === "shift" && r.dbId)
+              ? `<button type="button" class="cell-link-btn" style="width:auto; height:auto; padding:2px 8px;" data-open-history-kind="${r.kind}" data-open-history-id="${r.dbId}" title="Open this load">${escapeHtml(r.label)} ↗</button>`
+              : escapeHtml(r.label);
+            return `<div class="ld-history-row" style="grid-template-columns: 110px 150px 1fr;"><span>${escapeHtml(r.date || "—")}</span><span>${escapeHtml(r.board || "—")}</span><span>${label}</span></div>`;
+          }).join("")
         : `<div class="subtext">No past loads on file for this driver yet.</div>`;
+      const rateChangesHtml = rateRows.length
+        ? `<div class="ld-history-row"><div>When</div><div>By</div><div>Was</div><div>Now</div></div>` +
+          rateRows.map((r) => `
+            <div class="ld-history-row">
+              <div>${new Date(r.changed_at).toLocaleString()}</div>
+              <div>${escapeHtml(r.changed_by || "—")}</div>
+              <div class="ld-history-old">${r.old_rate != null ? fmtRateMoney(Number(r.old_rate)) : "—"}</div>
+              <div class="ld-history-new">${r.new_rate != null ? fmtRateMoney(Number(r.new_rate)) : "—"}</div>
+            </div>`).join("")
+        : `<div class="subtext">No rate changes on file for this driver yet.</div>`;
+      body.innerHTML = `
+        <div class="rate-section-subheader" style="margin-top:0;">Past Loads</div>
+        ${pastLoadsHtml}
+        <div class="rate-section-subheader" style="margin-top:18px;">Rate Changes</div>
+        ${rateChangesHtml}
+      `;
     } else {
       if (driverProfileState.notes === null) {
         body.innerHTML = `<div class="subtext">Loading…</div>`;
@@ -4462,7 +4602,11 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       if (atlantaRunsCheckbox) atlantaRunsCheckbox.addEventListener("change", updateAtlantaRateSectionVisibility);
       $all("[data-ad-tab]").forEach((btn) => btn.addEventListener("click", () => switchAddDriverTab(btn.dataset.adTab)));
       const historyEl = $("#ad-tab-history");
-      if (historyEl) historyEl.addEventListener("click", (e) => { if (e.target.id === "dp-note-submit") submitDriverNote(); });
+      if (historyEl) historyEl.addEventListener("click", (e) => {
+        if (e.target.id === "dp-note-submit") submitDriverNote();
+        const openBtn = e.target.closest("[data-open-history-kind]");
+        if (openBtn) openLoadFromDriverHistory(openBtn.dataset.openHistoryKind, openBtn.dataset.openHistoryId);
+      });
       const notesEl = $("#ad-tab-notes");
       if (notesEl) notesEl.addEventListener("click", (e) => { if (e.target.id === "dp-note-submit") submitDriverNote(); });
     }
@@ -4506,6 +4650,66 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
           }
         });
       }
+    }
+    if ($("#modal-load-details")) {
+      on("ld-close", "click", closeLoadDetailsModal);
+      on("ld-close-btn", "click", closeLoadDetailsModal);
+      $("#modal-load-details").addEventListener("click", (e) => { if (e.target.id === "modal-load-details") closeLoadDetailsModal(); });
+      $("#ld-tabs").addEventListener("click", (e) => {
+        const tabBtn = e.target.closest(".ld-tab");
+        if (tabBtn && loadDetailsState) { loadDetailsState.activeTab = tabBtn.dataset.tab; loadDetailsState.editMode = null; renderLoadDetailsTabs(); }
+      });
+      $("#ld-tab-content").addEventListener("change", (e) => {
+        if (e.target.id === "ld-file-input" && e.target.files.length) uploadTripSheetImages(Array.from(e.target.files));
+        if (e.target.id === "ld-rate-total") commitRateOverride(e.target.value);
+        if (e.target.id === "ld-route-type-select" && loadDetailsState) changeRouteType(loadDetailsState.rowId, e.target.value);
+        if (e.target.id === "ld-hostler-hours" && loadDetailsState) setHostlerHours(loadDetailsState.rowId, e.target.value);
+        if (e.target.dataset.rateTierId != null && e.target.dataset.rateTierId !== "") commitRateBoxOverride("tier", Number(e.target.dataset.rateTierId), e.target.value);
+        if (e.target.dataset.rateSettingKey) commitRateBoxOverride("setting", e.target.dataset.rateSettingKey, e.target.value);
+      });
+      $("#ld-tab-content").addEventListener("click", (e) => {
+        const rmBtn = e.target.closest("[data-remove-attachment]");
+        if (rmBtn) removeTripSheetImage(rmBtn.dataset.removeAttachment);
+        const editBtn = e.target.closest("[data-ld-edit]");
+        if (editBtn) startLoadDetailsEdit(editBtn.dataset.ldEdit);
+        const cancelBtn = e.target.closest("[data-ld-cancel]");
+        if (cancelBtn) cancelLoadDetailsEdit();
+        const saveBtn = e.target.closest("[data-ld-save]");
+        if (saveBtn) saveLoadDetailsEdit(saveBtn.dataset.ldSave);
+        const saveCompleteBtn = e.target.closest("[data-ld-save-complete]");
+        if (saveCompleteBtn) saveLoadDetailsEdit(saveCompleteBtn.dataset.ldSaveComplete, true);
+        if (e.target.id === "ld-rate-reset") resetRateToCalculated();
+        const profileBtn = e.target.closest('[data-action="edit-driver"]');
+        if (profileBtn) openEditDriverModal(profileBtn.dataset.driverId);
+      });
+      $("#ld-tab-content").addEventListener("input", (e) => {
+        if (e.target.id === "ld-tr-stopCount" && loadDetailsState && loadDetailsState.editDraft) {
+          loadDetailsState.editDraft.stopCount = e.target.value;
+          const container = $("#ld-stop-fields");
+          if (container) container.innerHTML = stopFieldsHtml(Math.max(0, parseInt(e.target.value, 10) || 0), loadDetailsState.editDraft.stops);
+        }
+        if (e.target.id === "ld-ov-driver" || e.target.id === "ld-tr-driver") {
+          updateDriverAutocomplete(e.target, state.activeLocation);
+        }
+      });
+      $("#ld-tab-content").addEventListener("focusin", (e) => {
+        if (e.target.id !== "ld-ov-driver" && e.target.id !== "ld-tr-driver") return;
+        const input = e.target;
+        // these two fields are part of an edit draft committed via the modal's
+        // own Save button, not saved on every keystroke -- so picking a name
+        // here just fills the field in, same as typing it out by hand would
+        openDriverAutocomplete(input, state.activeLocation, (drv) => { input.value = drv.name; });
+      });
+      $("#ld-tab-content").addEventListener("focusout", (e) => {
+        if (e.target.id === "ld-ov-driver" || e.target.id === "ld-tr-driver") closeDriverAutocomplete();
+      });
+      wireRowImageDropzone(
+        $("#ld-tab-content"),
+        (id) => { const f = findTripAnywhere(id); return f ? f.trip : null; },
+        (trip) => { const f = findTripAnywhere(trip.id); return f ? saveTripNow(f.row, f.trip, f.tripNumber) : Promise.resolve(); },
+        () => { renderBoardTable(); renderLoadDetailsTabContent(); },
+        (trip) => trip.routeId || trip.tripId || ""
+      );
     }
   }
 
@@ -4607,68 +4811,6 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       on("tsc-confirm", "click", submitTimesheetModal);
     }
 
-    if ($("#modal-load-details")) {
-      on("ld-close", "click", closeLoadDetailsModal);
-      on("ld-close-btn", "click", closeLoadDetailsModal);
-      $("#modal-load-details").addEventListener("click", (e) => { if (e.target.id === "modal-load-details") closeLoadDetailsModal(); });
-      $("#ld-tabs").addEventListener("click", (e) => {
-        const tabBtn = e.target.closest(".ld-tab");
-        if (tabBtn && loadDetailsState) { loadDetailsState.activeTab = tabBtn.dataset.tab; loadDetailsState.editMode = null; renderLoadDetailsTabs(); }
-      });
-      $("#ld-tab-content").addEventListener("change", (e) => {
-        if (e.target.id === "ld-file-input" && e.target.files.length) uploadTripSheetImages(Array.from(e.target.files));
-        if (e.target.id === "ld-rate-total") commitRateOverride(e.target.value);
-        if (e.target.id === "ld-route-type-select" && loadDetailsState) changeRouteType(loadDetailsState.rowId, e.target.value);
-        if (e.target.id === "ld-hostler-hours" && loadDetailsState) setHostlerHours(loadDetailsState.rowId, e.target.value);
-        if (e.target.dataset.rateTierId != null && e.target.dataset.rateTierId !== "") commitRateBoxOverride("tier", Number(e.target.dataset.rateTierId), e.target.value);
-        if (e.target.dataset.rateSettingKey) commitRateBoxOverride("setting", e.target.dataset.rateSettingKey, e.target.value);
-      });
-      $("#ld-tab-content").addEventListener("click", (e) => {
-        const rmBtn = e.target.closest("[data-remove-attachment]");
-        if (rmBtn) removeTripSheetImage(rmBtn.dataset.removeAttachment);
-        const editBtn = e.target.closest("[data-ld-edit]");
-        if (editBtn) startLoadDetailsEdit(editBtn.dataset.ldEdit);
-        const cancelBtn = e.target.closest("[data-ld-cancel]");
-        if (cancelBtn) cancelLoadDetailsEdit();
-        const saveBtn = e.target.closest("[data-ld-save]");
-        if (saveBtn) saveLoadDetailsEdit(saveBtn.dataset.ldSave);
-        const saveCompleteBtn = e.target.closest("[data-ld-save-complete]");
-        if (saveCompleteBtn) saveLoadDetailsEdit(saveCompleteBtn.dataset.ldSaveComplete, true);
-        if (e.target.id === "ld-rate-reset") resetRateToCalculated();
-        const profileBtn = e.target.closest('[data-action="edit-driver"]');
-        if (profileBtn) openEditDriverModal(profileBtn.dataset.driverId);
-      });
-      $("#ld-tab-content").addEventListener("input", (e) => {
-        if (e.target.id === "ld-tr-stopCount" && loadDetailsState && loadDetailsState.editDraft) {
-          loadDetailsState.editDraft.stopCount = e.target.value;
-          const container = $("#ld-stop-fields");
-          if (container) container.innerHTML = stopFieldsHtml(Math.max(0, parseInt(e.target.value, 10) || 0), loadDetailsState.editDraft.stops);
-        }
-        if (e.target.id === "ld-ov-driver" || e.target.id === "ld-tr-driver") {
-          updateDriverAutocomplete(e.target, state.activeLocation);
-        }
-      });
-      $("#ld-tab-content").addEventListener("focusin", (e) => {
-        if (e.target.id !== "ld-ov-driver" && e.target.id !== "ld-tr-driver") return;
-        const input = e.target;
-        // these two fields are part of an edit draft committed via the modal's
-        // own Save button, not saved on every keystroke -- so picking a name
-        // here just fills the field in, same as typing it out by hand would
-        openDriverAutocomplete(input, state.activeLocation, (drv) => { input.value = drv.name; });
-      });
-      $("#ld-tab-content").addEventListener("focusout", (e) => {
-        if (e.target.id === "ld-ov-driver" || e.target.id === "ld-tr-driver") closeDriverAutocomplete();
-      });
-      wireRowImageDropzone(
-        $("#ld-tab-content"),
-        (id) => { const f = findTripAnywhere(id); return f ? f.trip : null; },
-        (trip) => { const f = findTripAnywhere(trip.id); return f ? saveTripNow(f.row, f.trip, f.tripNumber) : Promise.resolve(); },
-        () => { renderBoardTable(); renderLoadDetailsTabContent(); },
-        (trip) => trip.routeId || trip.tripId || ""
-      );
-    }
-
-
     if ($("#btn-columns") && $("#columns-panel")) {
       $("#columns-panel").innerHTML = buildColumnsPanelHtml();
       applyColumnVisibility();
@@ -4737,8 +4879,13 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     boardTable.addEventListener("focusin", (e) => {
       const field = e.target.dataset && e.target.dataset.field;
       const rowId = e.target.dataset && e.target.dataset.row;
-      if (!rowId || (field !== "notes" && field !== "driverName")) return;
-      focusValueSnapshots.set(`${rowId}:${field}`, e.target.value);
+      const tripId = e.target.dataset && e.target.dataset.trip;
+      if (!rowId) return;
+      if (tripId && (field === "routeId" || field === "trailerOut")) {
+        focusValueSnapshots.set(`${rowId}:${tripId}:${field}`, e.target.value);
+      } else if (!tripId && (field === "notes" || field === "driverName" || field === "rate")) {
+        focusValueSnapshots.set(`${rowId}:${field}`, e.target.value);
+      }
       if (field === "driverName" && e.target.dataset.driverAc === "true") {
         const input = e.target;
         openDriverAutocomplete(input, state.activeLocation, (drv) => {
@@ -4759,7 +4906,23 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       if (t.dataset && t.dataset.driverAc === "true") closeDriverAutocomplete();
       const field = t.dataset && t.dataset.field;
       const rowId = t.dataset && t.dataset.row;
-      if (rowId && (field === "notes" || field === "driverName")) {
+      const tripId = t.dataset && t.dataset.trip;
+
+      // Trip-level route_id / trailer_out — tracked separately since they're
+      // keyed by trip, not just row.
+      if (rowId && tripId && (field === "routeId" || field === "trailerOut")) {
+        const snapKey = `${rowId}:${tripId}:${field}`;
+        const before = focusValueSnapshots.get(snapKey);
+        focusValueSnapshots.delete(snapKey);
+        if (before !== undefined && before !== t.value) {
+          const foundTrip = findTripAnywhere(tripId);
+          if (foundTrip) {
+            logChange(foundTrip.row.dbId, labelForRow(foundTrip.row), field === "routeId" ? "route_id" : "trailer_out", before, t.value);
+          }
+        }
+      }
+
+      if (rowId && !tripId && (field === "notes" || field === "driverName" || field === "rate")) {
         const snapKey = `${rowId}:${field}`;
         const before = focusValueSnapshots.get(snapKey);
         focusValueSnapshots.delete(snapKey);
@@ -4768,6 +4931,12 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
           if (found) {
             if (field === "notes") {
               logChange(found.row.dbId, labelForRow(found.row), "notes", before, t.value);
+            } else if (field === "rate") {
+              // A manual entry directly into the board's Rate cell — kept
+              // distinct from the Load Details Rate panel's own override
+              // (also logged as "carrier_rate_manual" there, via
+              // commitRateOverride) so both entry points are traceable.
+              logChange(found.row.dbId, labelForRow(found.row), "carrier_rate_manual", before, t.value);
             } else if (before.trim()) {
               // driverName: only a REASSIGNMENT if it already had a driver — first-time entry isn't logged as a change
               logChange(found.row.dbId, labelForRow(found.row), "driver_reassigned", before, t.value);

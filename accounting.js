@@ -251,7 +251,10 @@ let accountingRecords = [];
       on("btn-location-info", "click", () => {
         const loc = state.acctLocationTab || "atlanta";
         const label = { atlanta: "Atlanta", buildingc: "Building C", delaware: "Delaware", houston: "Houston" }[loc] || loc;
-        openLocationNotesModal(loc, label);
+        // Namespaced so this never collides with the real board pages' own
+        // notes (which use the bare location key, e.g. "atlanta") — this
+        // page gets its own separate row per location instead.
+        openLocationNotesModal(`accounting-${loc}`, `Accounting — ${label}`);
       });
       on("ln-close", "click", closeLocationNotesModal);
       on("ln-cancel", "click", closeLocationNotesModal);
