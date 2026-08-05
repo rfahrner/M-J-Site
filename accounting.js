@@ -23,6 +23,14 @@ let accountingRecords = [];
 
   let acctTripsByShiftId = {}; // source_shift_id -> [trips], used for the Delaware "Routes" column
 
+  // accounting_id -> [route rows from loads_accounting_routes], sorted by
+  // route_number. Powers both the new Atlanta "Routes" column and the
+  // per-route Total Miles / Total Stops breakdown everywhere. There's no
+  // real foreign key back to loads_trips here (route_id/trip_id are just
+  // text snapshots taken when the shift was completed), so clicking a
+  // route chip has to match by that text — see openLoadDetailsFromAccounting.
+  let acctRoutesByAccountingId = {};
+
   // loadboard.js's openLoadDetailsFromAccounting() needs to look up a
   // record from this module-private array — this is the sanctioned way
   // in, rather than exporting the array itself.
@@ -47,6 +55,21 @@ let accountingRecords = [];
         });
       }
     }
+
+    const accountingIds = accountingRecords.map((r) => r.id);
+    if (accountingIds.length) {
+      const { data: routes, error: routesErr } = await supabaseClient.from(ACCOUNTING_ROUTES_TABLE).select("*").in("accounting_id", accountingIds);
+      if (routesErr) {
+        console.error("Failed to load accounting routes:", routesErr);
+      } else {
+        acctRoutesByAccountingId = {};
+        (routes || [])
+          .sort((a, b) => (a.route_number || 0) - (b.route_number || 0))
+          .forEach((r) => {
+            (acctRoutesByAccountingId[r.accounting_id] = acctRoutesByAccountingId[r.accounting_id] || []).push(r);
+          });
+      }
+    }
   }
 
   
@@ -59,6 +82,41 @@ let accountingRecords = [];
       return `<button type="button" class="trip-chip ${cls}" data-open-acct-load="${rec.id}" data-open-acct-trip="${t.id}" title="Open this route's details">${escapeHtml(label)}</button>`;
     }).join(" ");
   }
+
+  // Atlanta's own Routes column — sourced from loads_accounting_routes
+  // rather than loads_trips (Delaware's source), since that's where each
+  // route's Cost/Revenue Level calc actually lives. Same click-to-open
+  // pattern, but has to match by route_id TEXT rather than a trip dbId —
+  // see the note by acctRoutesByAccountingId above.
+  export function acctRouteIdsHtml(rec) {
+    const routes = acctRoutesByAccountingId[rec.id];
+    if (!routes || !routes.length) return `<span class="subtext" style="font-size:11px;">—</span>`;
+    return `<div style="display:flex; flex-direction:column; gap:2px; align-items:flex-start;">
+      ${routes.map((r) => {
+        const label = r.route_id || r.trip_id || "—";
+        return `<button type="button" class="trip-chip" data-open-acct-load="${rec.id}" data-open-acct-route-text="${escapeHtml(r.route_id || "")}" title="Open this route's details">${escapeHtml(label)}</button>`;
+      }).join("")}
+    </div>`;
+  }
+
+  // Per-route Miles / Stops, stacked to line up visually with the Routes
+  // column's own stacked chips (same array, same order). Falls back to
+  // the old single aggregate number when there's no per-route data on
+  // file for this load (older/unrecoverable rows, or a shift with zero
+  // real routes).
+  export function acctMilesStopsHtml(rec) {
+    const routes = acctRoutesByAccountingId[rec.id];
+    if (!routes || !routes.length) {
+      return {
+        miles: escapeHtml(rec.total_miles != null ? String(rec.total_miles) : "—"),
+        stops: escapeHtml(rec.total_stops != null ? String(rec.total_stops) : "—"),
+      };
+    }
+    const miles = `<div style="display:flex; flex-direction:column; gap:2px;">${routes.map((r) => `<div>${escapeHtml(r.miles != null ? String(r.miles) : "—")}</div>`).join("")}</div>`;
+    const stops = `<div style="display:flex; flex-direction:column; gap:2px;">${routes.map((r) => `<div>${escapeHtml(r.stops != null ? String(r.stops) : "—")}</div>`).join("")}</div>`;
+    return { miles, stops };
+  }
+
   export function fmtMoney(n) { return n == null ? "—" : `$${Number(n).toFixed(2)}`; }
 
   const LOCATIONS_WITH_LEVELS = ["atlanta"]; // only these use Cost/Revenue Level tiers — everyone else has a set rate
@@ -76,11 +134,12 @@ let accountingRecords = [];
       <th>Driver</th>
       <th>MC</th>
       ${showLevels ? `<th>Cost Level</th><th>Revenue Level</th>` : ""}
+      ${showLevels ? `<th>Routes</th>` : ""}
       ${showRoutesInstead ? `<th>Routes</th>` : ""}
       <th>Total Miles</th>
       <th>Total Stops</th>
-      ${showRoutesInstead ? "" : `<th>Total Cost</th><th>Total Revenue</th>${showFsc ? "<th>FSC Payment</th>" : ""}`}
-      <th>Total Carrier Pay</th>
+      <th>Carrier Rate</th>
+      ${showRoutesInstead ? "" : `<th>Customer Rate</th>${showFsc ? "<th>FSC Payment</th>" : ""}`}
       <th>Day Type</th>
       <th>Status</th>
     </tr>`;
@@ -93,6 +152,7 @@ let accountingRecords = [];
     const levelOptions = (selected) => [1, 2, 3, 4].map((n) => `<option value="${n}" ${n === selected ? "selected" : ""}>${n}${n === 4 ? " (Market)" : ""}</option>`).join("");
     const statusOptions = ["active", "released"].map((s) => `<option value="${s}" ${s === rec.status ? "selected" : ""}>${s[0].toUpperCase() + s.slice(1)}</option>`).join("");
     const dayTypeOptions = ["weekday", "weekend", "holiday"].map((d) => `<option value="${d}" ${d === (rec.day_type || "weekday") ? "selected" : ""}>${d[0].toUpperCase() + d.slice(1)}</option>`).join("");
+    const ms = acctMilesStopsHtml(rec);
     return `<tr id="acct-${rec.id}">
       <td>${escapeHtml(rec.shift_date)}</td>
       <td>${rec.aljex_load_number ? `<button type="button" class="cell-link-btn" style="width:auto; padding:2px 10px;" data-open-acct-load="${rec.id}">${escapeHtml(rec.aljex_load_number)} ↗</button>` : "—"}</td>
@@ -101,11 +161,17 @@ let accountingRecords = [];
       ${showLevels ? `
       <td><select class="cell-input" data-action="acct-cost-level" data-id="${rec.id}">${levelOptions(rec.cost_level)}</select></td>
       <td><select class="cell-input" data-action="acct-revenue-level" data-id="${rec.id}">${levelOptions(rec.revenue_level)}</select></td>` : ""}
+      ${showLevels ? `<td>${acctRouteIdsHtml(rec)}</td>` : ""}
       ${showRoutesInstead ? `<td>${acctRoutesChipsHtml(rec)}</td>` : ""}
-      <td>${escapeHtml(rec.total_miles != null ? String(rec.total_miles) : "—")}</td>
-      <td>${escapeHtml(rec.total_stops != null ? String(rec.total_stops) : "—")}</td>
-      ${showRoutesInstead ? "" : `<td>${fmtMoney(rec.total_cost)}</td><td>${fmtMoney(rec.total_revenue)}</td>${showFsc ? `<td>${fmtMoney(rec.fsc_payment)}</td>` : ""}`}
-      <td><input class="cell-input" style="width:90px;" data-action="acct-carrier-pay" data-id="${rec.id}" value="${rec.total_carrier_pay != null ? rec.total_carrier_pay : ""}"></td>
+      <td>${ms.miles}</td>
+      <td>${ms.stops}</td>
+      <td>
+        <div style="display:flex; align-items:center; gap:2px;">
+          <span class="subtext">$</span>
+          <input class="cell-input" style="width:78px;" data-action="acct-carrier-pay" data-id="${rec.id}" value="${rec.total_carrier_pay != null ? Number(rec.total_carrier_pay).toFixed(2) : ""}">
+        </div>
+      </td>
+      ${showRoutesInstead ? "" : `<td>${fmtMoney(rec.total_revenue)}</td>${showFsc ? `<td>${fmtMoney(rec.fsc_payment)}</td>` : ""}`}
       <td><select class="cell-input" data-action="acct-day-type" data-id="${rec.id}">${dayTypeOptions}</select></td>
       <td><select class="cell-input" data-action="acct-status" data-id="${rec.id}">${statusOptions}</select></td>
     </tr>`;
@@ -127,26 +193,25 @@ let accountingRecords = [];
     const showLevels = LOCATIONS_WITH_LEVELS.includes(loc);
     const showRoutesInstead = LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST.includes(loc);
     const showFsc = !showRoutesInstead && !LOCATIONS_WITHOUT_FSC.includes(loc);
-    const colspan = (showLevels ? (showFsc ? 13 : 12) : (showRoutesInstead ? 9 : (showFsc ? 11 : 10))) + 1;
-    body.innerHTML = filtered.length
+    const colspan = (showLevels ? (showFsc ? 13 : 12) : (showRoutesInstead ? 9 : (showFsc ? 10 : 9))) + 1;
+      body.innerHTML = filtered.length
       ? filtered.map(accountingRowHtml).join("")
       : `<tr><td colspan="${colspan}" class="subtext" style="padding:16px;">No completed loads ${state.acctDateFilter ? "for this day" : ""} here yet — mark a shift complete on the ${loc} board and it'll show up here.</td></tr>`;
     renderDriverStatsTable();
   }
 
-  export function renderDriverStatsTable() {
+export function renderDriverStatsTable() {
     const body = $("#accounting-driver-table-body");
     if (!body) return;
     const filtered = getFilteredAccountingRecords();
     const byDriver = {};
     filtered.forEach((r) => {
       const key = r.driver_name_text || "(no driver on file)";
-      if (!byDriver[key]) byDriver[key] = { name: key, loads: 0, miles: 0, stops: 0, cost: 0, revenue: 0, carrierPay: 0 };
+      if (!byDriver[key]) byDriver[key] = { name: key, loads: 0, miles: 0, stops: 0, revenue: 0, carrierPay: 0 };
       const d = byDriver[key];
       d.loads += 1;
       d.miles += Number(r.total_miles) || 0;
       d.stops += Number(r.total_stops) || 0;
-      d.cost += Number(r.total_cost) || 0;
       d.revenue += Number(r.total_revenue) || 0;
       d.carrierPay += Number(r.total_carrier_pay) || 0;
     });
@@ -157,12 +222,11 @@ let accountingRecords = [];
           <td>${d.loads}</td>
           <td>${d.miles.toFixed(0)}</td>
           <td>${d.stops.toFixed(0)}</td>
-          <td>${fmtMoney(d.cost)}</td>
-          <td>${fmtMoney(d.revenue)}</td>
           <td>${fmtMoney(d.carrierPay)}</td>
+          <td>${fmtMoney(d.revenue)}</td>
           <td>${fmtMoney(d.loads ? d.carrierPay / d.loads : 0)}</td>
         </tr>`).join("")
-      : `<tr><td colspan="8" class="subtext" style="padding:16px;">No completed loads here yet.</td></tr>`;
+      : `<tr><td colspan="7" class="subtext" style="padding:16px;">No completed loads here yet.</td></tr>`;
   }
 
   export function switchAcctLocationTab(loc) {
@@ -338,9 +402,16 @@ let accountingRecords = [];
           }, SAVE_DEBOUNCE_MS);
         }
       });
+      table.addEventListener("focusout", (e) => {
+        const t = e.target;
+        if (t.dataset.action === "acct-carrier-pay" && t.value !== "") {
+          const num = Number(t.value);
+          if (!isNaN(num)) t.value = num.toFixed(2);
+        }
+      });
       table.addEventListener("click", (e) => {
         const openBtn = e.target.closest("[data-open-acct-load]");
-        if (openBtn) openLoadDetailsFromAccounting(openBtn.dataset.openAcctLoad, openBtn.dataset.openAcctTrip || null);
+        if (openBtn) openLoadDetailsFromAccounting(openBtn.dataset.openAcctLoad, openBtn.dataset.openAcctTrip || null, openBtn.dataset.openAcctRouteText || null);
       });
     }
 

@@ -2954,27 +2954,30 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
 
   export let loadDetailsState = null; // { rowId, activeTab, attachments, history }
 
-  export async function openLoadDetailsFromAccounting(accountingRecordId, tripDbId) {
-    const acctRec = getAccountingRecordById(accountingRecordId);
-    if (!acctRec) return;
-    if (!acctRec.source_shift_id) { setDriverSyncStatus("This load doesn't have a linked board record to open (likely a Houston load).", "error"); return; }
-    if (!supabaseClient) return;
-    try {
-      const { data: shiftRows, error: shiftErr } = await supabaseClient.from(SHIFTS_TABLE).select("*").eq("id", acctRec.source_shift_id);
-      if (shiftErr || !shiftRows || !shiftRows[0]) throw shiftErr || new Error("Load not found");
-      const row = shiftFromDbRow(shiftRows[0]);
-      const { data: tripRows } = await supabaseClient.from(TRIPS_TABLE).select("*").eq("shift_id", row.dbId);
-      const sortedTrips = (tripRows || []).sort((a, b) => a.trip_number - b.trip_number).map(tripFromDbRow);
-      row.trips = sortedTrips.length ? sortedTrips : [blankTrip()];
-      standaloneLoadedRows[row.id] = row;
-      state.activeLocation = row.location || state.activeLocation;
-      refreshDriverDatalist();
-      const targetTrip = tripDbId ? row.trips.find((t) => String(t.dbId) === String(tripDbId)) : null;
-      await openLoadDetailsModal(row.id, targetTrip ? targetTrip.id : null);
-    } catch (e) {
-      console.error("openLoadDetailsFromAccounting failed:", e);
-      setDriverSyncStatus(`Couldn't open this load (${e.message || e}).`, "error");
-    }
+  
+
+export async function openLoadDetailsFromAccounting(accountingRecordId, tripDbId, routeIdText) {
+  const acctRec = getAccountingRecordById(accountingRecordId);
+  if (!acctRec) return;
+  if (!acctRec.source_shift_id) { setDriverSyncStatus("This load doesn't have a linked board record to open (likely a Houston load).", "error"); return; }
+  if (!supabaseClient) return;
+  try {
+    const { data: shiftRows, error: shiftErr } = await supabaseClient.from(SHIFTS_TABLE).select("*").eq("id", acctRec.source_shift_id);
+    if (shiftErr || !shiftRows || !shiftRows[0]) throw shiftErr || new Error("Load not found");
+    const row = shiftFromDbRow(shiftRows[0]);
+    const { data: tripRows } = await supabaseClient.from(TRIPS_TABLE).select("*").eq("shift_id", row.dbId);
+    const sortedTrips = (tripRows || []).sort((a, b) => a.trip_number - b.trip_number).map(tripFromDbRow);
+    row.trips = sortedTrips.length ? sortedTrips : [blankTrip()];
+    standaloneLoadedRows[row.id] = row;
+    state.activeLocation = row.location || state.activeLocation;
+    refreshDriverDatalist();
+    let targetTrip = tripDbId ? row.trips.find((t) => String(t.dbId) === String(tripDbId)) : null;
+    if (!targetTrip && routeIdText) targetTrip = row.trips.find((t) => String(t.routeId || "").trim() === String(routeIdText).trim());
+    await openLoadDetailsModal(row.id, targetTrip ? targetTrip.id : null);
+  } catch (e) {
+    console.error("openLoadDetailsFromAccounting failed:", e);
+    setDriverSyncStatus(`Couldn't open this load (${e.message || e}).`, "error");
+  }
   }
 
   // Opens a load straight from the Driver Profile's History tab (PRO#/
@@ -3011,43 +3014,49 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
   }
 
   async function openLoadDetailsModal(rowId, jumpToTripId, forceTab) {
-    const found = findRowAnywhere(rowId);
-    const modal = $("#modal-load-details");
-    if (!found || !modal) return;
-    const row = found.row;
-    loadDetailsState = {
-      rowId,
-      activeTab: forceTab || (jumpToTripId ? `trip-${jumpToTripId}` : "overview"),
-      attachments: [],
-      history: [],
-      stopsByTrip: {}, // trip.id (local) -> [{stopNumber, timeIn, timeOut, dbId}]
-      editMode: null, // "overview" | trip.id | null
-      editDraft: null, // scratch copy of the fields being edited, discarded on Cancel
-    };
-    $("#ld-title").textContent = `Load ${row.proNumber || "(no PRO# yet)"}`;
-    modal.classList.remove("hidden");
-    renderLoadDetailsTabs();
+  const found = findRowAnywhere(rowId);
+  const modal = $("#modal-load-details");
+  if (!found || !modal) return;
+  const row = found.row;
+  loadDetailsState = {
+    rowId,
+    activeTab: forceTab || (jumpToTripId ? `trip-${jumpToTripId}` : "overview"),
+    attachments: [],
+    history: [],
+    stopsByTrip: {},
+    editMode: null,
+    editDraft: null,
+  };
+  const openedForRowId = rowId; // snapshot — guards against a stale async response clobbering a newer/closed state below
+  $("#ld-title").textContent = `Load ${row.proNumber || "(no PRO# yet)"}`;
+  modal.classList.remove("hidden");
+  renderLoadDetailsTabs();
 
-    if (supabaseClient && row.dbId) {
-      const tripDbIds = row.trips.filter((t) => t.dbId).map((t) => t.dbId);
-      const [{ data: attachments }, { data: history }, stopsResult] = await Promise.all([
-        supabaseClient.from("load_attachments").select("*").eq("shift_id", row.dbId),
-        supabaseClient.from("load_change_history").select("*").eq("shift_id", row.dbId),
-        tripDbIds.length ? supabaseClient.from("trip_stops").select("*").in("trip_id", tripDbIds) : Promise.resolve({ data: [] }),
-      ]).catch(() => [{ data: [] }, { data: [] }, { data: [] }]);
-      loadDetailsState.attachments = attachments || [];
-      loadDetailsState.history = (history || []).sort((a, b) => (a.changed_at < b.changed_at ? 1 : -1));
-      const stopRows = stopsResult.data || [];
-      row.trips.forEach((t) => {
-        if (!t.dbId) return;
-        loadDetailsState.stopsByTrip[t.id] = stopRows
-          .filter((s) => s.trip_id === t.dbId)
-          .sort((a, b) => a.stop_number - b.stop_number)
-          .map((s) => ({ dbId: s.id, stopNumber: s.stop_number, timeIn: s.time_in || "", timeOut: s.time_out || "" }));
-      });
-      renderLoadDetailsTabContent();
-    }
+  if (supabaseClient && row.dbId) {
+    const tripDbIds = row.trips.filter((t) => t.dbId).map((t) => t.dbId);
+    const [{ data: attachments }, { data: history }, stopsResult] = await Promise.all([
+      supabaseClient.from("load_attachments").select("*").eq("shift_id", row.dbId),
+      supabaseClient.from("load_change_history").select("*").eq("shift_id", row.dbId),
+      tripDbIds.length ? supabaseClient.from("trip_stops").select("*").in("trip_id", tripDbIds) : Promise.resolve({ data: [] }),
+    ]).catch(() => [{ data: [] }, { data: [] }, { data: [] }]);
+    // The modal may have been closed, or reopened for a different load,
+    // while these requests were still in flight — writing into a stale
+    // (or now-null) loadDetailsState here is exactly what threw "Cannot
+    // set properties of null". Bail out silently if either happened.
+    if (!loadDetailsState || loadDetailsState.rowId !== openedForRowId) return;
+    loadDetailsState.attachments = attachments || [];
+    loadDetailsState.history = (history || []).sort((a, b) => (a.changed_at < b.changed_at ? 1 : -1));
+    const stopRows = stopsResult.data || [];
+    row.trips.forEach((t) => {
+      if (!t.dbId) return;
+      loadDetailsState.stopsByTrip[t.id] = stopRows
+        .filter((s) => s.trip_id === t.dbId)
+        .sort((a, b) => a.stop_number - b.stop_number)
+        .map((s) => ({ dbId: s.id, stopNumber: s.stop_number, timeIn: s.time_in || "", timeOut: s.time_out || "" }));
+    });
+    renderLoadDetailsTabContent();
   }
+}
 
   export function closeLoadDetailsModal() {
     $("#modal-load-details").classList.add("hidden");

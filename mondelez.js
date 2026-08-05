@@ -38,9 +38,9 @@ export const MONDELEZ_IMAGE_BUCKET = "mondelez-routes";
 // origin DC that dispatches them (Morris), since a load only lives on
 // one tab. Say the word if any of these should split further.
 export const MONDELEZ_LOCATIONS = [
+  { key: "westchester", label: "West Chester" },
   { key: "morris", label: "Morris" },
   { key: "addison", label: "Addison" },
-  { key: "westchester", label: "West Chester" },
   { key: "indianapolis", label: "Indianapolis" },
   { key: "louisville", label: "Louisville" },
   { key: "spokane", label: "Spokane" },
@@ -55,7 +55,7 @@ const MONDELEZ_LOCATION_KEYS = new Set(MONDELEZ_LOCATIONS.map((l) => l.key));
 export const mondelezState = {
   rowsByDate: {},          // dateKey -> Row[] (every location, filtered client-side for display)
   datesWithData: new Set(),
-  activeTab: "morris",     // a location key, or "combined"
+  activeTab: "westchester", // a location key, or "combined"
 };
 
 let mondelezRateSettings = null; // { [locationKey]: { daily_rate, stop_rate, over_mileage_threshold, over_mileage_rate } }
@@ -349,21 +349,20 @@ function mondelezRowHtml(row) {
     </td>
     ${showLocationCol ? `<td class="col-mdz-location"><span class="static-text">${escapeHtml(mondelezLocationLabel(row.location))}</span></td>` : ""}
     <td class="pin pin-pro${row.shiftComplete ? " shift-complete-tint" : ""}"><div class="cell-with-link"><input class="cell-input" placeholder="Aljex#" data-mdz-row="${row.id}" data-mdz-field="aljexNumber" value="${escapeHtml(row.aljexNumber)}">${row.aljexNumber ? `<button type="button" class="cell-link-btn" data-open-mdz-load="${row.id}" title="Open load details">↗</button>` : ""}</div></td>
-    <td class="col-mdz-group"><input class="cell-input" placeholder="Delivery Group" data-mdz-row="${row.id}" data-mdz-field="deliveryGroup" value="${escapeHtml(row.deliveryGroup)}"></td>
     <td class="pin pin-driver">
       <div class="driver-name-wrap"><input class="cell-input" data-driver-ac="true" placeholder="Type driver name…" data-mdz-row="${row.id}" data-mdz-field="driverName" value="${escapeHtml(displayName)}"></div>
     </td>
     <td class="col-cell"><span class="static-text">${escapeHtml(pick(drv && drv.phone, ""))}</span></td>
     <td class="col-shiftStart"><input class="cell-input small" style="width:52px;" placeholder="--:--" data-mdz-row="${row.id}" data-mdz-field="startTime" value="${escapeHtml(row.startTime)}"></td>
+    <td class="col-mdz-group"><input class="cell-input small" style="width:88px;" placeholder="DG#" data-mdz-row="${row.id}" data-mdz-field="deliveryGroup" value="${escapeHtml(row.deliveryGroup)}"></td>
     <td class="col-mdz-driverapp"><input class="cell-input small" data-mdz-row="${row.id}" data-mdz-field="driverAppId" inputmode="numeric" maxlength="9" placeholder="9-digit ID" value="${escapeHtml(row.driverAppId)}"></td>
     <td class="col-mdz-trailer"><input class="cell-input small" data-mdz-row="${row.id}" data-mdz-field="trailerNumber" value="${escapeHtml(row.trailerNumber)}"></td>
     <td class="col-mdz-trailer"><input class="cell-input small" placeholder="Return #" data-mdz-row="${row.id}" data-mdz-field="returnTrailerNumber" value="${escapeHtml(row.returnTrailerNumber)}"></td>
     <td class="col-mdz-miles"><input class="cell-input small" style="width:52px;" inputmode="decimal" data-mdz-row="${row.id}" data-mdz-field="miles" value="${escapeHtml(row.miles)}"></td>
     <td class="col-mdz-stops"><input class="cell-input small" style="width:40px;" inputmode="numeric" data-mdz-row="${row.id}" data-mdz-field="stopCount" value="${escapeHtml(row.stopCount)}"></td>
-    <td class="col-mdz-carrierpay"><input class="cell-input small" style="width:64px;" placeholder="Carrier Pay" data-mdz-row="${row.id}" data-mdz-field="carrierPay" value="${escapeHtml(row.carrierPay)}"></td>
     <td class="col-mdz-fsc"><input class="cell-input small" style="width:52px;" placeholder="FSC" data-mdz-row="${row.id}" data-mdz-field="fsc" value="${escapeHtml(row.fsc)}"></td>
-    <td class="col-mdz-additional"><input class="cell-input small" style="width:60px;" placeholder="Detention/etc" data-mdz-row="${row.id}" data-mdz-field="additionalCharges" value="${escapeHtml(row.additionalCharges)}"></td>
     <td class="col-mdz-revenue"><input class="cell-input small" style="width:70px; font-weight:800;" data-mdz-row="${row.id}" data-mdz-field="revenueTotal" value="${escapeHtml(row.revenueTotal)}" title="${row.revenueManual ? "Manually overridden" : "Auto-calculated"}"></td>
+    <td class="col-mdz-carrierpay"><input class="cell-input small" style="width:64px;" placeholder="Carrier Pay" data-mdz-row="${row.id}" data-mdz-field="carrierPay" value="${escapeHtml(row.carrierPay)}"></td>
     <td class="col-mdz-notes"><input class="cell-input" placeholder="Status / Notes" data-mdz-row="${row.id}" data-mdz-field="notes" value="${escapeHtml(row.notes)}"></td>
     <td class="col-mdz-image">
       <div class="mdz-image-dropzone" tabindex="0" data-action="image-dropzone" data-mdz-row="${row.id}" title="Click to browse, or drag/paste an image here">
@@ -390,24 +389,23 @@ function renderMondelezTable() {
     <th class="pin pin-text"></th>
     ${showLocationCol ? `<th class="col-mdz-location">Location</th>` : ""}
     <th class="pin pin-pro">Aljex #</th>
-    <th class="col-mdz-group">Delivery Group</th>
     <th class="pin pin-driver">Driver</th>
     <th class="col-cell">Cell</th>
     <th class="col-shiftStart">Start</th>
+    <th class="col-mdz-group">DG#</th>
     <th class="col-mdz-driverapp">Driver App ID</th>
     <th class="col-mdz-trailer">Trailer #</th>
     <th class="col-mdz-trailer">Return Trailer #</th>
     <th class="col-mdz-miles">Miles</th>
     <th class="col-mdz-stops">Stops</th>
-    <th class="col-mdz-carrierpay">Carrier Pay</th>
     <th class="col-mdz-fsc">FSC</th>
-    <th class="col-mdz-additional">Additional</th>
     <th class="col-mdz-revenue">Revenue</th>
+    <th class="col-mdz-carrierpay">Carrier Pay</th>
     <th class="col-mdz-notes">Status / Notes</th>
     <th class="col-mdz-image">Route Image</th>
     <th class="col-availRemove"></th>
   </tr></thead>`;
-  const addRowHtml = `<tr class="quick-add-row"><td colspan="${showLocationCol ? 20 : 19}"><button type="button" class="quick-add-btn" id="btn-mdz-add-row"><span class="quick-add-btn-label">+ Add Row</span></button></td></tr>`;
+  const addRowHtml = `<tr class="quick-add-row"><td colspan="${showLocationCol ? 19 : 18}"><button type="button" class="quick-add-btn" id="btn-mdz-add-row"><span class="quick-add-btn-label">+ Add Row</span></button></td></tr>`;
   $("#mondelez-table").innerHTML = thead + `<tbody>${displayRows.map(mondelezRowHtml).join("")}${addRowHtml}</tbody>`;
   const emptyState = $("#mondelez-empty-state");
   if (emptyState) emptyState.classList.toggle("hidden", rows.length > 0);
