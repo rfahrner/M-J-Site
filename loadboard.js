@@ -2000,15 +2000,22 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
   const editingSessionId = uid("session"); // distinguishes our own broadcasts from other tabs' so we don't highlight our own row
 
   function setupRealtimeSync(locationKey) {
-    if (!supabaseClient) return;
-    const channel = supabaseClient.channel(`board-${locationKey}`);
-    channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_shifts", filter: `location=eq.${locationKey}` }, handleRealtimeShiftChange);
-    channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_trips" }, handleRealtimeTripChange);
-    channel.on("postgres_changes", { event: "*", schema: "public", table: "atlanta_drivers" }, handleRealtimeDriverChange);
-    channel.on("broadcast", { event: "row-editing" }, ({ payload }) => handleRemoteRowEditing(payload));
-    channel.subscribe();
-    boardChannel = channel;
-  }
+  if (!supabaseClient) return;
+  const channel = supabaseClient.channel(`board-${locationKey}`);
+  channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_shifts", filter: `location=eq.${locationKey}` }, handleRealtimeShiftChange);
+  channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_trips" }, handleRealtimeTripChange);
+  channel.on("postgres_changes", { event: "*", schema: "public", table: "atlanta_drivers" }, handleRealtimeDriverChange);
+  channel.on("broadcast", { event: "row-editing" }, ({ payload }) => handleRemoteRowEditing(payload));
+  channel.subscribe((status, err) => {
+    if (status === "SUBSCRIBED") {
+      console.log(`Realtime connected for board-${locationKey}`);
+    } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+      console.error(`Realtime subscription problem for board-${locationKey}:`, status, err);
+      setDriverSyncStatus("Live updates aren't connected right now — you may need to refresh to see changes from other dispatchers.", "error");
+    }
+  });
+  boardChannel = channel;
+}
 
   function setupDriverListRealtimeSync() {
     if (!supabaseClient) return;
