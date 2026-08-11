@@ -17,6 +17,7 @@ import { initAccountingPage, getAccountingRecordById } from './accounting.js';
 import { sendShiftToAccounting } from './accountingcalc.js';
 import { initHoustonBoardPage } from './houston.js';
 import { initMondelezPage } from './mondelez.js';
+import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRateBreakdown, effectiveTierRate, effectiveSetting, isTierOverridden, isSettingOverridden, isDriverTierOverridden, isDriverSettingOverridden, saveTierRate, saveSetting } from './boardrates.js';
 import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_MIN, PRE_SHIFT_CALL_FOLLOWUP_MIN, PRE_SHIFT_ESCALATION_MIN, LAST_STOP_RETURN_FOLLOWUP_MIN } from './alerts.js';
 import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveTierRate, effectiveSetting, isTierOverridden, isSettingOverridden, isDriverTierOverridden, isDriverSettingOverridden } from './boardrates.js';
 
@@ -76,6 +77,8 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     // Not in the latest specified order -- kept available (hidden by
     // default) rather than deleted, since removal wasn't explicit. Flagged
     // in chat; say the word if any of these should actually go.
+    { key: "timeToFinalStop", label: "Time to Last Stop", type: "text", small: true, inputmode: "decimal", group: "estimate" },
+    { key: "timeToDc",        label: "Time to DC",        type: "text", small: true, inputmode: "decimal", group: "estimate" },
     { key: "backhaulType",           label: "B/Haul Type",         type: "text", group: "backhaul" },
     { key: "etaToFinalStop",         label: "ETA to Final Stop",   type: "time", group: "estimate" },
     { key: "estRouteComplete",       label: "Est Route Complete",  type: "time", group: "estimate" },
@@ -430,6 +433,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       route_est_hours: trip.routeEstHours !== "" && trip.routeEstHours != null ? Number(trip.routeEstHours) : null,
       time_to_final_stop: trip.timeToFinalStop || null,
       eta_to_final_stop: trip.etaToFinalStop || null,
+      time_to_dc: trip.timeToDc !== "" && trip.timeToDc != null ? Number(trip.timeToDc) : null,
       est_route_complete: trip.estRouteComplete || null,
       route_image_path: trip.routeImagePath || null,
     };
@@ -470,6 +474,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
       routeEstHours: dbRow.route_est_hours != null ? String(dbRow.route_est_hours) : "",
       timeToFinalStop: dbRow.time_to_final_stop || "",
       etaToFinalStop: dbRow.eta_to_final_stop || "",
+      timeToDc: dbRow.time_to_dc != null ? String(dbRow.time_to_dc) : "",
       estRouteComplete: dbRow.est_route_complete || "",
       hasStopTimes: false, // computed client-side after loading, see ensureSheetLoaded — not a real DB column
       routeImagePath: dbRow.route_image_path || "",
@@ -1973,8 +1978,27 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     recalcRowCalcCellsInPlace(parentRow.id);
   }
 
+  // Handles inserts, updates, AND deletes for atlanta_drivers — deletes
+  // used to be silently ignored here (`if (payload.eventType === "DELETE")
+  // return;`), so removing a driver on one device never removed them from
+  // anyone else's state.drivers until they refreshed. Deletes carry the
+  // old row in payload.old (Supabase never sends payload.new for a DELETE),
+  // so that's what has to be matched against instead.
   export function handleRealtimeDriverChange(payload) {
-    if (payload.eventType === "DELETE") return;
+    if (payload.eventType === "DELETE") {
+      const oldDriver = payload.old;
+      if (!oldDriver) return;
+      const idx = state.drivers.findIndex((d) => String(d.id) === String(oldDriver.id));
+      if (idx !== -1) state.drivers.splice(idx, 1);
+      refreshDriverDatalist();
+      if (currentFile() === "driverlist.html") renderDriverList();
+      else if (state.activeLocation) {
+        const restoreFocus = captureFocusForRerender();
+        renderBoardTable(); // a deleted driver may still be showing on a row elsewhere
+        restoreFocus();
+      }
+      return;
+    }
     const dbDriver = payload.new;
     if (!dbDriver) return;
     const idx = state.drivers.findIndex((d) => String(d.id) === String(dbDriver.id));
@@ -2000,22 +2024,23 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
   const editingSessionId = uid("session"); // distinguishes our own broadcasts from other tabs' so we don't highlight our own row
 
   function setupRealtimeSync(locationKey) {
-  if (!supabaseClient) return;
-  const channel = supabaseClient.channel(`board-${locationKey}`);
-  channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_shifts", filter: `location=eq.${locationKey}` }, handleRealtimeShiftChange);
-  channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_trips" }, handleRealtimeTripChange);
-  channel.on("postgres_changes", { event: "*", schema: "public", table: "atlanta_drivers" }, handleRealtimeDriverChange);
-  channel.on("broadcast", { event: "row-editing" }, ({ payload }) => handleRemoteRowEditing(payload));
-  channel.subscribe((status, err) => {
-    if (status === "SUBSCRIBED") {
-      console.log(`Realtime connected for board-${locationKey}`);
-    } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
-      console.error(`Realtime subscription problem for board-${locationKey}:`, status, err);
-      setDriverSyncStatus("Live updates aren't connected right now — you may need to refresh to see changes from other dispatchers.", "error");
-    }
-  });
-  boardChannel = channel;
-}
+    if (!supabaseClient) return;
+    const channel = supabaseClient.channel(`board-${locationKey}`);
+    channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_shifts", filter: `location=eq.${locationKey}` }, handleRealtimeShiftChange);
+    channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_trips" }, handleRealtimeTripChange);
+    channel.on("postgres_changes", { event: "*", schema: "public", table: "atlanta_drivers" }, handleRealtimeDriverChange);
+    channel.on("broadcast", { event: "row-editing" }, ({ payload }) => handleRemoteRowEditing(payload));
+    channel.subscribe((status, err) => {
+      if (status === "SUBSCRIBED") {
+        console.log(`Realtime connected for board-${locationKey}`);
+        setDriverSyncStatus(""); // clears any earlier "not connected" banner now that it's back
+      } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+        console.error(`Realtime subscription problem for board-${locationKey}:`, status, err);
+        setDriverSyncStatus("Live updates aren't connected right now — you may need to refresh to see changes from other dispatchers.", "error");
+      }
+    });
+    boardChannel = channel;
+  }
 
   function setupDriverListRealtimeSync() {
     if (!supabaseClient) return;
@@ -2030,24 +2055,46 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
      focused, and un-highlights shortly after they leave. A repeating
      ping while focus stays in the row means a dropped "stopped editing"
      event (tab closed, network hiccup) can't leave a row stuck
-     highlighted forever — the receiving side times it out on its own. */
-  let editingRowId = null;
-  let editingPingInterval = null;
-  const remoteEditingTimeouts = new Map(); // rowId -> timeout handle
+     highlighted forever — the receiving side times it out on its own.
 
-  function broadcastEditingState(rowId, editing) {
-    if (!boardChannel) return;
-    boardChannel.send({ type: "broadcast", event: "row-editing", payload: { rowId, editing, from: editingSessionId } });
+     Broadcasts the row's real database id (dbId), not the local DOM id —
+     each browser session generates its own local ids independently
+     (uid("row") just counts up from 1000 fresh every load), so the same
+     database row can easily have completely different local ids on two
+     different devices. Broadcasting the local id meant the other side's
+     document.getElementById() could never find a match — this never
+     actually worked across devices, only within a single tab. dbId is
+     the one identifier both sides actually share. */
+  let editingRowId = null; // this session's own local DOM id for whichever row it's editing
+  let editingPingInterval = null;
+  const remoteEditingTimeouts = new Map(); // dbId -> timeout handle
+
+  // Same lookup shape as findRowAnywhere, but by database id instead of
+  // local DOM id — needed to translate an incoming broadcast's dbId back
+  // into whatever local row/DOM element this session happens to have it under.
+  function findRowByDbId(dbId) {
+    for (const k in state.sheets) {
+      const r = state.sheets[k].find((x) => x.dbId === dbId);
+      if (r) return r;
+    }
+    return null;
+  }
+
+  function broadcastEditingState(dbId, editing) {
+    if (!boardChannel || dbId == null) return;
+    boardChannel.send({ type: "broadcast", event: "row-editing", payload: { dbId, editing, from: editingSessionId } });
   }
 
   function handleRowFocusIn(e) {
     const tr = e.target.closest("tr[id]");
     if (!tr || !tr.id || tr.id === editingRowId) return;
+    const found = findRowAnywhere(tr.id);
+    if (!found || !found.row.dbId) return; // unsaved row — nothing stable to broadcast yet
     editingRowId = tr.id;
     tr.classList.add("is-being-edited"); // shows locally too — helps the person typing track which row they're in, same as everyone else sees
-    broadcastEditingState(tr.id, true);
+    broadcastEditingState(found.row.dbId, true);
     clearInterval(editingPingInterval);
-    editingPingInterval = setInterval(() => broadcastEditingState(tr.id, true), 4000);
+    editingPingInterval = setInterval(() => broadcastEditingState(found.row.dbId, true), 4000);
   }
 
   function handleRowFocusOut(e) {
@@ -2055,20 +2102,25 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     if (!tr || tr.id !== editingRowId) return;
     if (e.relatedTarget && tr.contains(e.relatedTarget)) return; // focus just moved to another field in the same row
     tr.classList.remove("is-being-edited");
-    broadcastEditingState(tr.id, false);
+    const found = findRowAnywhere(tr.id);
+    if (found && found.row.dbId) broadcastEditingState(found.row.dbId, false);
     editingRowId = null;
     clearInterval(editingPingInterval);
   }
 
   function handleRemoteRowEditing(payload) {
     if (!payload || payload.from === editingSessionId) return; // ignore our own broadcasts
-    const { rowId, editing } = payload;
-    const tr = document.getElementById(rowId);
-    clearTimeout(remoteEditingTimeouts.get(rowId));
+    const { dbId, editing } = payload;
+    if (dbId == null) return;
+    const localRow = findRowByDbId(dbId);
+    if (!localRow) return; // this dbId isn't part of the currently-loaded day on this device
+    const tr = document.getElementById(localRow.id);
+    clearTimeout(remoteEditingTimeouts.get(dbId));
     if (editing) {
       if (tr) tr.classList.add("is-being-edited");
-      remoteEditingTimeouts.set(rowId, setTimeout(() => {
-        const el = document.getElementById(rowId);
+      remoteEditingTimeouts.set(dbId, setTimeout(() => {
+        const freshRow = findRowByDbId(dbId);
+        const el = freshRow ? document.getElementById(freshRow.id) : null;
         if (el) el.classList.remove("is-being-edited");
       }, 8000));
     } else if (tr) {
@@ -2549,7 +2601,15 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     }
   }
 
-  function toggleShiftComplete(rowId) {
+  async function unminimizeAllTrips(row) {
+    for (const trip of row.trips) {
+      if (!trip.minimized) continue;
+      trip.minimized = false;
+      await saveTripNow(row, trip, row.trips.indexOf(trip) + 1);
+    }
+  }
+
+  async function toggleShiftComplete(rowId) {
     const found = findRowAnywhere(rowId);
     if (!found) return;
     const row = found.row;
@@ -2559,14 +2619,61 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
         const names = open.map((t, i) => t.routeId || t.tripId || `Route ${i + 1}`).join(", ");
         if (!confirm(`This load still has ${open.length} trip(s) not closed out yet (${names}) — likely still waiting on paperwork. Send it to Accounting anyway?`)) return;
       }
-      openTimesheetModal(rowId, []); // required time sheet info gate — finalizeShiftCompletion runs after it's submitted
+      openTimesheetModal(rowId, []);
       return;
     }
-    // Un-completing stays instant — no time sheet re-check needed to walk it back
+    // Un-completing needs to bring the load back into active play — every
+    // trip has to un-minimize too, or the row renders with no editable
+    // route fields at all.
     row.shiftComplete = false;
     row.shiftCompleteAt = null;
-    saveShiftNow(row);
+    await saveShiftNow(row);
+    await unminimizeAllTrips(row);
     renderBoardTable();
+  }
+  /* ---------------- driver-assignment warning modal ----------------
+     Built via DOM injection rather than static HTML — works on every
+     page (Atlanta/Delaware/Building C for now) without needing the same
+     markup pasted into multiple HTML files. */
+  function showDriverAssignmentWarning(title, lines) {
+    const existing = document.getElementById("driver-warning-overlay");
+    if (existing) existing.remove();
+    const overlay = document.createElement("div");
+    overlay.className = "overlay";
+    overlay.id = "driver-warning-overlay";
+    overlay.innerHTML = `
+      <div class="modal">
+        <div class="modal-header">
+          <h3>${escapeHtml(title)}</h3>
+          <button class="modal-close" id="driver-warning-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          ${lines.map((l) => `<p style="margin:0 0 10px;">${l}</p>`).join("")}
+        </div>
+        <div class="modal-footer">
+          <button class="btn" id="driver-warning-ok">OK</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+    document.getElementById("driver-warning-close").addEventListener("click", close);
+    document.getElementById("driver-warning-ok").addEventListener("click", close);
+  }
+
+  // Fires whenever a real driver record gets assigned to a load anywhere
+  // on the board — flags a missing Trailer Interchange Agreement and/or
+  // missing Interchange Coverage (insurance) on that driver's profile.
+  function checkDriverComplianceWarning(driver) {
+    if (!driver) return;
+    const missing = [];
+    if (!driver.tia) missing.push("a Trailer Interchange Agreement");
+    if (driver.tiiAmount == null) missing.push("Interchange Coverage (insurance) on file");
+    if (!missing.length) return;
+    showDriverAssignmentWarning(
+      "Driver Missing Interchange Info",
+      [`${escapeHtml(driver.name)} is missing ${missing.join(" and ")}. Double check before dispatching this load.`]
+    );
   }
 
   // A driver showing up twice on the same day is usually a mistake, but
@@ -2578,10 +2685,88 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     if (!conflict) return;
     const drv = findDriver(driverId);
     const label = conflict.proNumber ? `PRO# ${conflict.proNumber}` : "another load";
-    alert(`${drv ? drv.name : "This driver"} is already scheduled today on ${label}.\n\nThat's fine if it's intentional — just flagging it in case it's not.`);
+    showDriverAssignmentWarning(
+      "Driver Already Scheduled Today",
+      [`${escapeHtml(drv ? drv.name : "This driver")} is already scheduled today on ${escapeHtml(label)}.`,
+       `That's fine if it's intentional — just flagging it in case it's not.`]
+    );
+  }
+  /* ---------------- Atlanta rate settings — minimizable modal ----------------
+     Same layout idea as Mondelez's inline rate panel, but as a modal
+     (injected via JS, no HTML changes needed) since Atlanta's board is
+     already dense. Edits board_rate_tiers/board_rate_settings directly —
+     the same tables the Load Details Rate panel and driver rate cards
+     already read from, so there's nothing new to keep in sync. */
+  function atlantaRateSettingsBodyHtml() {
+    const tiers = (getBoardRateTiers() && getBoardRateTiers().atlanta) || [];
+    const settings = (getBoardRateSettings() && getBoardRateSettings().atlanta) || {};
+    const box = (label, inputHtml) => `<fieldset class="rate-tier-box"><legend>${label}</legend>${inputHtml}</fieldset>`;
+    return `
+      <div class="subtext" style="margin-bottom:10px;">These are the Atlanta board's shared default rates — a load or driver with its own override still wins over these.</div>
+      <div class="rate-tier-grid" style="grid-template-columns: repeat(2, 1fr);">
+        ${tiers.map((t) => box(`${t.min}-${t.max}MI`, `<input type="number" step="0.01" data-atlanta-tier-id="${t.id}" value="${t.rate}">`)).join("")}
+        ${box("Over-tier ($/mi)", `<input type="number" step="0.01" data-atlanta-setting-key="over_tier_per_mile" value="${settings.over_tier_per_mile ?? 2.4}">`)}
+        ${box("Free stops", `<input type="number" step="1" data-atlanta-setting-key="stop_charge_free_stops" value="${settings.stop_charge_free_stops ?? 2}">`)}
+        ${box("$/extra stop", `<input type="number" step="0.01" data-atlanta-setting-key="stop_charge_per_stop" value="${settings.stop_charge_per_stop ?? 20}">`)}
+        ${box("TONU flat", `<input type="number" step="0.01" data-atlanta-setting-key="tonu_flat" value="${settings.tonu_flat ?? 150}">`)}
+      </div>`;
   }
 
-  async function deleteRow(rowId) {
+  function openAtlantaRateSettingsModal() {
+    const existing = document.getElementById("modal-atlanta-rate-settings");
+    if (existing) existing.remove();
+    const overlay = document.createElement("div");
+    overlay.className = "overlay";
+    overlay.id = "modal-atlanta-rate-settings";
+    overlay.innerHTML = `
+      <div class="modal">
+        <div class="modal-header">
+          <h3>Atlanta Rate Settings</h3>
+          <button class="modal-close" id="atl-rate-close">&times;</button>
+        </div>
+        <div class="modal-body" id="atl-rate-body">${atlantaRateSettingsBodyHtml()}</div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" id="atl-rate-minimize">Minimize</button>
+          <button class="btn" id="atl-rate-done">Done</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+    $("#atl-rate-close").addEventListener("click", close);
+    $("#atl-rate-done").addEventListener("click", close);
+    // Every box saves live as it's edited (see below), so Minimize and
+    // Done both just close the modal — nothing is lost either way.
+    $("#atl-rate-minimize").addEventListener("click", close);
+    overlay.addEventListener("change", async (e) => {
+      const t = e.target;
+      if (t.dataset.atlantaTierId) {
+        const ok = await saveTierRate(Number(t.dataset.atlantaTierId), Number(t.value));
+        setDriverSyncStatus(ok ? "Rate saved." : "Couldn't save that rate.", ok ? "success" : "error");
+        if (ok) renderBoardTable();
+      } else if (t.dataset.atlantaSettingKey) {
+        const ok = await saveSetting("atlanta", t.dataset.atlantaSettingKey, Number(t.value));
+        setDriverSyncStatus(ok ? "Setting saved." : "Couldn't save that setting.", ok ? "success" : "error");
+        if (ok) renderBoardTable();
+      }
+    });
+  }
+
+  function injectAtlantaRateSettingsButton() {
+    const infoBtn = $("#btn-page-info");
+    if (!infoBtn || document.getElementById("btn-atlanta-rate-settings")) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-ghost";
+    btn.id = "btn-atlanta-rate-settings";
+    btn.style.marginLeft = "8px";
+    btn.textContent = "💲 Rate Settings";
+    btn.addEventListener("click", openAtlantaRateSettingsModal);
+    infoBtn.insertAdjacentElement("afterend", btn);
+  }
+                                        
+
+  async function deleteRow(rowId) {                                                        
     const found = findRowAnywhere(rowId);
     if (!found) return;
     const row = found.row;
@@ -2961,30 +3146,35 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
 
   export let loadDetailsState = null; // { rowId, activeTab, attachments, history }
 
-  
-
-export async function openLoadDetailsFromAccounting(accountingRecordId, tripDbId, routeIdText) {
-  const acctRec = getAccountingRecordById(accountingRecordId);
-  if (!acctRec) return;
-  if (!acctRec.source_shift_id) { setDriverSyncStatus("This load doesn't have a linked board record to open (likely a Houston load).", "error"); return; }
-  if (!supabaseClient) return;
-  try {
-    const { data: shiftRows, error: shiftErr } = await supabaseClient.from(SHIFTS_TABLE).select("*").eq("id", acctRec.source_shift_id);
-    if (shiftErr || !shiftRows || !shiftRows[0]) throw shiftErr || new Error("Load not found");
-    const row = shiftFromDbRow(shiftRows[0]);
-    const { data: tripRows } = await supabaseClient.from(TRIPS_TABLE).select("*").eq("shift_id", row.dbId);
-    const sortedTrips = (tripRows || []).sort((a, b) => a.trip_number - b.trip_number).map(tripFromDbRow);
-    row.trips = sortedTrips.length ? sortedTrips : [blankTrip()];
-    standaloneLoadedRows[row.id] = row;
-    state.activeLocation = row.location || state.activeLocation;
-    refreshDriverDatalist();
-    let targetTrip = tripDbId ? row.trips.find((t) => String(t.dbId) === String(tripDbId)) : null;
-    if (!targetTrip && routeIdText) targetTrip = row.trips.find((t) => String(t.routeId || "").trim() === String(routeIdText).trim());
-    await openLoadDetailsModal(row.id, targetTrip ? targetTrip.id : null);
-  } catch (e) {
-    console.error("openLoadDetailsFromAccounting failed:", e);
-    setDriverSyncStatus(`Couldn't open this load (${e.message || e}).`, "error");
-  }
+  // Routes column click-through from the Accounting page — routeIdText is
+  // the third, optional way in: loads_accounting_routes has no real
+  // foreign key back to a specific loads_trips row (route_id/trip_id there
+  // are just text snapshots taken when the shift was completed), so when
+  // tripDbId isn't available (Atlanta's own Routes column, unlike
+  // Delaware's which does have a real trip dbId to work with), this falls
+  // back to matching on that text instead.
+  export async function openLoadDetailsFromAccounting(accountingRecordId, tripDbId, routeIdText) {
+    const acctRec = getAccountingRecordById(accountingRecordId);
+    if (!acctRec) return;
+    if (!acctRec.source_shift_id) { setDriverSyncStatus("This load doesn't have a linked board record to open (likely a Houston load).", "error"); return; }
+    if (!supabaseClient) return;
+    try {
+      const { data: shiftRows, error: shiftErr } = await supabaseClient.from(SHIFTS_TABLE).select("*").eq("id", acctRec.source_shift_id);
+      if (shiftErr || !shiftRows || !shiftRows[0]) throw shiftErr || new Error("Load not found");
+      const row = shiftFromDbRow(shiftRows[0]);
+      const { data: tripRows } = await supabaseClient.from(TRIPS_TABLE).select("*").eq("shift_id", row.dbId);
+      const sortedTrips = (tripRows || []).sort((a, b) => a.trip_number - b.trip_number).map(tripFromDbRow);
+      row.trips = sortedTrips.length ? sortedTrips : [blankTrip()];
+      standaloneLoadedRows[row.id] = row;
+      state.activeLocation = row.location || state.activeLocation;
+      refreshDriverDatalist();
+      let targetTrip = tripDbId ? row.trips.find((t) => String(t.dbId) === String(tripDbId)) : null;
+      if (!targetTrip && routeIdText) targetTrip = row.trips.find((t) => String(t.routeId || "").trim() === String(routeIdText).trim());
+      await openLoadDetailsModal(row.id, targetTrip ? targetTrip.id : null);
+    } catch (e) {
+      console.error("openLoadDetailsFromAccounting failed:", e);
+      setDriverSyncStatus(`Couldn't open this load (${e.message || e}).`, "error");
+    }
   }
 
   // Opens a load straight from the Driver Profile's History tab (PRO#/
@@ -3021,49 +3211,49 @@ export async function openLoadDetailsFromAccounting(accountingRecordId, tripDbId
   }
 
   async function openLoadDetailsModal(rowId, jumpToTripId, forceTab) {
-  const found = findRowAnywhere(rowId);
-  const modal = $("#modal-load-details");
-  if (!found || !modal) return;
-  const row = found.row;
-  loadDetailsState = {
-    rowId,
-    activeTab: forceTab || (jumpToTripId ? `trip-${jumpToTripId}` : "overview"),
-    attachments: [],
-    history: [],
-    stopsByTrip: {},
-    editMode: null,
-    editDraft: null,
-  };
-  const openedForRowId = rowId; // snapshot — guards against a stale async response clobbering a newer/closed state below
-  $("#ld-title").textContent = `Load ${row.proNumber || "(no PRO# yet)"}`;
-  modal.classList.remove("hidden");
-  renderLoadDetailsTabs();
+    const found = findRowAnywhere(rowId);
+    const modal = $("#modal-load-details");
+    if (!found || !modal) return;
+    const row = found.row;
+    loadDetailsState = {
+      rowId,
+      activeTab: forceTab || (jumpToTripId ? `trip-${jumpToTripId}` : "overview"),
+      attachments: [],
+      history: [],
+      stopsByTrip: {}, // trip.id (local) -> [{stopNumber, timeIn, timeOut, dbId}]
+      editMode: null, // "overview" | trip.id | null
+      editDraft: null, // scratch copy of the fields being edited, discarded on Cancel
+    };
+    const openedForRowId = rowId; // snapshot — guards against a stale async response clobbering a newer/closed state below
+    $("#ld-title").textContent = `Load ${row.proNumber || "(no PRO# yet)"}`;
+    modal.classList.remove("hidden");
+    renderLoadDetailsTabs();
 
-  if (supabaseClient && row.dbId) {
-    const tripDbIds = row.trips.filter((t) => t.dbId).map((t) => t.dbId);
-    const [{ data: attachments }, { data: history }, stopsResult] = await Promise.all([
-      supabaseClient.from("load_attachments").select("*").eq("shift_id", row.dbId),
-      supabaseClient.from("load_change_history").select("*").eq("shift_id", row.dbId),
-      tripDbIds.length ? supabaseClient.from("trip_stops").select("*").in("trip_id", tripDbIds) : Promise.resolve({ data: [] }),
-    ]).catch(() => [{ data: [] }, { data: [] }, { data: [] }]);
-    // The modal may have been closed, or reopened for a different load,
-    // while these requests were still in flight — writing into a stale
-    // (or now-null) loadDetailsState here is exactly what threw "Cannot
-    // set properties of null". Bail out silently if either happened.
-    if (!loadDetailsState || loadDetailsState.rowId !== openedForRowId) return;
-    loadDetailsState.attachments = attachments || [];
-    loadDetailsState.history = (history || []).sort((a, b) => (a.changed_at < b.changed_at ? 1 : -1));
-    const stopRows = stopsResult.data || [];
-    row.trips.forEach((t) => {
-      if (!t.dbId) return;
-      loadDetailsState.stopsByTrip[t.id] = stopRows
-        .filter((s) => s.trip_id === t.dbId)
-        .sort((a, b) => a.stop_number - b.stop_number)
-        .map((s) => ({ dbId: s.id, stopNumber: s.stop_number, timeIn: s.time_in || "", timeOut: s.time_out || "" }));
-    });
-    renderLoadDetailsTabContent();
+    if (supabaseClient && row.dbId) {
+      const tripDbIds = row.trips.filter((t) => t.dbId).map((t) => t.dbId);
+      const [{ data: attachments }, { data: history }, stopsResult] = await Promise.all([
+        supabaseClient.from("load_attachments").select("*").eq("shift_id", row.dbId),
+        supabaseClient.from("load_change_history").select("*").eq("shift_id", row.dbId),
+        tripDbIds.length ? supabaseClient.from("trip_stops").select("*").in("trip_id", tripDbIds) : Promise.resolve({ data: [] }),
+      ]).catch(() => [{ data: [] }, { data: [] }, { data: [] }]);
+      // The modal may have been closed, or reopened for a different load,
+      // while these requests were still in flight — writing into a stale
+      // (or now-null) loadDetailsState here is exactly what threw "Cannot
+      // set properties of null". Bail out silently if either happened.
+      if (!loadDetailsState || loadDetailsState.rowId !== openedForRowId) return;
+      loadDetailsState.attachments = attachments || [];
+      loadDetailsState.history = (history || []).sort((a, b) => (a.changed_at < b.changed_at ? 1 : -1));
+      const stopRows = stopsResult.data || [];
+      row.trips.forEach((t) => {
+        if (!t.dbId) return;
+        loadDetailsState.stopsByTrip[t.id] = stopRows
+          .filter((s) => s.trip_id === t.dbId)
+          .sort((a, b) => a.stop_number - b.stop_number)
+          .map((s) => ({ dbId: s.id, stopNumber: s.stop_number, timeIn: s.time_in || "", timeOut: s.time_out || "" }));
+      });
+      renderLoadDetailsTabContent();
+    }
   }
-}
 
   export function closeLoadDetailsModal() {
     $("#modal-load-details").classList.add("hidden");
@@ -4349,8 +4539,7 @@ export async function openLoadDetailsFromAccounting(accountingRecordId, tripDbId
     if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = "Add Load"; }
 
     getSheet(state.activeLocation, state.activeDate).push(row);
-    if (driverId) warnIfDriverAlreadyScheduled(row, driverId);
-
+    if (driverId) { warnIfDriverAlreadyScheduled(row, driverId); checkDriverComplianceWarning(findDriver(driverId)); }
     closeAddLoadModal();
     renderBoardTable();
     highlightRow(row.id);
@@ -4735,6 +4924,8 @@ export async function openLoadDetailsFromAccounting(accountingRecordId, tripDbId
     setupRealtimeSync(info.key);
     loadDatesWithData(info.key).catch((e) => console.error("loadDatesWithData() failed:", e));
     initAvailableSection();
+    
+    if (info.key === "atlanta") injectAtlantaRateSettingsButton();
 
     if ($("#modal-location-notes")) {
       on("btn-page-info", "click", () => openLocationNotesModal(info.key, info.label));
@@ -4913,6 +5104,7 @@ export async function openLoadDetailsFromAccounting(accountingRecordId, tripDbId
             updateDriverLinkedCellsInPlace(rowId);
             scheduleShiftSave(found.row);
             warnIfDriverAlreadyScheduled(found.row, drv.id);
+            checkDriverComplianceWarning(drv);
           }
         });
       }
@@ -5057,8 +5249,7 @@ export async function openLoadDetailsFromAccounting(accountingRecordId, tripDbId
         if (match) found.row.driverId = match.id;
         updateDriverLinkedCellsInPlace(rowId);
         scheduleShiftSave(found.row);
-        if (match) warnIfDriverAlreadyScheduled(found.row, match.id);
-        if (t.dataset.driverAc === "true") updateDriverAutocomplete(t, state.activeLocation);
+        if (match) { warnIfDriverAlreadyScheduled(found.row, match.id); checkDriverComplianceWarning(match); }        if (t.dataset.driverAc === "true") updateDriverAutocomplete(t, state.activeLocation);
         return;
       }
       if (t.dataset.field === "shiftStart") {

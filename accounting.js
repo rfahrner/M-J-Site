@@ -141,7 +141,8 @@ let accountingRecords = [];
       <th>Carrier Rate</th>
       ${showRoutesInstead ? "" : `<th>Customer Rate</th>${showFsc ? "<th>FSC Payment</th>" : ""}`}
       <th>Day Type</th>
-      <th>Status</th>
+      <th>Sent</th>
+      <th>Released</th>
     </tr>`;
   }
 
@@ -150,7 +151,6 @@ let accountingRecords = [];
     const showRoutesInstead = LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST.includes(rec.location);
     const showFsc = !showRoutesInstead && !LOCATIONS_WITHOUT_FSC.includes(rec.location);
     const levelOptions = (selected) => [1, 2, 3, 4].map((n) => `<option value="${n}" ${n === selected ? "selected" : ""}>${n}${n === 4 ? " (Market)" : ""}</option>`).join("");
-    const statusOptions = ["active", "released"].map((s) => `<option value="${s}" ${s === rec.status ? "selected" : ""}>${s[0].toUpperCase() + s.slice(1)}</option>`).join("");
     const dayTypeOptions = ["weekday", "weekend", "holiday"].map((d) => `<option value="${d}" ${d === (rec.day_type || "weekday") ? "selected" : ""}>${d[0].toUpperCase() + d.slice(1)}</option>`).join("");
     const ms = acctMilesStopsHtml(rec);
     return `<tr id="acct-${rec.id}">
@@ -173,7 +173,8 @@ let accountingRecords = [];
       </td>
       ${showRoutesInstead ? "" : `<td>${fmtMoney(rec.total_revenue)}</td>${showFsc ? `<td>${fmtMoney(rec.fsc_payment)}</td>` : ""}`}
       <td><select class="cell-input" data-action="acct-day-type" data-id="${rec.id}">${dayTypeOptions}</select></td>
-      <td><select class="cell-input" data-action="acct-status" data-id="${rec.id}">${statusOptions}</select></td>
+      <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-sent" data-id="${rec.id}" ${rec.sent ? "checked" : ""} title="Sent"></td>
+      <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-released" data-id="${rec.id}" ${rec.status === "released" ? "checked" : ""} title="Released"></td>
     </tr>`;
   }
 
@@ -193,8 +194,7 @@ let accountingRecords = [];
     const showLevels = LOCATIONS_WITH_LEVELS.includes(loc);
     const showRoutesInstead = LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST.includes(loc);
     const showFsc = !showRoutesInstead && !LOCATIONS_WITHOUT_FSC.includes(loc);
-    const colspan = (showLevels ? (showFsc ? 13 : 12) : (showRoutesInstead ? 9 : (showFsc ? 10 : 9))) + 1;
-      body.innerHTML = filtered.length
+    const colspan = (showLevels ? (showFsc ? 14 : 13) : (showRoutesInstead ? 10 : (showFsc ? 11 : 10))) + 1;      body.innerHTML = filtered.length
       ? filtered.map(accountingRowHtml).join("")
       : `<tr><td colspan="${colspan}" class="subtext" style="padding:16px;">No completed loads ${state.acctDateFilter ? "for this day" : ""} here yet — mark a shift complete on the ${loc} board and it'll show up here.</td></tr>`;
     renderDriverStatsTable();
@@ -380,6 +380,22 @@ export function renderDriverStatsTable() {
           supabaseClient.from(ACCOUNTING_TABLE).update({ status: t.value }).eq("id", rec.id)
             .catch((err) => setDriverSyncStatus(`Couldn't save status (${err.message || err}).`, "error"));
         }
+        else if (t.dataset.action === "acct-sent") {
+          const rec = accountingRecords.find((r) => r.id == t.dataset.id);
+          if (!rec) return;
+          rec.sent = t.checked;
+          supabaseClient.from(ACCOUNTING_TABLE).update({ sent: t.checked }).eq("id", rec.id)
+            .catch((err) => setDriverSyncStatus(`Couldn't save Sent (${err.message || err}).`, "error"));
+        }
+        else if (t.dataset.action === "acct-released") {
+          const rec = accountingRecords.find((r) => r.id == t.dataset.id);
+          if (!rec) return;
+          rec.status = t.checked ? "released" : "active";
+          accountingRecords.sort(acctSortCompare);
+          renderAccountingTable();
+          supabaseClient.from(ACCOUNTING_TABLE).update({ status: rec.status }).eq("id", rec.id)
+            .catch((err) => setDriverSyncStatus(`Couldn't save status (${err.message || err}).`, "error"));
+        }
         else if (t.dataset.action === "acct-day-type") {
           const rec = accountingRecords.find((r) => r.id == t.dataset.id);
           if (!rec) return;
@@ -401,14 +417,26 @@ export function renderDriverStatsTable() {
               .catch((err) => setDriverSyncStatus(`Couldn't save carrier pay (${err.message || err}).`, "error"));
           }, SAVE_DEBOUNCE_MS);
         }
+        if (t.dataset.action === "acct-customer-rate") {
+          const rec = accountingRecords.find((r) => r.id == t.dataset.id);
+          if (!rec) return;
+          const val = t.value === "" ? null : Number(t.value);
+          rec.total_revenue = val;
+          clearTimeout(t._saveTimer);
+          t._saveTimer = setTimeout(() => {
+            supabaseClient.from(ACCOUNTING_TABLE).update({ total_revenue: val }).eq("id", rec.id)
+              .catch((err) => setDriverSyncStatus(`Couldn't save customer rate (${err.message || err}).`, "error"));
+          }, SAVE_DEBOUNCE_MS);
+        }
       });
-      table.addEventListener("focusout", (e) => {
+        table.addEventListener("focusout", (e) => {
         const t = e.target;
-        if (t.dataset.action === "acct-carrier-pay" && t.value !== "") {
+        if ((t.dataset.action === "acct-carrier-pay" || t.dataset.action === "acct-customer-rate") && t.value !== "") {
           const num = Number(t.value);
           if (!isNaN(num)) t.value = num.toFixed(2);
         }
       });
+
       table.addEventListener("click", (e) => {
         const openBtn = e.target.closest("[data-open-acct-load]");
         if (openBtn) openLoadDetailsFromAccounting(openBtn.dataset.openAcctLoad, openBtn.dataset.openAcctTrip || null, openBtn.dataset.openAcctRouteText || null);
