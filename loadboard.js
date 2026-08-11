@@ -19,7 +19,6 @@ import { initHoustonBoardPage } from './houston.js';
 import { initMondelezPage } from './mondelez.js';
 import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRateBreakdown, effectiveTierRate, effectiveSetting, isTierOverridden, isSettingOverridden, isDriverTierOverridden, isDriverSettingOverridden, saveTierRate, saveSetting } from './boardrates.js';
 import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_MIN, PRE_SHIFT_CALL_FOLLOWUP_MIN, PRE_SHIFT_ESCALATION_MIN, LAST_STOP_RETURN_FOLLOWUP_MIN } from './alerts.js';
-import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveTierRate, effectiveSetting, isTierOverridden, isSettingOverridden, isDriverTierOverridden, isDriverSettingOverridden } from './boardrates.js';
 
   /* ---------------- page map (single source of truth for nav) ---------------- */
 
@@ -4924,7 +4923,7 @@ import { loadBoardRateData, getBoardRateTiers, calcLoadRateBreakdown, effectiveT
     setupRealtimeSync(info.key);
     loadDatesWithData(info.key).catch((e) => console.error("loadDatesWithData() failed:", e));
     initAvailableSection();
-    
+
     if (info.key === "atlanta") injectAtlantaRateSettingsButton();
 
     if ($("#modal-location-notes")) {
