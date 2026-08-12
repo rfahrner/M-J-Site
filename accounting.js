@@ -9,9 +9,7 @@ import {
   loadLocationNotes, openLocationNotesModal, closeLocationNotesModal, saveLocationNotes,
 } from './loadboard.js';
 import { ACCOUNTING_TABLE, ACCOUNTING_ROUTES_TABLE, loadPricingData, calcRoute, getPricingTiers, getPricingSettings } from './accountingcalc.js';
-
 let accountingRecords = [];
-
   // Date descending (most recent first), then status within the same date
   // — active loads before released ones, since those are the ones more
   // likely to still need attention.
@@ -20,9 +18,7 @@ let accountingRecords = [];
     if (a.status !== b.status) return a.status === "active" ? -1 : 1;
     return 0;
   }
-
   let acctTripsByShiftId = {}; // source_shift_id -> [trips], used for the Delaware "Routes" column
-
   // accounting_id -> [route rows from loads_accounting_routes], sorted by
   // route_number. Powers both the new Atlanta "Routes" column and the
   // per-route Total Miles / Total Stops breakdown everywhere. There's no
@@ -30,19 +26,27 @@ let accountingRecords = [];
   // text snapshots taken when the shift was completed), so clicking a
   // route chip has to match by that text — see openLoadDetailsFromAccounting.
   let acctRoutesByAccountingId = {};
-
   // loadboard.js's openLoadDetailsFromAccounting() needs to look up a
   // record from this module-private array — this is the sanctioned way
   // in, rather than exporting the array itself.
   export function getAccountingRecordById(id) {
     return accountingRecords.find((r) => r.id == id) || null;
   }
-
-  export async function loadAccountingRecords() {
-    if (!supabaseClient) return;
-    const { data, error } = await supabaseClient.from(ACCOUNTING_TABLE).select("*");
+  // Fetches accounting records (plus their linked Delaware trips and
+  // route rows) for a given shift_date range and merges them into
+  // accountingRecords — used for both the initial bounded load and for
+  // pulling in an earlier window on demand (see loadOlderAccountingRecords).
+  // Every fetch stays scoped to a bounded range instead of ever pulling
+  // the whole table's history in one shot: unscoped, this table will
+  // eventually cross Supabase/PostgREST's 1000-row-per-query cap and
+  // start silently dropping older rows with no error at all (the same
+  // failure mode we already hit once with the drivers table), on top of
+  // just getting slower to load and render as years of history pile up.
+  async function loadAccountingRecordsForRange(fromKey, toKey, replaceExisting) {
+    const { data, error } = await supabaseClient.from(ACCOUNTING_TABLE).select("*").gte("shift_date", fromKey).lte("shift_date", toKey);
     if (error) { console.error("Failed to load accounting records:", error); setDriverSyncStatus(`Couldn't load Accounting (${error.message}).`, "error"); return; }
-    accountingRecords = (data || []).sort(acctSortCompare);
+    const fresh = data || [];
+    accountingRecords = (replaceExisting ? fresh : [...accountingRecords, ...fresh]).sort(acctSortCompare);
 
     const shiftIds = [...new Set(accountingRecords.filter((r) => r.location === "delaware" && r.source_shift_id).map((r) => r.source_shift_id))];
     if (shiftIds.length) {
@@ -55,7 +59,6 @@ let accountingRecords = [];
         });
       }
     }
-
     const accountingIds = accountingRecords.map((r) => r.id);
     if (accountingIds.length) {
       const { data: routes, error: routesErr } = await supabaseClient.from(ACCOUNTING_ROUTES_TABLE).select("*").in("accounting_id", accountingIds);
@@ -72,7 +75,28 @@ let accountingRecords = [];
     }
   }
 
-  
+  export async function loadAccountingRecords() {
+    if (!supabaseClient) return;
+    await loadAccountingRecordsForRange(state.minDate, state.maxDate, true);
+  }
+
+  const ACCT_WINDOW_DAYS = 60; // matches the calendar's existing default lookback
+
+  // Pulls in the next 60-day window further back than what's currently
+  // loaded, and extends state.minDate to match — so the calendar's date
+  // picker also opens up to let you navigate into that older range.
+  export async function loadOlderAccountingRecords() {
+    const newMinDate = dateKey(addDays(keyToDate(state.minDate), -ACCT_WINDOW_DAYS));
+    const rangeEnd = dateKey(addDays(keyToDate(state.minDate), -1));
+    const btn = $("#btn-load-earlier");
+    if (btn) { btn.disabled = true; btn.textContent = "Loading…"; }
+    await loadAccountingRecordsForRange(newMinDate, rangeEnd, false);
+    state.minDate = newMinDate;
+    if (btn) { btn.disabled = false; btn.textContent = `Load Earlier Records (${ACCT_WINDOW_DAYS} more days)`; }
+    renderAccountingTable();
+    renderAcctDateChrome();
+  }
+ 
   export function acctRoutesChipsHtml(rec) {
     const trips = rec.source_shift_id ? acctTripsByShiftId[rec.source_shift_id] : null;
     if (!trips || !trips.length) return `<span class="subtext" style="font-size:11px;">—</span>`;
@@ -82,7 +106,6 @@ let accountingRecords = [];
       return `<button type="button" class="trip-chip ${cls}" data-open-acct-load="${rec.id}" data-open-acct-trip="${t.id}" title="Open this route's details">${escapeHtml(label)}</button>`;
     }).join(" ");
   }
-
   // Atlanta's own Routes column — sourced from loads_accounting_routes
   // rather than loads_trips (Delaware's source), since that's where each
   // route's Cost/Revenue Level calc actually lives. Same click-to-open
@@ -98,7 +121,6 @@ let accountingRecords = [];
       }).join("")}
     </div>`;
   }
-
   // Per-route Miles / Stops, stacked to line up visually with the Routes
   // column's own stacked chips (same array, same order). Falls back to
   // the old single aggregate number when there's no per-route data on
@@ -116,13 +138,10 @@ let accountingRecords = [];
     const stops = `<div style="display:flex; flex-direction:column; gap:2px;">${routes.map((r) => `<div>${escapeHtml(r.stops != null ? String(r.stops) : "—")}</div>`).join("")}</div>`;
     return { miles, stops };
   }
-
   export function fmtMoney(n) { return n == null ? "—" : `$${Number(n).toFixed(2)}`; }
-
   const LOCATIONS_WITH_LEVELS = ["atlanta"]; // only these use Cost/Revenue Level tiers — everyone else has a set rate
   const LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST = ["delaware"]; // flat-rate locations: show Routes, hide Total Cost/Revenue/FSC
   const LOCATIONS_WITHOUT_FSC = ["atlanta"]; // Atlanta keeps Total Cost/Revenue but doesn't need its own FSC column
-
   export function acctTableHeaderHtml() {
     const loc = state.acctLocationTab || "atlanta";
     const showLevels = LOCATIONS_WITH_LEVELS.includes(loc);
@@ -143,9 +162,9 @@ let accountingRecords = [];
       <th>Day Type</th>
       <th>Sent</th>
       <th>Released</th>
+      <th>Hidden</th>
     </tr>`;
   }
-
   export function accountingRowHtml(rec) {
     const showLevels = LOCATIONS_WITH_LEVELS.includes(rec.location);
     const showRoutesInstead = LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST.includes(rec.location);
@@ -153,7 +172,8 @@ let accountingRecords = [];
     const levelOptions = (selected) => [1, 2, 3, 4].map((n) => `<option value="${n}" ${n === selected ? "selected" : ""}>${n}${n === 4 ? " (Market)" : ""}</option>`).join("");
     const dayTypeOptions = ["weekday", "weekend", "holiday"].map((d) => `<option value="${d}" ${d === (rec.day_type || "weekday") ? "selected" : ""}>${d[0].toUpperCase() + d.slice(1)}</option>`).join("");
     const ms = acctMilesStopsHtml(rec);
-    return `<tr id="acct-${rec.id}">
+    const rowStyle = rec.hidden ? ` style="opacity:0.5;"` : "";
+    return `<tr id="acct-${rec.id}"${rowStyle}>
       <td>${escapeHtml(rec.shift_date)}</td>
       <td>${rec.aljex_load_number ? `<button type="button" class="cell-link-btn" style="width:auto; padding:2px 10px;" data-open-acct-load="${rec.id}">${escapeHtml(rec.aljex_load_number)} ↗</button>` : "—"}</td>
       <td>${escapeHtml(rec.driver_name_text || "—")}</td>
@@ -171,20 +191,42 @@ let accountingRecords = [];
           <input class="cell-input" style="width:78px;" data-action="acct-carrier-pay" data-id="${rec.id}" value="${rec.total_carrier_pay != null ? Number(rec.total_carrier_pay).toFixed(2) : ""}">
         </div>
       </td>
-      ${showRoutesInstead ? "" : `<td>${fmtMoney(rec.total_revenue)}</td>${showFsc ? `<td>${fmtMoney(rec.fsc_payment)}</td>` : ""}`}
+      ${showRoutesInstead ? "" : `<td>
+        <div style="display:flex; align-items:center; gap:2px;">
+          <span class="subtext">$</span>
+          <input class="cell-input" style="width:78px;" data-action="acct-customer-rate" data-id="${rec.id}" value="${rec.total_revenue != null ? Number(rec.total_revenue).toFixed(2) : ""}">
+        </div>
+      </td>${showFsc ? `<td>${fmtMoney(rec.fsc_payment)}</td>` : ""}`}
       <td><select class="cell-input" data-action="acct-day-type" data-id="${rec.id}">${dayTypeOptions}</select></td>
       <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-sent" data-id="${rec.id}" ${rec.sent ? "checked" : ""} title="Sent"></td>
       <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-released" data-id="${rec.id}" ${rec.status === "released" ? "checked" : ""} title="Released"></td>
+      <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-hidden" data-id="${rec.id}" ${rec.hidden ? "checked" : ""} title="Hidden"></td>
     </tr>`;
   }
-
   export function getFilteredAccountingRecords() {
     const loc = state.acctLocationTab || "atlanta";
     let filtered = accountingRecords.filter((r) => r.location === loc);
     if (state.acctDateFilter) filtered = filtered.filter((r) => r.shift_date === state.acctDateFilter);
+    if (!state.acctShowHidden) filtered = filtered.filter((r) => !r.hidden);
     return filtered;
   }
 
+  // Count of hidden rows for the current location tab — drives the label
+  // on the Show Hidden toggle. Deliberately ignores the day filter (shows
+  // the total for the whole tab), so the count doesn't flicker as someone
+  // clicks through days.
+  function hiddenCountForCurrentTab() {
+    const loc = state.acctLocationTab || "atlanta";
+    return accountingRecords.filter((r) => r.location === loc && r.hidden).length;
+  }
+
+  function updateShowHiddenButton() {
+    const btn = $("#btn-show-hidden");
+    if (!btn) return;
+    const count = hiddenCountForCurrentTab();
+    btn.textContent = state.acctShowHidden ? "Hide Hidden Again" : `Show Hidden (${count})`;
+    btn.classList.toggle("hidden", count === 0 && !state.acctShowHidden);
+  }
   export function renderAccountingTable() {
     const body = $("#accounting-table-body");
     if (!body) return;
@@ -198,8 +240,8 @@ let accountingRecords = [];
       ? filtered.map(accountingRowHtml).join("")
       : `<tr><td colspan="${colspan}" class="subtext" style="padding:16px;">No completed loads ${state.acctDateFilter ? "for this day" : ""} here yet — mark a shift complete on the ${loc} board and it'll show up here.</td></tr>`;
     renderDriverStatsTable();
+    updateShowHiddenButton();
   }
-
 export function renderDriverStatsTable() {
     const body = $("#accounting-driver-table-body");
     if (!body) return;
@@ -228,43 +270,35 @@ export function renderDriverStatsTable() {
         </tr>`).join("")
       : `<tr><td colspan="7" class="subtext" style="padding:16px;">No completed loads here yet.</td></tr>`;
   }
-
   export function switchAcctLocationTab(loc) {
     state.acctLocationTab = loc;
     $all(".location-tab", $("#acct-location-tabs")).forEach((btn) => btn.classList.toggle("is-active", btn.dataset.location === loc));
     renderAccountingTable();
   }
-
   export function setAcctDateFilter(dKey) {
     state.acctDateFilter = dKey;
     state.activeDate = dKey; // reuses the shared calendar's "selected day" highlighting
     renderAcctDateChrome();
     renderAccountingTable();
   }
-
   export async function recalcAccountingRecord(accountingId, patch) {
     accountingId = Number(accountingId);
     const rec = accountingRecords.find((r) => Number(r.id) === accountingId);
     if (!rec) return;
     Object.assign(rec, patch);
       if (!getPricingTiers() || !getPricingSettings()) await loadPricingData();
-
     const { data: routes, error } = await supabaseClient.from(ACCOUNTING_ROUTES_TABLE).select("*").eq("accounting_id", accountingId);
     if (error) { console.error("Failed to load routes for recalc:", error); return; }
-
     let totalCost = 0, totalRevenue = 0;
     const routeUpdates = (routes || []).map((r) => {
     const calc = calcRoute({ costLevel: rec.cost_level, revenueLevel: rec.revenue_level, miles: Number(r.miles) || 0, stops: Number(r.stops) || 0, contractRate: rec.contract_rate }, getPricingTiers(), getPricingSettings());      totalCost += calc.totalCost; totalRevenue += calc.totalRevenue;
       return { id: r.id, linehaul_cost: calc.linehaulCost, stop_charge: calc.stopCharge, total_cost: calc.totalCost, revenue: calc.revenue, stop_charge_revenue: calc.stopChargeRevenue, total_revenue: calc.totalRevenue };
     });
-
     rec.total_cost = Math.round(totalCost * 100) / 100;
     rec.total_revenue = Math.round(totalRevenue * 100) / 100;
-
     if (rec.location === "delaware" && rec.total_miles > 0) {
       rec.total_cost = Math.round(Math.max(1000, rec.total_miles * 4) * 100) / 100;
     }
-
     try {
       await supabaseClient.from(ACCOUNTING_TABLE).update({ cost_level: rec.cost_level, revenue_level: rec.revenue_level, total_cost: rec.total_cost, total_revenue: rec.total_revenue }).eq("id", accountingId);
       for (const ru of routeUpdates) {
@@ -276,7 +310,6 @@ export function renderDriverStatsTable() {
     }
     renderAccountingTable();
   }
-
   export function renderAcctDateChrome() {
     const input = $("#date-input");
     if (!input) return;
@@ -286,7 +319,6 @@ export function renderDriverStatsTable() {
     if ($("#date-next")) $("#date-next").disabled = (state.activeDate || state.todayKey) >= state.maxDate;
     if ($("#date-prev")) $("#date-prev").disabled = (state.activeDate || state.todayKey) <= state.minDate;
   }
-
   export async function initAccountingPage() {
     // Accounting looks back further than the boards do — override the
     // shared min/max just for this page's calendar.
@@ -294,7 +326,7 @@ export function renderDriverStatsTable() {
     state.maxDate = state.todayKey;
     state.acctLocationTab = "atlanta";
     state.acctDateFilter = null;
-
+    state.acctShowHidden = false;
     await loadPricingData();
     const initialSettings = getPricingSettings();
     if (initialSettings && $("#fsc-rate-input")) $("#fsc-rate-input").value = initialSettings.fsc_rate || "";
@@ -302,7 +334,6 @@ export function renderDriverStatsTable() {
     await loadLocationNotes();
     renderAccountingTable();
     setupAccountingRealtimeSync();
-
     if ($("#acct-location-tabs")) {
       $("#acct-location-tabs").addEventListener("click", (e) => {
         const btn = e.target.closest(".location-tab");
@@ -310,7 +341,6 @@ export function renderDriverStatsTable() {
       });
       switchAcctLocationTab("atlanta");
     }
-
     if ($("#modal-location-notes")) {
       on("btn-location-info", "click", () => {
         const loc = state.acctLocationTab || "atlanta";
@@ -325,7 +355,6 @@ export function renderDriverStatsTable() {
       on("ln-save", "click", saveLocationNotes);
       $("#modal-location-notes").addEventListener("click", (e) => { if (e.target.id === "modal-location-notes") closeLocationNotesModal(); });
     }
-
     if ($("#acct-view-toggle")) {
       $("#acct-view-toggle").addEventListener("click", (e) => {
         const btn = e.target.closest(".location-tab");
@@ -335,8 +364,17 @@ export function renderDriverStatsTable() {
         $("#acct-bydriver-view").classList.toggle("hidden", btn.dataset.view !== "bydriver");
       });
     }
-
     on("acct-show-all", "click", () => setAcctDateFilter(null));
+    if ($("#btn-show-hidden")) {
+      $("#btn-show-hidden").addEventListener("click", () => {
+        state.acctShowHidden = !state.acctShowHidden;
+        renderAccountingTable();
+      });
+    }
+    if ($("#btn-load-earlier")) {
+      $("#btn-load-earlier").textContent = `Load Earlier Records (${ACCT_WINDOW_DAYS} more days)`;
+      $("#btn-load-earlier").addEventListener("click", loadOlderAccountingRecords);
+    }
     $("#date-prev").addEventListener("click", () => setAcctDateFilter(dateKey(addDays(keyToDate(state.activeDate || state.todayKey), -1))));
     $("#date-next").addEventListener("click", () => setAcctDateFilter(dateKey(addDays(keyToDate(state.activeDate || state.todayKey), 1))));
     $("#date-input").addEventListener("change", (e) => setAcctDateFilter(e.target.value));
@@ -351,7 +389,6 @@ export function renderDriverStatsTable() {
     });
     if (!state.activeDate) state.activeDate = state.todayKey;
     renderAcctDateChrome();
-
     on("btn-save-fsc", "click", async () => {
       const val = Number($("#fsc-rate-input").value);
       if (!val || val <= 0) { setDriverSyncStatus("Enter a valid FSC rate first.", "error"); return; }
@@ -364,21 +401,19 @@ export function renderDriverStatsTable() {
         setDriverSyncStatus(`Couldn't save FSC rate (${e.message || e}).`, "error");
       }
     });
-
     const table = $("#accounting-table");
     if (table) {
       table.addEventListener("change", (e) => {
         const t = e.target;
         if (t.dataset.action === "acct-cost-level") recalcAccountingRecord(t.dataset.id, { cost_level: Number(t.value) });
         else if (t.dataset.action === "acct-revenue-level") recalcAccountingRecord(t.dataset.id, { revenue_level: Number(t.value) });
-        else if (t.dataset.action === "acct-status") {
+        else if (t.dataset.action === "acct-hidden") {
           const rec = accountingRecords.find((r) => r.id == t.dataset.id);
           if (!rec) return;
-          rec.status = t.value;
-          accountingRecords.sort(acctSortCompare); // status is now part of the sort order
-          renderAccountingTable();
-          supabaseClient.from(ACCOUNTING_TABLE).update({ status: t.value }).eq("id", rec.id)
-            .catch((err) => setDriverSyncStatus(`Couldn't save status (${err.message || err}).`, "error"));
+          rec.hidden = t.checked;
+          renderAccountingTable(); // the row disappears immediately unless Show Hidden is already on
+          supabaseClient.from(ACCOUNTING_TABLE).update({ hidden: t.checked }).eq("id", rec.id)
+            .catch((err) => setDriverSyncStatus(`Couldn't save Hidden (${err.message || err}).`, "error"));
         }
         else if (t.dataset.action === "acct-sent") {
           const rec = accountingRecords.find((r) => r.id == t.dataset.id);
@@ -436,13 +471,11 @@ export function renderDriverStatsTable() {
           if (!isNaN(num)) t.value = num.toFixed(2);
         }
       });
-
       table.addEventListener("click", (e) => {
         const openBtn = e.target.closest("[data-open-acct-load]");
         if (openBtn) openLoadDetailsFromAccounting(openBtn.dataset.openAcctLoad, openBtn.dataset.openAcctTrip || null, openBtn.dataset.openAcctRouteText || null);
       });
     }
-
     if ($("#modal-load-details")) {
       on("ld-close", "click", closeLoadDetailsModal);
       on("ld-close-btn", "click", closeLoadDetailsModal);
@@ -481,7 +514,6 @@ export function renderDriverStatsTable() {
       });
     }
   }
-
   export function setupAccountingRealtimeSync() {
     if (!supabaseClient) return;
     const channel = supabaseClient.channel("accounting");

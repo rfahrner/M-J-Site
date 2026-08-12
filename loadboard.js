@@ -17,8 +17,8 @@ import { initAccountingPage, getAccountingRecordById } from './accounting.js';
 import { sendShiftToAccounting } from './accountingcalc.js';
 import { initHoustonBoardPage } from './houston.js';
 import { initMondelezPage } from './mondelez.js';
-import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRateBreakdown, effectiveTierRate, effectiveSetting, isTierOverridden, isSettingOverridden, isDriverTierOverridden, isDriverSettingOverridden, saveTierRate, saveSetting } from './boardrates.js';
 import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_MIN, PRE_SHIFT_CALL_FOLLOWUP_MIN, PRE_SHIFT_ESCALATION_MIN, LAST_STOP_RETURN_FOLLOWUP_MIN } from './alerts.js';
+import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRateBreakdown, effectiveTierRate, effectiveSetting, isTierOverridden, isSettingOverridden, isDriverTierOverridden, isDriverSettingOverridden, saveTierRate, saveSetting } from './boardrates.js';
 
   /* ---------------- page map (single source of truth for nav) ---------------- */
 
@@ -73,11 +73,11 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     { key: "returnEtaToDc",          label: "Return ETA to DC",    type: "time", group: "backhaul", pistachio: true },
     { key: "routeImage",      label: "Image",              type: "image" },
     { key: "routeEstHours",   label: "Route Est Hours",    type: "text", small: true, inputmode: "decimal", group: "estimate" },
+    { key: "timeToFinalStop", label: "Time to Last Stop",  type: "text", small: true, inputmode: "decimal", group: "estimate" },
+    { key: "timeToDc",        label: "Time to DC",         type: "text", small: true, inputmode: "decimal", group: "estimate" },
     // Not in the latest specified order -- kept available (hidden by
     // default) rather than deleted, since removal wasn't explicit. Flagged
     // in chat; say the word if any of these should actually go.
-    { key: "timeToFinalStop", label: "Time to Last Stop", type: "text", small: true, inputmode: "decimal", group: "estimate" },
-    { key: "timeToDc",        label: "Time to DC",        type: "text", small: true, inputmode: "decimal", group: "estimate" },
     { key: "backhaulType",           label: "B/Haul Type",         type: "text", group: "backhaul" },
     { key: "etaToFinalStop",         label: "ETA to Final Stop",   type: "time", group: "estimate" },
     { key: "estRouteComplete",       label: "Est Route Complete",  type: "time", group: "estimate" },
@@ -431,8 +431,8 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
       return_to_dc_text: trip.returnToDcText || null,
       route_est_hours: trip.routeEstHours !== "" && trip.routeEstHours != null ? Number(trip.routeEstHours) : null,
       time_to_final_stop: trip.timeToFinalStop || null,
-      eta_to_final_stop: trip.etaToFinalStop || null,
       time_to_dc: trip.timeToDc !== "" && trip.timeToDc != null ? Number(trip.timeToDc) : null,
+      eta_to_final_stop: trip.etaToFinalStop || null,
       est_route_complete: trip.estRouteComplete || null,
       route_image_path: trip.routeImagePath || null,
     };
@@ -472,8 +472,8 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
       returnToDcText: dbRow.return_to_dc_text || "",
       routeEstHours: dbRow.route_est_hours != null ? String(dbRow.route_est_hours) : "",
       timeToFinalStop: dbRow.time_to_final_stop || "",
-      etaToFinalStop: dbRow.eta_to_final_stop || "",
       timeToDc: dbRow.time_to_dc != null ? String(dbRow.time_to_dc) : "",
+      etaToFinalStop: dbRow.eta_to_final_stop || "",
       estRouteComplete: dbRow.est_route_complete || "",
       hasStopTimes: false, // computed client-side after loading, see ensureSheetLoaded — not a real DB column
       routeImagePath: dbRow.route_image_path || "",
@@ -667,7 +667,7 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
       lastStopDepart: "", returnToDC: "",
       currentRouteStatus: "", currentBackhaulStatus: "", nextCallTime: "", backhaulLocation: "", salvageBhaulRefusedBy: "", backhaulTrailerNumber: "", backhaulType: "",
       returnEtaToDc: "", returnDropLocation: "", ppwkReceived: false, checkedIn: false, timesheetStartTime: "", timesheetEndTime: "", dropLocationText: "", returnToDcText: "",
-      routeEstHours: "", timeToFinalStop: "", etaToFinalStop: "", estRouteComplete: "",
+      routeEstHours: "", timeToFinalStop: "", timeToDc: "", etaToFinalStop: "", estRouteComplete: "",
       hasStopTimes: false, // client-side only, not persisted -- computed from trip_stops presence, see ensureSheetLoaded / the Stop Times save flow
       routeImagePath: "", routeImageUrl: "", completedAt: null,
     };
@@ -2618,78 +2618,20 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
         const names = open.map((t, i) => t.routeId || t.tripId || `Route ${i + 1}`).join(", ");
         if (!confirm(`This load still has ${open.length} trip(s) not closed out yet (${names}) — likely still waiting on paperwork. Send it to Accounting anyway?`)) return;
       }
-      openTimesheetModal(rowId, []);
+      openTimesheetModal(rowId, []); // required time sheet info gate — finalizeShiftCompletion runs after it's submitted
       return;
     }
     // Un-completing needs to bring the load back into active play — every
     // trip has to un-minimize too, or the row renders with no editable
-    // route fields at all.
+    // route fields at all (see openTripsFor()'s "every trip minimized"
+    // fallback, which shows blank cells with nothing to click into).
     row.shiftComplete = false;
     row.shiftCompleteAt = null;
     await saveShiftNow(row);
     await unminimizeAllTrips(row);
     renderBoardTable();
   }
-  /* ---------------- driver-assignment warning modal ----------------
-     Built via DOM injection rather than static HTML — works on every
-     page (Atlanta/Delaware/Building C for now) without needing the same
-     markup pasted into multiple HTML files. */
-  function showDriverAssignmentWarning(title, lines) {
-    const existing = document.getElementById("driver-warning-overlay");
-    if (existing) existing.remove();
-    const overlay = document.createElement("div");
-    overlay.className = "overlay";
-    overlay.id = "driver-warning-overlay";
-    overlay.innerHTML = `
-      <div class="modal">
-        <div class="modal-header">
-          <h3>${escapeHtml(title)}</h3>
-          <button class="modal-close" id="driver-warning-close">&times;</button>
-        </div>
-        <div class="modal-body">
-          ${lines.map((l) => `<p style="margin:0 0 10px;">${l}</p>`).join("")}
-        </div>
-        <div class="modal-footer">
-          <button class="btn" id="driver-warning-ok">OK</button>
-        </div>
-      </div>`;
-    document.body.appendChild(overlay);
-    const close = () => overlay.remove();
-    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
-    document.getElementById("driver-warning-close").addEventListener("click", close);
-    document.getElementById("driver-warning-ok").addEventListener("click", close);
-  }
 
-  // Fires whenever a real driver record gets assigned to a load anywhere
-  // on the board — flags a missing Trailer Interchange Agreement and/or
-  // missing Interchange Coverage (insurance) on that driver's profile.
-  function checkDriverComplianceWarning(driver) {
-    if (!driver) return;
-    const missing = [];
-    if (!driver.tia) missing.push("a Trailer Interchange Agreement");
-    if (driver.tiiAmount == null) missing.push("Interchange Coverage (insurance) on file");
-    if (!missing.length) return;
-    showDriverAssignmentWarning(
-      "Driver Missing Interchange Info",
-      [`${escapeHtml(driver.name)} is missing ${missing.join(" and ")}. Double check before dispatching this load.`]
-    );
-  }
-
-  // A driver showing up twice on the same day is usually a mistake, but
-  // not always — so this just flags it rather than blocking the
-  // assignment. Scoped to the current location + day, not across boards.
-  function warnIfDriverAlreadyScheduled(row, driverId) {
-    const sheet = getSheet(state.activeLocation, state.activeDate);
-    const conflict = sheet.find((r) => r.id !== row.id && r.driverId && String(r.driverId) === String(driverId));
-    if (!conflict) return;
-    const drv = findDriver(driverId);
-    const label = conflict.proNumber ? `PRO# ${conflict.proNumber}` : "another load";
-    showDriverAssignmentWarning(
-      "Driver Already Scheduled Today",
-      [`${escapeHtml(drv ? drv.name : "This driver")} is already scheduled today on ${escapeHtml(label)}.`,
-       `That's fine if it's intentional — just flagging it in case it's not.`]
-    );
-  }
   /* ---------------- Atlanta rate settings — minimizable modal ----------------
      Same layout idea as Mondelez's inline rate panel, but as a modal
      (injected via JS, no HTML changes needed) since Atlanta's board is
@@ -2763,9 +2705,69 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     btn.addEventListener("click", openAtlantaRateSettingsModal);
     infoBtn.insertAdjacentElement("afterend", btn);
   }
-                                        
 
-  async function deleteRow(rowId) {                                                        
+  /* ---------------- driver-assignment warning modal ----------------
+     Built via DOM injection rather than static HTML — works on every
+     page (Atlanta/Delaware/Building C for now) without needing the same
+     markup pasted into multiple HTML files. */
+  function showDriverAssignmentWarning(title, lines) {
+    const existing = document.getElementById("driver-warning-overlay");
+    if (existing) existing.remove();
+    const overlay = document.createElement("div");
+    overlay.className = "overlay";
+    overlay.id = "driver-warning-overlay";
+    overlay.innerHTML = `
+      <div class="modal">
+        <div class="modal-header">
+          <h3>${escapeHtml(title)}</h3>
+          <button class="modal-close" id="driver-warning-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          ${lines.map((l) => `<p style="margin:0 0 10px;">${l}</p>`).join("")}
+        </div>
+        <div class="modal-footer">
+          <button class="btn" id="driver-warning-ok">OK</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+    document.getElementById("driver-warning-close").addEventListener("click", close);
+    document.getElementById("driver-warning-ok").addEventListener("click", close);
+  }
+
+  // Fires whenever a real driver record gets assigned to a load anywhere
+  // on the board — flags a missing Trailer Interchange Agreement and/or
+  // missing Interchange Coverage (insurance) on that driver's profile.
+  function checkDriverComplianceWarning(driver) {
+    if (!driver) return;
+    const missing = [];
+    if (!driver.tia) missing.push("a Trailer Interchange Agreement");
+    if (driver.tiiAmount == null) missing.push("Interchange Coverage (insurance) on file");
+    if (!missing.length) return;
+    showDriverAssignmentWarning(
+      "Driver Missing Interchange Info",
+      [`${escapeHtml(driver.name)} is missing ${missing.join(" and ")}. Double check before dispatching this load.`]
+    );
+  }
+
+  // A driver showing up twice on the same day is usually a mistake, but
+  // not always — so this just flags it rather than blocking the
+  // assignment. Scoped to the current location + day, not across boards.
+  function warnIfDriverAlreadyScheduled(row, driverId) {
+    const sheet = getSheet(state.activeLocation, state.activeDate);
+    const conflict = sheet.find((r) => r.id !== row.id && r.driverId && String(r.driverId) === String(driverId));
+    if (!conflict) return;
+    const drv = findDriver(driverId);
+    const label = conflict.proNumber ? `PRO# ${conflict.proNumber}` : "another load";
+    showDriverAssignmentWarning(
+      "Driver Already Scheduled Today",
+      [`${escapeHtml(drv ? drv.name : "This driver")} is already scheduled today on ${escapeHtml(label)}.`,
+       `That's fine if it's intentional — just flagging it in case it's not.`]
+    );
+  }
+
+  async function deleteRow(rowId) {
     const found = findRowAnywhere(rowId);
     if (!found) return;
     const row = found.row;
@@ -3506,6 +3508,7 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
               ${stopsHtml}
               <div class="ld-stop-row" style="font-weight:700; border-top:1px solid var(--line); margin-top:4px; padding-top:4px;"><span>Return to DC</span><span>${escapeHtml(returnTime || "—")}</span><span></span></div>
             </fieldset>
+            <fieldset class="field-box"><legend>Complete</legend><div class="static-text">${trip.complete ? "Yes" : "—"}</div></fieldset>
             <fieldset class="field-box${missCls("ppwk")}"><legend>Paperwork Received</legend><div class="static-text">${trip.ppwkReceived ? "Yes" : "—"}</div></fieldset>
             <fieldset class="field-box${missCls("checkedIn")}"><legend>Load Checked In</legend><div class="static-text">${trip.checkedIn ? "Yes" : "—"}</div></fieldset>
             <fieldset class="field-box${missCls("dropLocation")}"><legend>Trailer Drop Location</legend><div class="static-text">${escapeHtml(trip.returnDropLocation || "—")}</div></fieldset>
@@ -3531,6 +3534,10 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
               <div id="ld-stop-fields">${stopFieldsHtml(stopCount, d.stops)}</div>
               <div class="ld-stop-row" style="font-weight:700; border-top:1px solid var(--line); margin-top:4px; padding-top:4px;"><span>Return to DC</span><input class="cell-input" id="ld-tr-return-eta" placeholder="${escapeHtml(trip.returnToDC || '--:--')}" value="${escapeHtml(d.returnEtaToDc)}" style="max-width:90px;"><span></span></div>
             </fieldset>
+            <fieldset class="field-box">
+              <legend>Complete</legend>
+              <label style="display:flex; align-items:center; gap:8px; margin:0;"><input type="checkbox" id="ld-tr-complete" ${d.complete ? "checked" : ""}><span>Complete</span></label>
+            </fieldset>
             <fieldset class="field-box${missCls("ppwk")}">
               <legend>Paperwork Received</legend>
               <label style="display:flex; align-items:center; gap:8px; margin:0;"><input type="checkbox" id="ld-tr-ppwk-received" ${d.ppwkReceived ? "checked" : ""}><span>Received</span></label>
@@ -3544,8 +3551,7 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
           </div>
           <div class="ld-edit-bar">
             <button type="button" class="btn btn-ghost" data-ld-cancel="${tripLocalId}">Cancel</button>
-            <button type="button" class="btn btn-ghost" data-ld-save="${tripLocalId}">Save</button>
-            <button type="button" class="btn" data-ld-save-complete="${tripLocalId}">${trip.complete ? "Save (already complete)" : "Save & Complete Trip"}</button>
+            <button type="button" class="btn" data-ld-save="${tripLocalId}">Save</button>
           </div>
         `;
       }
@@ -3600,7 +3606,7 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
         routeMiles: trip.routeMiles || "", stopCount: trip.stopCount || "",
         driverName: tripDrv ? tripDrv.name : "", notes: trip.notes || "",
         stops: (loadDetailsState.stopsByTrip[tabKey] || []).map((s) => ({ ...s })),
-        ppwkReceived: !!trip.ppwkReceived, checkedIn: !!trip.checkedIn,
+        complete: !!trip.complete, ppwkReceived: !!trip.ppwkReceived, checkedIn: !!trip.checkedIn,
         returnDropLocation: trip.returnDropLocation || "",
         dispatchTime: trip.dispatchTime || "", returnEtaToDc: trip.returnEtaToDc || "",
       };
@@ -3760,10 +3766,21 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
       if (dispatchTimeEl) trip.dispatchTime = dispatchTimeEl.value.trim();
       const returnEtaEl = $("#ld-tr-return-eta");
       if (returnEtaEl) trip.returnEtaToDc = returnEtaEl.value.trim();
-      if (markComplete) {
-        trip.complete = true;
-        trip.minimized = true;
-        trip.completedAt = new Date().toISOString();
+      const completeEl = $("#ld-tr-complete");
+      const beforeComplete = trip.complete;
+      if (completeEl) {
+        trip.complete = completeEl.checked;
+        trip.minimized = completeEl.checked; // pill on the board vs. fully laid out — same toggle now
+        if (trip.complete && !beforeComplete) trip.completedAt = new Date().toISOString();
+        if (!trip.complete) trip.completedAt = null;
+        if (!trip.complete && row.shiftComplete) {
+          // Un-completing a trip that belonged to an already-completed
+          // shift needs to walk the shift back too — otherwise it'd stay
+          // tinted/sorted as done while this trip is now sitting open again.
+          row.shiftComplete = false;
+          row.shiftCompleteAt = null;
+          await saveShiftNow(row);
+        }
       }
       await saveTripNow(row, trip, row.trips.indexOf(trip) + 1);
       recomputeRowRate(row);
@@ -3772,13 +3789,14 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
       if (beforeTrailerOut !== trip.trailerOut) logChange(row.dbId, labelForRow(row), "trailer_out", beforeTrailerOut, trip.trailerOut);
       if (beforeTripNotes !== trip.notes) logChange(row.dbId, labelForRow(row), "notes", beforeTripNotes, trip.notes);
       if (beforePpwkReceived !== trip.ppwkReceived) logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "ppwk_received", beforePpwkReceived, trip.ppwkReceived);
+      if (beforeComplete !== trip.complete) logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "route_complete", beforeComplete, trip.complete);
 
       // This might have just been the last open trip — if the time sheet
       // was already filled in (e.g. saved before this trip got closed
       // out), the shift-completion check that runs when saving Overview
       // never got a chance to pass. Catch that here too, so completion
       // doesn't depend on which of the two happened last.
-      if (markComplete && !row.shiftComplete && openTripsForRow(row).length === 0
+      if (trip.complete && !row.shiftComplete && openTripsForRow(row).length === 0
           && row.timesheetReceived && String(row.timesheetStartTime || "").trim() && String(row.timesheetEndTime || "").trim()) {
         await finalizeShiftCompletion(row);
       }
@@ -3923,7 +3941,10 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
       ${DRIVER_INFO_COLS.map(item).join("")}
       <div class="columns-panel-group-label">Trip columns (applies to all 5 trips)</div>
       ${getOrderedTripSubcols().map(item).join("")}
-      <div class="columns-panel-footer"><button type="button" id="columns-show-all">Show all columns</button></div>
+      <div class="columns-panel-footer">
+        <button type="button" id="columns-show-all">Show all columns</button>
+        <button type="button" id="columns-reset-order">Reset column order</button>
+      </div>
     `;
   }
 
@@ -4539,6 +4560,7 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
 
     getSheet(state.activeLocation, state.activeDate).push(row);
     if (driverId) { warnIfDriverAlreadyScheduled(row, driverId); checkDriverComplianceWarning(findDriver(driverId)); }
+
     closeAddLoadModal();
     renderBoardTable();
     highlightRow(row.id);
@@ -4880,8 +4902,6 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
         if (cancelBtn) cancelLoadDetailsEdit();
         const saveBtn = e.target.closest("[data-ld-save]");
         if (saveBtn) saveLoadDetailsEdit(saveBtn.dataset.ldSave);
-        const saveCompleteBtn = e.target.closest("[data-ld-save-complete]");
-        if (saveCompleteBtn) saveLoadDetailsEdit(saveCompleteBtn.dataset.ldSaveComplete, true);
         if (e.target.id === "ld-rate-reset") resetRateToCalculated();
         const profileBtn = e.target.closest('[data-action="edit-driver"]');
         if (profileBtn) openEditDriverModal(profileBtn.dataset.driverId);
@@ -4923,7 +4943,6 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
     setupRealtimeSync(info.key);
     loadDatesWithData(info.key).catch((e) => console.error("loadDatesWithData() failed:", e));
     initAvailableSection();
-
     if (info.key === "atlanta") injectAtlantaRateSettingsButton();
 
     if ($("#modal-location-notes")) {
@@ -5034,6 +5053,12 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
         if (e.target.id === "columns-show-all") {
           state.hiddenCols.clear();
           applyColumnVisibility();
+          $("#columns-panel").innerHTML = buildColumnsPanelHtml();
+        }
+        if (e.target.id === "columns-reset-order") {
+          tripColOrder = TRIP_SUBCOLS.map((c) => c.key);
+          saveTripColOrder();
+          renderBoardTable();
           $("#columns-panel").innerHTML = buildColumnsPanelHtml();
         }
       });
@@ -5248,7 +5273,8 @@ import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_
         if (match) found.row.driverId = match.id;
         updateDriverLinkedCellsInPlace(rowId);
         scheduleShiftSave(found.row);
-        if (match) { warnIfDriverAlreadyScheduled(found.row, match.id); checkDriverComplianceWarning(match); }        if (t.dataset.driverAc === "true") updateDriverAutocomplete(t, state.activeLocation);
+        if (match) { warnIfDriverAlreadyScheduled(found.row, match.id); checkDriverComplianceWarning(match); }
+        if (t.dataset.driverAc === "true") updateDriverAutocomplete(t, state.activeLocation);
         return;
       }
       if (t.dataset.field === "shiftStart") {
