@@ -172,7 +172,8 @@ let accountingRecords = [];
     const levelOptions = (selected) => [1, 2, 3, 4].map((n) => `<option value="${n}" ${n === selected ? "selected" : ""}>${n}${n === 4 ? " (Market)" : ""}</option>`).join("");
     const dayTypeOptions = ["weekday", "weekend", "holiday"].map((d) => `<option value="${d}" ${d === (rec.day_type || "weekday") ? "selected" : ""}>${d[0].toUpperCase() + d.slice(1)}</option>`).join("");
     const ms = acctMilesStopsHtml(rec);
-    const rowStyle = rec.hidden ? ` style="opacity:0.5;"` : "";
+    const isDimmed = rec.hidden || rec.status === "released";
+    const rowStyle = isDimmed ? ` style="opacity:0.5;"` : "";
     return `<tr id="acct-${rec.id}"${rowStyle}>
       <td>${escapeHtml(rec.shift_date)}</td>
       <td>${rec.aljex_load_number ? `<button type="button" class="cell-link-btn" style="width:auto; padding:2px 10px;" data-open-acct-load="${rec.id}">${escapeHtml(rec.aljex_load_number)} ↗</button>` : "—"}</td>
@@ -225,7 +226,6 @@ let accountingRecords = [];
     if (!btn) return;
     const count = hiddenCountForCurrentTab();
     btn.textContent = state.acctShowHidden ? "Hide Hidden Again" : `Show Hidden (${count})`;
-    btn.classList.toggle("hidden", count === 0 && !state.acctShowHidden);
   }
   export function renderAccountingTable() {
     const body = $("#accounting-table-body");
@@ -325,7 +325,8 @@ export function renderDriverStatsTable() {
     state.minDate = dateKey(addDays(todayDate(), -60));
     state.maxDate = state.todayKey;
     state.acctLocationTab = "atlanta";
-    state.acctDateFilter = null;
+    state.acctDateFilter = state.todayKey;
+    state.activeDate = state.todayKey;
     state.acctShowHidden = false;
     await loadPricingData();
     const initialSettings = getPricingSettings();
@@ -371,15 +372,10 @@ export function renderDriverStatsTable() {
         renderAccountingTable();
       });
     }
-    if ($("#btn-load-earlier")) {
-      $("#btn-load-earlier").textContent = `Load Earlier Records (${ACCT_WINDOW_DAYS} more days)`;
-      $("#btn-load-earlier").addEventListener("click", loadOlderAccountingRecords);
-    }
     $("#date-prev").addEventListener("click", () => setAcctDateFilter(dateKey(addDays(keyToDate(state.activeDate || state.todayKey), -1))));
     $("#date-next").addEventListener("click", () => setAcctDateFilter(dateKey(addDays(keyToDate(state.activeDate || state.todayKey), 1))));
     $("#date-input").addEventListener("change", (e) => setAcctDateFilter(e.target.value));
     $("#date-input").addEventListener("click", (e) => { e.preventDefault(); state.datesWithData = new Set(accountingRecords.filter((r) => r.location === state.acctLocationTab).map((r) => r.shift_date)); openDateDropdown(); });
-    $("#date-today").addEventListener("click", () => setAcctDateFilter(state.todayKey));
     $("#date-dropdown").addEventListener("click", (e) => {
       const btn = e.target.closest(".cal-cell[data-date]:not(:disabled)");
       if (btn) { setAcctDateFilter(btn.dataset.date); closeDateDropdown(); }
