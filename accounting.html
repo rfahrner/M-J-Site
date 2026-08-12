@@ -7,7 +7,6 @@
   <link rel="stylesheet" href="loadboard.css">
 </head>
 <body>
-
   <div class="topbar">
     <div class="brand">
       <div class="brand-mark"></div>
@@ -15,7 +14,6 @@
     </div>
     <div class="tabs" id="tabs"></div>
   </div>
-
   <div id="driverlist-view" class="panel">
     <div class="toolbar" style="padding-left:0;padding-right:0;border-bottom:none;">
       <div class="toolbar-left">
@@ -41,6 +39,8 @@
       <button id="date-next" title="Next day">&rsaquo;</button>
       <button id="date-today" class="today-pill">Today</button>
       <button type="button" class="btn btn-ghost" id="acct-show-all" style="margin-left:8px;">Show All Days</button>
+      <button type="button" class="btn btn-ghost hidden" id="btn-show-hidden" style="margin-left:8px;">Show Hidden</button>
+      <button type="button" class="btn btn-ghost" id="btn-load-earlier" style="margin-left:8px;">Load Earlier Records</button>
       <div id="date-dropdown" class="date-dropdown hidden"></div>
     </div>
     <div class="location-tabs" id="acct-view-toggle" style="margin-bottom:14px;">
@@ -71,7 +71,6 @@
       </table>
     </div>
   </div>
-
   <!-- ================= Load Details modal (PRO#/Trip ID popup) ================= -->
   <div class="overlay hidden" id="modal-load-details">
     <div class="modal modal-large">
@@ -86,7 +85,6 @@
       </div>
     </div>
   </div>
-
   <!-- ================= Location Rate Info modal (editable notes, per accounting tab) ================= -->
   <div class="overlay hidden" id="modal-location-notes">
     <div class="modal modal-large">
@@ -104,7 +102,6 @@
       </div>
     </div>
   </div>
-
 <script src="supabase.min.js"></script>
 <script type="module" src="loadboard.js" defer></script>
 </body>
