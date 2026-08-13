@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Accounting</title>
+  <!-- BUILD MARKER: 2026-08-12-e — check View Source / DevTools Elements for this exact string to confirm this file is actually the one loaded -->
   <link rel="stylesheet" href="loadboard.css">
 </head>
 <body>
@@ -38,8 +39,10 @@
       <input type="date" id="date-input" readonly>
       <button id="date-next" title="Next day">&rsaquo;</button>
       <button type="button" class="btn btn-ghost" id="acct-show-all" style="margin-left:8px;">Show All Days</button>
-      <button type="button" class="btn btn-ghost" id="btn-show-hidden" style="margin-left:8px;">Show Hidden</button>
       <div id="date-dropdown" class="date-dropdown hidden"></div>
+    </div>
+    <div style="padding: 12px 0 14px 0; display: block !important; position: static !important; float: none !important; clear: both;">
+      <button type="button" class="btn btn-ghost" id="btn-show-hidden" style="white-space:nowrap; padding:8px 16px; height:auto; display:inline-block; position:static;">Show Hidden</button>
     </div>
     <div class="location-tabs" id="acct-view-toggle" style="margin-bottom:14px;">
       <button type="button" class="location-tab is-active" data-view="byload">By Load</button>

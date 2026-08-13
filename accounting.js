@@ -7,6 +7,7 @@ import {
   saveLoadDetailsEdit, stopFieldsHtml, openLoadDetailsFromAccounting,
   commitRateOverride, resetRateToCalculated, changeRouteType, setHostlerHours, commitRateBoxOverride, openEditDriverModal,
   loadLocationNotes, openLocationNotesModal, closeLocationNotesModal, saveLocationNotes,
+  showDriverAssignmentWarning, SHIFTS_TABLE,
 } from './loadboard.js';
 import { ACCOUNTING_TABLE, ACCOUNTING_ROUTES_TABLE, loadPricingData, calcRoute, getPricingTiers, getPricingSettings } from './accountingcalc.js';
 let accountingRecords = [];
@@ -19,6 +20,13 @@ let accountingRecords = [];
     return 0;
   }
   let acctTripsByShiftId = {}; // source_shift_id -> [trips], used for the Delaware "Routes" column
+  // source_shift_id -> boolean, whether the underlying board shift is
+  // actually marked complete. Populated for every location (not just
+  // Delaware) since this drives the "shift not marked complete" warning
+  // on the PRO#/Aljex# link — a load can now reach Accounting via the
+  // 12-hour or time-sheet-filled-in triggers without ever being marked
+  // complete, and this is how that gets flagged when someone opens it.
+  let acctShiftCompleteById = {};
   // accounting_id -> [route rows from loads_accounting_routes], sorted by
   // route_number. Powers both the new Atlanta "Routes" column and the
   // per-route Total Miles / Total Stops breakdown everywhere. There's no
@@ -57,6 +65,13 @@ let accountingRecords = [];
           if (!acctTripsByShiftId[t.shift_id]) acctTripsByShiftId[t.shift_id] = [];
           acctTripsByShiftId[t.shift_id].push(t);
         });
+      }
+    }
+    const allShiftIds = [...new Set(accountingRecords.filter((r) => r.source_shift_id).map((r) => r.source_shift_id))];
+    if (allShiftIds.length) {
+      const { data: shiftRows, error: shiftErr } = await supabaseClient.from(SHIFTS_TABLE).select("id, shift_complete").in("id", allShiftIds);
+      if (!shiftErr) {
+        (shiftRows || []).forEach((s) => { acctShiftCompleteById[s.id] = !!s.shift_complete; });
       }
     }
     const accountingIds = accountingRecords.map((r) => r.id);
@@ -320,6 +335,7 @@ export function renderDriverStatsTable() {
     if ($("#date-prev")) $("#date-prev").disabled = (state.activeDate || state.todayKey) <= state.minDate;
   }
   export async function initAccountingPage() {
+    console.log("accounting.js build marker: 2026-08-13-a"); // confirms THIS version's code actually ran — check DevTools Console for this exact string
     // Accounting looks back further than the boards do — override the
     // shared min/max just for this page's calendar.
     state.minDate = dateKey(addDays(todayDate(), -60));
@@ -406,10 +422,29 @@ export function renderDriverStatsTable() {
         else if (t.dataset.action === "acct-hidden") {
           const rec = accountingRecords.find((r) => r.id == t.dataset.id);
           if (!rec) return;
+          const wasHidden = rec.hidden;
           rec.hidden = t.checked;
           renderAccountingTable(); // the row disappears immediately unless Show Hidden is already on
-          supabaseClient.from(ACCOUNTING_TABLE).update({ hidden: t.checked }).eq("id", rec.id)
-            .catch((err) => setDriverSyncStatus(`Couldn't save Hidden (${err.message || err}).`, "error"));
+          supabaseClient.from(ACCOUNTING_TABLE).update({ hidden: t.checked }).eq("id", rec.id).select()
+            .then(({ data, error }) => {
+              if (error) throw error;
+              if (!data || data.length === 0) {
+                // Same silent failure mode already hit once with the drivers
+                // table: Supabase returns success with zero rows touched
+                // when a table has no UPDATE policy in Row Level Security —
+                // no error, but nothing actually saved. Revert the checkbox
+                // rather than let the UI keep showing a state that never
+                // made it to the database.
+                rec.hidden = wasHidden;
+                renderAccountingTable();
+                setDriverSyncStatus('Hidden didn\'t save — 0 rows were updated. loads_accounting needs an "update" Row Level Security policy.', "error");
+              }
+            })
+            .catch((err) => {
+              rec.hidden = wasHidden;
+              renderAccountingTable();
+              setDriverSyncStatus(`Couldn't save Hidden (${err.message || err}).`, "error");
+            });
         }
         else if (t.dataset.action === "acct-sent") {
           const rec = accountingRecords.find((r) => r.id == t.dataset.id);
@@ -469,7 +504,20 @@ export function renderDriverStatsTable() {
       });
       table.addEventListener("click", (e) => {
         const openBtn = e.target.closest("[data-open-acct-load]");
-        if (openBtn) openLoadDetailsFromAccounting(openBtn.dataset.openAcctLoad, openBtn.dataset.openAcctTrip || null, openBtn.dataset.openAcctRouteText || null);
+        if (!openBtn) return;
+        const openArgs = [openBtn.dataset.openAcctLoad, openBtn.dataset.openAcctTrip || null, openBtn.dataset.openAcctRouteText || null];
+        const rec = accountingRecords.find((r) => r.id == openBtn.dataset.openAcctLoad);
+        const shiftIncomplete = rec && rec.source_shift_id && acctShiftCompleteById[rec.source_shift_id] === false;
+        if (shiftIncomplete) {
+          showDriverAssignmentWarning(
+            "Shift Not Marked Complete",
+            ["This load reached Accounting automatically, but the shift itself hasn't been marked complete on the board yet.",
+             "Make sure the driver has actually finished the shift before proceeding."],
+            () => openLoadDetailsFromAccounting(...openArgs)
+          );
+        } else {
+          openLoadDetailsFromAccounting(...openArgs);
+        }
       });
     }
     if ($("#modal-load-details")) {

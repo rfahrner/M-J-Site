@@ -381,6 +381,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       rateManual: !!dbRow.rate_manual,
       rateOverrides: dbRow.rate_overrides ? { tiers: dbRow.rate_overrides.tiers || {}, settings: dbRow.rate_overrides.settings || {} } : { tiers: {}, settings: {} },
       selected: false, // local-only UI state, not persisted — see note in chat
+      sentToAccounting: !!dbRow.sent_to_accounting,
       createdAt: dbRow.created_at || null,
       updatedAt: dbRow.updated_at || null,
       addedAt: null,
@@ -679,7 +680,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       proNumber: "", tonu: false, highlighted: false, shiftStart: "", shiftComplete: false, shiftCompleteAt: null, rate: "", notes: "", selected: false,
       preShiftTextSent: false, preShiftCall: false, etaShiftReport: "", actualShiftReport: "", revLevel: "",
       timesheetReceived: false, timesheetStartTime: "", timesheetEndTime: "", trailerDropLocation: "", preShiftTextSentAt: null,
-      createdAt: null, updatedAt: null, addedAt: null,
+      createdAt: null, updatedAt: null, addedAt: null, sentToAccounting: false,
       cellSnapshot: "", mcSnapshot: "", emailSnapshot: "", dispatcherPhoneSnapshot: "", ratingSnapshot: "",
       birm: false, routeType: "birm", hostlerHours: "", rateManual: false, rateOverrides: { tiers: {}, settings: {} },
       trips: [blankTrip()],
@@ -2474,6 +2475,61 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   let timesheetModalState = null; // { rowId, queue: [rowId, ...] } — queue is for bulk-complete chaining
   const focusValueSnapshots = new Map(); // "rowId:field" -> value at focus-in, for detecting a real committed change on blur
 
+  // Hours elapsed since this shift's own start time (shift_date + shift_start
+  // combined into a real moment), regardless of what today's date is. Returns
+  // null when there's no shift_start to anchor to yet.
+  function hoursSinceShiftStart(row) {
+    const startMin = parseHHMM(row.shiftStart);
+    if (startMin == null || !row.shiftDate) return null;
+    const anchor = keyToDate(row.shiftDate);
+    anchor.setMinutes(anchor.getMinutes() + startMin);
+    return (Date.now() - anchor.getTime()) / (1000 * 60 * 60);
+  }
+
+  // The single gate every "should this shift be in Accounting yet" trigger
+  // funnels through — explicitly marking a shift complete, filling in both
+  // time sheet times, or the shift simply turning 12 hours old. Unlike the
+  // explicit Shift Complete button, none of these three conditions forces
+  // shift_complete itself to true — a shift can land in Accounting without
+  // ever being marked complete (that's the whole reason
+  // openLoadDetailsFromAccounting warns on open when that's the case).
+  // Safe to call repeatedly: sentToAccounting (backed by the real
+  // sent_to_accounting column) means a shift already sent is never
+  // re-sent, which matters here specifically because sendShiftToAccounting()
+  // unconditionally resets cost_level/revenue_level back to their 1/1
+  // defaults on every call — re-triggering it after a dispatcher has since
+  // changed those on the Accounting page would silently clobber that edit.
+  async function maybeSendToAccounting(row) {
+    if (!row.dbId || row.sentToAccounting) return;
+    const timesheetComplete = row.timesheetReceived && !!String(row.timesheetStartTime || "").trim() && !!String(row.timesheetEndTime || "").trim();
+    const hoursOld = hoursSinceShiftStart(row);
+    const qualifies = row.shiftComplete || timesheetComplete || (hoursOld != null && hoursOld >= 12);
+    if (!qualifies) return;
+    try {
+      await sendShiftToAccounting(row, row.location || state.activeLocation, row.shiftDate || state.activeDate);
+      row.sentToAccounting = true;
+    } catch (e) {
+      console.error("maybeSendToAccounting failed:", e);
+    }
+  }
+
+  // Runs periodically (see initBoardPage) over every shift currently cached
+  // in this browser tab, catching the two conditions that aren't tied to a
+  // specific save action: a shift quietly turning 12 hours old, or a time
+  // sheet that got completed through some other path. This only runs while
+  // someone actually has a board open — there's no server-side scheduler
+  // behind this yet, so a day nobody opens the board won't auto-send on its
+  // own. A guaranteed always-on version of this needs a Supabase Edge
+  // Function on a schedule, which is a real but separate infrastructure step.
+  async function scanForAutoAccountingSend() {
+    for (const key in state.sheets) {
+      for (const row of state.sheets[key]) {
+        if (!row.dbId || row.sentToAccounting) continue;
+        await maybeSendToAccounting(row);
+      }
+    }
+  }
+
   async function finalizeShiftCompletion(row) {
     row.shiftComplete = true;
     row.shiftCompleteAt = new Date().toISOString();
@@ -2482,7 +2538,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     await discardBlankTrips(row);
     await minimizeAllTrips(row);
     recomputeRowRate(row);
-    sendShiftToAccounting(row, row.location || state.activeLocation, row.shiftDate || state.activeDate).catch((e) => console.error("sendShiftToAccounting threw:", e));
+    await maybeSendToAccounting(row);
   }
 
   function openTimesheetModal(rowId, queue) {
@@ -2709,8 +2765,11 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   /* ---------------- driver-assignment warning modal ----------------
      Built via DOM injection rather than static HTML — works on every
      page (Atlanta/Delaware/Building C for now) without needing the same
-     markup pasted into multiple HTML files. */
-  function showDriverAssignmentWarning(title, lines) {
+     markup pasted into multiple HTML files. Exported since accounting.js
+     reuses this same modal for its own "shift not marked complete" warning
+     — same generic shape (title + lines + OK button), just a different
+     trigger and an optional callback for what happens once it's dismissed. */
+  export function showDriverAssignmentWarning(title, lines, onAcknowledge) {
     const existing = document.getElementById("driver-warning-overlay");
     if (existing) existing.remove();
     const overlay = document.createElement("div");
@@ -2730,7 +2789,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    const close = () => overlay.remove();
+    const close = () => { overlay.remove(); if (onAcknowledge) onAcknowledge(); };
     overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
     document.getElementById("driver-warning-close").addEventListener("click", close);
     document.getElementById("driver-warning-ok").addEventListener("click", close);
@@ -3713,25 +3772,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       row.timesheetReceived = $("#ld-ov-timesheet-received").checked;
       row.timesheetStartTime = $("#ld-ov-timesheet-start").value.trim();
       row.timesheetEndTime = $("#ld-ov-timesheet-end").value.trim();
-      const timesheetNowComplete = row.timesheetReceived && !!row.timesheetStartTime && !!row.timesheetEndTime;
-      if (timesheetNowComplete && !row.shiftComplete) {
-        // Same safety check the dedicated Complete Shift button already
-        // uses — don't silently send a load to Accounting with trips still
-        // open just because the time sheet happened to get filled in here.
-        const open = openTripsForRow(row);
-        if (open.length) {
-          const names = open.map((t, i) => t.routeId || t.tripId || `Route ${i + 1}`).join(", ");
-          if (confirm(`Time sheet is filled in, but this load still has ${open.length} trip(s) not closed out yet (${names}) — likely still waiting on paperwork. Mark the load complete and send to Accounting anyway?`)) {
-            await finalizeShiftCompletion(row);
-          } else {
-            await saveShiftNow(row);
-          }
-        } else {
-          await finalizeShiftCompletion(row);
-        }
-      } else {
-        await saveShiftNow(row);
-      }
+      await saveShiftNow(row);
+      // Time sheet start+end both filled in is one of the three auto-send
+      // triggers on its own now — no longer forces shift_complete, and no
+      // longer gated on open trips: that "is this really done" concern is
+      // handled by the warning the Accounting page shows on open instead.
+      await maybeSendToAccounting(row);
     } else if (tabKey === "notes") {
       const beforeNotesTab = row.notes;
       row.notes = $("#ld-notes-text").value.trim();
@@ -3791,15 +3837,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (beforePpwkReceived !== trip.ppwkReceived) logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "ppwk_received", beforePpwkReceived, trip.ppwkReceived);
       if (beforeComplete !== trip.complete) logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "route_complete", beforeComplete, trip.complete);
 
-      // This might have just been the last open trip — if the time sheet
-      // was already filled in (e.g. saved before this trip got closed
-      // out), the shift-completion check that runs when saving Overview
-      // never got a chance to pass. Catch that here too, so completion
-      // doesn't depend on which of the two happened last.
-      if (trip.complete && !row.shiftComplete && openTripsForRow(row).length === 0
-          && row.timesheetReceived && String(row.timesheetStartTime || "").trim() && String(row.timesheetEndTime || "").trim()) {
-        await finalizeShiftCompletion(row);
-      }
+      // Same auto-send gate as the Overview tab — covers the case where the
+      // time sheet was already filled in before this was the last trip to
+      // close out, so it doesn't matter which of the two happened last.
+      await maybeSendToAccounting(row);
 
       const stopCount = Math.max(0, parseInt(trip.stopCount, 10) || 0);
       const newStops = [];
@@ -5355,6 +5396,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     }
 
     setInterval(checkMidnightRollover, 60 * 1000);
+    setInterval(scanForAutoAccountingSend, 5 * 60 * 1000);
   }
 
   function switchDriverListTab(locationKey) {
