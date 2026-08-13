@@ -335,7 +335,7 @@ export function renderDriverStatsTable() {
     if ($("#date-prev")) $("#date-prev").disabled = (state.activeDate || state.todayKey) <= state.minDate;
   }
   export async function initAccountingPage() {
-    console.log("accounting.js build marker: 2026-08-13-a"); // confirms THIS version's code actually ran — check DevTools Console for this exact string
+    console.log("accounting.js build marker: 2026-08-13-c"); // confirms THIS version's code actually ran — check DevTools Console for this exact string
     // Accounting looks back further than the boards do — override the
     // shared min/max just for this page's calendar.
     state.minDate = dateKey(addDays(todayDate(), -60));
@@ -561,11 +561,28 @@ export function renderDriverStatsTable() {
   export function setupAccountingRealtimeSync() {
     if (!supabaseClient) return;
     const channel = supabaseClient.channel("accounting");
-    channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_accounting" }, (payload) => {
+    channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_accounting" }, async (payload) => {
       if (payload.eventType === "DELETE") return;
       const idx = accountingRecords.findIndex((r) => r.id === payload.new.id);
       if (idx !== -1) accountingRecords[idx] = payload.new; else accountingRecords.push(payload.new);
       accountingRecords.sort(acctSortCompare);
+      // A record that just arrived via realtime was never part of the
+      // original bulk fetch in loadAccountingRecordsForRange — its routes
+      // and shift-complete status need to be pulled in separately, or the
+      // Routes column renders "—" for it forever even though the routes
+      // genuinely exist (this is exactly why the Accounting page's Routes
+      // column could disagree with what the Load Details modal shows for
+      // the same load — the modal always fetches fresh, this cache didn't).
+      if (!acctRoutesByAccountingId[payload.new.id]) {
+        const { data: routes } = await supabaseClient.from(ACCOUNTING_ROUTES_TABLE).select("*").eq("accounting_id", payload.new.id);
+        if (routes && routes.length) {
+          acctRoutesByAccountingId[payload.new.id] = routes.sort((a, b) => (a.route_number || 0) - (b.route_number || 0));
+        }
+      }
+      if (payload.new.source_shift_id && acctShiftCompleteById[payload.new.source_shift_id] === undefined) {
+        const { data: shiftRows } = await supabaseClient.from(SHIFTS_TABLE).select("shift_complete").eq("id", payload.new.source_shift_id);
+        if (shiftRows && shiftRows[0]) acctShiftCompleteById[payload.new.source_shift_id] = !!shiftRows[0].shift_complete;
+      }
       renderAccountingTable();
     });
     channel.subscribe();
