@@ -4959,8 +4959,25 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         if (profileBtn) openEditDriverModal(profileBtn.dataset.driverId);
         const linkBtn = e.target.closest('[data-action="link-driver"]');
         if (linkBtn) {
-          startLoadDetailsEdit("overview");
-          requestAnimationFrame(() => { const input = $("#ld-ov-driver"); if (input) input.focus(); });
+          const found = loadDetailsState ? findRowAnywhere(loadDetailsState.rowId) : null;
+          const row = found ? found.row : null;
+          const nameVal = (row && row.driverNameText || "").trim().toLowerCase();
+          const match = nameVal ? driversForLocation(row.location || state.activeLocation || "atlanta").find((d) => d.name.trim().toLowerCase() === nameVal) : null;
+          if (match) {
+            // Exact match already exists — link it for real (persists to
+            // the database, same as picking it from the autocomplete
+            // would) and go straight to the profile, no detour through
+            // edit mode needed when there's nothing actually ambiguous.
+            row.driverId = match.id;
+            saveShiftNow(row);
+            renderLoadDetailsTabContent();
+            openEditDriverModal(match.id);
+          } else {
+            // Genuinely no match — drop into edit mode with the field
+            // focused so the autocomplete can help find or confirm one.
+            startLoadDetailsEdit("overview");
+            requestAnimationFrame(() => { const input = $("#ld-ov-driver"); if (input) input.focus(); });
+          }
         }
       });
       $("#ld-tab-content").addEventListener("input", (e) => {
