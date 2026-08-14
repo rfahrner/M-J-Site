@@ -3291,6 +3291,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       activeTab: forceTab || (jumpToTripId ? `trip-${jumpToTripId}` : "overview"),
       attachments: [],
       history: [],
+      loadNotes: [],
       stopsByTrip: {}, // trip.id (local) -> [{stopNumber, timeIn, timeOut, dbId}]
       editMode: null, // "overview" | trip.id | null
       editDraft: null, // scratch copy of the fields being edited, discarded on Cancel
@@ -3302,11 +3303,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
     if (supabaseClient && row.dbId) {
       const tripDbIds = row.trips.filter((t) => t.dbId).map((t) => t.dbId);
-      const [{ data: attachments }, { data: history }, stopsResult] = await Promise.all([
+      const [{ data: attachments }, { data: history }, stopsResult, notesResult] = await Promise.all([
         supabaseClient.from("load_attachments").select("*").eq("shift_id", row.dbId),
         supabaseClient.from("load_change_history").select("*").eq("shift_id", row.dbId),
         tripDbIds.length ? supabaseClient.from("trip_stops").select("*").in("trip_id", tripDbIds) : Promise.resolve({ data: [] }),
-      ]).catch(() => [{ data: [] }, { data: [] }, { data: [] }]);
+        supabaseClient.from(LOAD_NOTES_TABLE).select("*").eq("shift_id", row.dbId).order("created_at", { ascending: false }),
+      ]).catch(() => [{ data: [] }, { data: [] }, { data: [] }, { data: [] }]);
       // The modal may have been closed, or reopened for a different load,
       // while these requests were still in flight — writing into a stale
       // (or now-null) loadDetailsState here is exactly what threw "Cannot
@@ -3314,6 +3316,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (!loadDetailsState || loadDetailsState.rowId !== openedForRowId) return;
       loadDetailsState.attachments = attachments || [];
       loadDetailsState.history = (history || []).sort((a, b) => (a.changed_at < b.changed_at ? 1 : -1));
+      loadDetailsState.loadNotes = notesResult.data || [];
       const stopRows = stopsResult.data || [];
       row.trips.forEach((t) => {
         if (!t.dbId) return;
@@ -3524,23 +3527,24 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           <div class="ld-overview-side">${rateSectionHtml(row)}</div>
         </div>`;
     } else if (tab === "notes") {
-      const editing = loadDetailsState.editMode === "notes";
-      if (!editing) {
-        body.innerHTML = `
-          <div class="ld-edit-bar"><button type="button" class="btn btn-ghost" data-ld-edit="notes">Edit</button></div>
-          <div class="field"><label>Notes on this load</label><div class="static-text" style="white-space:pre-wrap;">${escapeHtml(row.notes || "—")}</div></div>
-          <div class="calc-note" style="margin-top:10px;">These notes travel with the load — visible here and on the Accounting page once it's sent over.</div>
-        `;
-      } else {
-        const d = loadDetailsState.editDraft;
-        body.innerHTML = `
-          <div class="field"><label>Notes on this load</label><textarea class="cell-input" id="ld-notes-text" rows="6" style="width:100%;">${escapeHtml(d.notes)}</textarea></div>
-          <div class="ld-edit-bar">
-            <button type="button" class="btn btn-ghost" data-ld-cancel="notes">Cancel</button>
-            <button type="button" class="btn" data-ld-save="notes">Save</button>
-          </div>
-        `;
-      }
+      const notes = loadDetailsState.loadNotes || [];
+      const notesHtml = notes.length
+        ? notes.map((n) => `
+            <div class="ld-history-row" style="grid-template-columns: 150px 130px 1fr;">
+              <span class="subtext">${new Date(n.created_at).toLocaleString()}</span>
+              <span class="subtext">${escapeHtml(n.created_by || "—")}${n.source === "board" ? " (board)" : ""}</span>
+              <span style="white-space:pre-wrap;">${escapeHtml(n.note_text)}</span>
+            </div>`).join("")
+        : `<div class="subtext">No notes on this load yet.</div>`;
+      body.innerHTML = `
+        <div class="field">
+          <label for="ld-note-input">Add a note</label>
+          <textarea class="cell-input" id="ld-note-input" rows="3" style="width:100%;" placeholder="Notes added here stay on this load's permanent log — they won't show up in the board's own Notes field."></textarea>
+          <button type="button" class="btn btn-ghost" id="ld-note-submit" style="margin-top:6px;">Add Note</button>
+        </div>
+        <div class="calc-note" style="margin:10px 0;">The board's own Notes field is separate and quick-edit — anything typed there is automatically added to this permanent log too, timestamped and attributed, even if it's later changed or cleared from the board.</div>
+        <div style="margin-top:14px;">${notesHtml}</div>
+      `;
     } else if (tab.startsWith("trip-")) {
       const tripLocalId = tab.slice(5);
       const trip = row.trips.find((t) => t.id === tripLocalId);
@@ -3666,8 +3670,6 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         timesheetReceived: !!row.timesheetReceived, timesheetStartTime: row.timesheetStartTime || "", timesheetEndTime: row.timesheetEndTime || "",
         trailerDropLocation: row.trailerDropLocation || "",
       };
-    } else if (tabKey === "notes") {
-      loadDetailsState.editDraft = { notes: row.notes || "" };
     } else {
       const trip = row.trips.find((t) => t.id === tabKey);
       const tripDrv = trip.driverId ? findDriver(trip.driverId) : null;
@@ -3789,11 +3791,6 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       // longer gated on open trips: that "is this really done" concern is
       // handled by the warning the Accounting page shows on open instead.
       await maybeSendToAccounting(row);
-    } else if (tabKey === "notes") {
-      const beforeNotesTab = row.notes;
-      row.notes = $("#ld-notes-text").value.trim();
-      await saveShiftNow(row);
-      if (beforeNotesTab !== row.notes) logChange(row.dbId, labelForRow(row), "notes", beforeNotesTab, row.notes);
     } else {
       const trip = row.trips.find((t) => t.id === tabKey);
       if (!trip) return;
@@ -4329,6 +4326,55 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   /* ---------------- driver profile modal (History + Notes tabs) ---------------- */
 
   const DRIVER_NOTES_TABLE = "driver_notes";
+  const LOAD_NOTES_TABLE = "load_notes";
+
+  // Auto-logs a committed change to the board's Notes column into the
+  // load's permanent notes log. This is the whole point of the two being
+  // separate: the board's field stays quick-edit and disposable, but
+  // whatever passed through it is preserved here forever — even after
+  // it's later changed or cleared from the board itself. Silently skips
+  // empty commits, since clearing the field isn't itself a note worth logging.
+  async function logBoardNoteToPermanentLog(shiftDbId, noteText) {
+    if (!supabaseClient || !shiftDbId || !String(noteText || "").trim()) return;
+    try {
+      await supabaseClient.from(LOAD_NOTES_TABLE).insert({
+        shift_id: shiftDbId, note_text: noteText, source: "board", created_by: currentUserLabel || "unknown user",
+      });
+    } catch (e) {
+      console.error("logBoardNoteToPermanentLog failed:", e);
+    }
+  }
+
+  // The Load Details modal's own Notes tab — adds directly to the same
+  // permanent log (tagged "modal" instead of "board"), but deliberately
+  // never touches row.notes/loads_shifts.notes at all, so a note typed
+  // here never shows up back on the board's own Notes field.
+  async function submitLoadNote() {
+    if (!loadDetailsState || !supabaseClient) return;
+    const found = findRowAnywhere(loadDetailsState.rowId);
+    if (!found || !found.row.dbId) return;
+    const input = $("#ld-note-input");
+    if (!input) return;
+    const text = input.value.trim();
+    if (!text) return;
+    const submitBtn = $("#ld-note-submit");
+    if (submitBtn) submitBtn.disabled = true;
+    try {
+      const { data, error } = await supabaseClient.from(LOAD_NOTES_TABLE)
+        .insert({ shift_id: found.row.dbId, note_text: text, source: "modal", created_by: currentUserLabel || "unknown user" })
+        .select();
+      if (error) throw error;
+      if (!loadDetailsState.loadNotes) loadDetailsState.loadNotes = [];
+      loadDetailsState.loadNotes.unshift(data[0]);
+      input.value = "";
+      renderLoadDetailsTabContent();
+    } catch (e) {
+      console.error("submitLoadNote failed:", e);
+      setDriverSyncStatus(`Couldn't save that note (${e.message || e}).`, "error");
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
+    }
+  }
   let driverProfileState = null; // { driverId, activeTab, history: null|[], notes: null|[] }
 
   // Pulls this driver's past PRO#/Aljex# across every board they could
@@ -4955,6 +5001,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         const saveBtn = e.target.closest("[data-ld-save]");
         if (saveBtn) saveLoadDetailsEdit(saveBtn.dataset.ldSave);
         if (e.target.id === "ld-rate-reset") resetRateToCalculated();
+        if (e.target.id === "ld-note-submit") submitLoadNote();
         const profileBtn = e.target.closest('[data-action="edit-driver"]');
         if (profileBtn) openEditDriverModal(profileBtn.dataset.driverId);
         const linkBtn = e.target.closest('[data-action="link-driver"]');
@@ -5237,6 +5284,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           if (found) {
             if (field === "notes") {
               logChange(found.row.dbId, labelForRow(found.row), "notes", before, t.value);
+              logBoardNoteToPermanentLog(found.row.dbId, t.value);
             } else if (field === "rate") {
               // A manual entry directly into the board's Rate cell — kept
               // distinct from the Load Details Rate panel's own override
