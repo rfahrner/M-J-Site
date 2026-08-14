@@ -2503,7 +2503,18 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (!row.dbId || row.sentToAccounting) return;
     const timesheetComplete = row.timesheetReceived && !!String(row.timesheetStartTime || "").trim() && !!String(row.timesheetEndTime || "").trim();
     const hoursOld = hoursSinceShiftStart(row);
-    const qualifies = row.shiftComplete || timesheetComplete || (hoursOld != null && hoursOld >= 12);
+    const hasRealTrip = row.trips.some((t) => String(t.routeId || "").trim());
+    // The 12-hour trigger is a blind timer, not a human assertion that the
+    // shift is actually done — a shift that's 12 hours old but still has
+    // zero real trips entered almost certainly just hasn't had its data
+    // caught up yet, not "nothing happened." Sending it anyway would create
+    // a permanently-blank Accounting record, since sentToAccounting blocks
+    // ever re-sending it once real trips do get entered. Shift Complete and
+    // a filled-in time sheet are both explicit human actions, so those two
+    // stay trusted even with zero trips (matches how the board's own
+    // Complete-shift confirmation already treats a genuinely trip-less shift).
+    const twelveHoursOld = hoursOld != null && hoursOld >= 12 && hasRealTrip;
+    const qualifies = row.shiftComplete || timesheetComplete || twelveHoursOld;
     if (!qualifies) return;
     try {
       await sendShiftToAccounting(row, row.location || state.activeLocation, row.shiftDate || state.activeDate);
