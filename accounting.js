@@ -56,11 +56,25 @@ let accountingRecords = [];
     const fresh = data || [];
     accountingRecords = (replaceExisting ? fresh : [...accountingRecords, ...fresh]).sort(acctSortCompare);
 
+    // A single .in() query with a very long id list can silently fail or
+    // truncate well before it's obvious something's wrong — and that list
+    // only grows now that shifts land in Accounting continuously via the
+    // auto-send trigger, not just at explicit Shift Complete clicks.
+    // Chunking keeps every one of these queries small and reliable
+    // regardless of how large the table gets over time.
+    const CHUNK_SIZE = 150;
+    function chunk(arr, size) {
+      const out = [];
+      for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+      return out;
+    }
+
     const shiftIds = [...new Set(accountingRecords.filter((r) => r.location === "delaware" && r.source_shift_id).map((r) => r.source_shift_id))];
     if (shiftIds.length) {
-      const { data: trips, error: tripsErr } = await supabaseClient.from(TRIPS_TABLE).select("*").in("shift_id", shiftIds);
-      if (!tripsErr) {
-        acctTripsByShiftId = {};
+      acctTripsByShiftId = {};
+      for (const idChunk of chunk(shiftIds, CHUNK_SIZE)) {
+        const { data: trips, error: tripsErr } = await supabaseClient.from(TRIPS_TABLE).select("*").in("shift_id", idChunk);
+        if (tripsErr) { console.error("Failed to load Delaware trips (chunk):", tripsErr); continue; }
         (trips || []).forEach((t) => {
           if (!acctTripsByShiftId[t.shift_id]) acctTripsByShiftId[t.shift_id] = [];
           acctTripsByShiftId[t.shift_id].push(t);
@@ -69,18 +83,18 @@ let accountingRecords = [];
     }
     const allShiftIds = [...new Set(accountingRecords.filter((r) => r.source_shift_id).map((r) => r.source_shift_id))];
     if (allShiftIds.length) {
-      const { data: shiftRows, error: shiftErr } = await supabaseClient.from(SHIFTS_TABLE).select("id, shift_complete").in("id", allShiftIds);
-      if (!shiftErr) {
+      for (const idChunk of chunk(allShiftIds, CHUNK_SIZE)) {
+        const { data: shiftRows, error: shiftErr } = await supabaseClient.from(SHIFTS_TABLE).select("id, shift_complete").in("id", idChunk);
+        if (shiftErr) { console.error("Failed to load shift-complete status (chunk):", shiftErr); continue; }
         (shiftRows || []).forEach((s) => { acctShiftCompleteById[s.id] = !!s.shift_complete; });
       }
     }
     const accountingIds = accountingRecords.map((r) => r.id);
     if (accountingIds.length) {
-      const { data: routes, error: routesErr } = await supabaseClient.from(ACCOUNTING_ROUTES_TABLE).select("*").in("accounting_id", accountingIds);
-      if (routesErr) {
-        console.error("Failed to load accounting routes:", routesErr);
-      } else {
-        acctRoutesByAccountingId = {};
+      acctRoutesByAccountingId = {};
+      for (const idChunk of chunk(accountingIds, CHUNK_SIZE)) {
+        const { data: routes, error: routesErr } = await supabaseClient.from(ACCOUNTING_ROUTES_TABLE).select("*").in("accounting_id", idChunk);
+        if (routesErr) { console.error("Failed to load accounting routes (chunk):", routesErr); continue; }
         (routes || [])
           .sort((a, b) => (a.route_number || 0) - (b.route_number || 0))
           .forEach((r) => {
@@ -335,7 +349,7 @@ export function renderDriverStatsTable() {
     if ($("#date-prev")) $("#date-prev").disabled = (state.activeDate || state.todayKey) <= state.minDate;
   }
   export async function initAccountingPage() {
-    console.log("accounting.js build marker: 2026-08-13-c"); // confirms THIS version's code actually ran — check DevTools Console for this exact string
+    console.log("accounting.js build marker: 2026-08-13-d"); // confirms THIS version's code actually ran — check DevTools Console for this exact string
     // Accounting looks back further than the boards do — override the
     // shared min/max just for this page's calendar.
     state.minDate = dateKey(addDays(todayDate(), -60));
