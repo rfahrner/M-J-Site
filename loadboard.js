@@ -3479,7 +3479,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           ${banner}
           <div class="ld-edit-bar"><button type="button" class="btn btn-ghost" data-ld-edit="overview">Edit</button></div>
           <div class="field-box-grid">
-            <fieldset class="field-box"><legend>Driver</legend><div class="static-text">${escapeHtml(drv ? drv.name : (row.driverNameText || "—"))}${drv ? ` <button type="button" class="cell-link-btn" data-action="edit-driver" data-driver-id="${drv.id}" title="Open driver profile">↗</button>` : ""}</div></fieldset>
+            <fieldset class="field-box"><legend>Driver</legend><div class="static-text">${escapeHtml(drv ? drv.name : (row.driverNameText || "—"))}${drv ? ` <button type="button" class="cell-link-btn" data-action="edit-driver" data-driver-id="${drv.id}" title="Open driver profile">↗</button>` : (row.driverNameText ? ` <button type="button" class="cell-link-btn" data-action="link-driver" title="Not linked to a driver profile — click to fix">Link</button>` : "")}</div></fieldset>
             <fieldset class="field-box"><legend>Status</legend><div class="static-text">${row.shiftComplete ? "Complete" : "Active"}</div></fieldset>
             <fieldset class="field-box"><legend>Trips</legend><div class="static-text">${row.trips.length}</div></fieldset>
             <fieldset class="field-box${timesheetMissing ? " field-box-missing" : ""}" style="grid-column: span 2;">
@@ -4957,6 +4957,11 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         if (e.target.id === "ld-rate-reset") resetRateToCalculated();
         const profileBtn = e.target.closest('[data-action="edit-driver"]');
         if (profileBtn) openEditDriverModal(profileBtn.dataset.driverId);
+        const linkBtn = e.target.closest('[data-action="link-driver"]');
+        if (linkBtn) {
+          startLoadDetailsEdit("overview");
+          requestAnimationFrame(() => { const input = $("#ld-ov-driver"); if (input) input.focus(); });
+        }
       });
       $("#ld-tab-content").addEventListener("input", (e) => {
         if (e.target.id === "ld-tr-stopCount" && loadDetailsState && loadDetailsState.editDraft) {
