@@ -1056,6 +1056,38 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     }
   }
 
+  const ROUTE_TYPE_LABELS = { birm: "BIRM", hostler: "Hostler", na: "N/A" };
+
+  // Turns a raw Change History row into one plain-language sentence —
+  // covers every field_name actually logged anywhere in the app. Falls
+  // back to a readable-but-generic sentence for anything not explicitly
+  // covered here, rather than showing nothing.
+  function formatChangeHistoryEntry(fieldName, newValue) {
+    const nv = newValue == null ? "" : String(newValue);
+    switch (fieldName) {
+      case "ppwk_received": return nv === "true" ? "Paperwork received" : "Paperwork marked not received";
+      case "route_complete": return nv === "true" ? "Route marked complete" : "Route marked incomplete";
+      case "tonu": return nv === "true" ? "Marked TONU" : "TONU removed";
+      case "shift_complete": return nv === "true" ? "Shift marked complete" : "Shift marked incomplete";
+      case "timesheet_received": return "Time sheet received";
+      case "pre_shift_text_sent": return "Pre-shift text sent";
+      case "deleted": return "Load deleted";
+      case "route_deleted": return "Route deleted";
+      case "route_type": return `Route type changed to ${ROUTE_TYPE_LABELS[nv] || nv}`;
+      case "hostler_hours": return `Hostler hours set to ${nv}`;
+      case "carrier_rate_manual":
+      case "rate": return `Carrier rate changed to $${nv}`;
+      case "route_id": return `Route ID changed to ${nv || "(blank)"}`;
+      case "trailer_out": return `Trailer # changed to ${nv || "(blank)"}`;
+      case "driver_reassigned": return `Driver reassigned to ${nv}`;
+      default:
+        if (fieldName.startsWith("rate_override_")) return `Rate override updated to $${nv}`;
+        // Generic fallback so a future field_name that's added later
+        // without a hand-written sentence here still reads reasonably.
+        return `${fieldName.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())} changed to ${nv}`;
+    }
+  }
+
   async function minimizeTrip(rowId, tripId) {
     const found = findRowAnywhere(rowId);
     if (!found) return;
@@ -2587,10 +2619,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const found = findRowAnywhere(timesheetModalState.rowId);
     if (!found) { advanceTimesheetQueue(); return; }
     const row = found.row;
+    const wasTimesheetReceived = row.timesheetReceived;
     row.timesheetReceived = received;
     row.timesheetStartTime = start;
     row.timesheetEndTime = end;
     row.trailerDropLocation = dropLocation;
+    if (!wasTimesheetReceived && row.timesheetReceived) logChange(row.dbId, labelForRow(row), "timesheet_received", "false", "true");
     await finalizeShiftCompletion(row);
     advanceTimesheetQueue();
   }
@@ -2962,8 +2996,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     for (const k in state.sheets) {
       state.sheets[k].forEach((r) => {
         if (idSet.has(String(r.dbId))) {
+          const wasSent = r.preShiftTextSent;
           r.preShiftTextSent = true;
           r.preShiftTextSentAt = nowIso;
+          if (!wasSent) logChange(r.dbId, labelForRow(r), "pre_shift_text_sent", "false", "true");
         }
       });
     }
@@ -3643,14 +3679,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     } else if (tab === "history") {
       const rows = loadDetailsState.history;
       body.innerHTML = `
-        <div class="ld-history-row ld-history-row-5col"><div>When</div><div>By</div><div>Field</div><div>Was</div><div>Now</div></div>
+        <div class="ld-history-row" style="grid-template-columns: 150px 130px 1fr;"><div>When</div><div>By</div><div>What</div></div>
         ${rows.length ? rows.map((h) => `
-          <div class="ld-history-row ld-history-row-5col">
+          <div class="ld-history-row" style="grid-template-columns: 150px 130px 1fr;">
             <div>${new Date(h.changed_at).toLocaleString()}</div>
             <div>${escapeHtml(h.changed_by || "—")}</div>
-            <div>${escapeHtml(h.field_name)}</div>
-            <div class="ld-history-old">${escapeHtml(h.old_value || "—")}</div>
-            <div class="ld-history-new">${escapeHtml(h.new_value || "—")}</div>
+            <div>${escapeHtml(formatChangeHistoryEntry(h.field_name, h.new_value))}</div>
           </div>`).join("") : `<div class="subtext" style="padding:10px 0;">No changes recorded yet.</div>`}
       `;
     }
@@ -3781,9 +3815,11 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       row.driverId = null;
       const match = driversForLocation(row.location || state.activeLocation || "atlanta").find((x) => x.name.toLowerCase() === nameVal.toLowerCase());
       if (match) row.driverId = match.id;
+      const wasTimesheetReceived = row.timesheetReceived;
       row.timesheetReceived = $("#ld-ov-timesheet-received").checked;
       row.timesheetStartTime = $("#ld-ov-timesheet-start").value.trim();
       row.timesheetEndTime = $("#ld-ov-timesheet-end").value.trim();
+      if (!wasTimesheetReceived && row.timesheetReceived) logChange(row.dbId, labelForRow(row), "timesheet_received", "false", "true");
       await saveShiftNow(row);
       // Time sheet start+end both filled in is one of the three auto-send
       // triggers on its own now — no longer forces shift_complete, and no
@@ -3795,7 +3831,6 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (!trip) return;
       const beforeRouteId = trip.routeId;
       const beforeTrailerOut = trip.trailerOut;
-      const beforeTripNotes = trip.notes;
       trip.routeId = $("#ld-tr-routeId").value.trim();
       trip.tripId = $("#ld-tr-tripId").value.trim();
       trip.trailerOut = $("#ld-tr-trailerOut").value.trim();
@@ -3840,7 +3875,6 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
       if (beforeRouteId !== trip.routeId) logChange(row.dbId, labelForRow(row), "route_id", beforeRouteId, trip.routeId);
       if (beforeTrailerOut !== trip.trailerOut) logChange(row.dbId, labelForRow(row), "trailer_out", beforeTrailerOut, trip.trailerOut);
-      if (beforeTripNotes !== trip.notes) logChange(row.dbId, labelForRow(row), "notes", beforeTripNotes, trip.notes);
       if (beforePpwkReceived !== trip.ppwkReceived) logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "ppwk_received", beforePpwkReceived, trip.ppwkReceived);
       if (beforeComplete !== trip.complete) logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "route_complete", beforeComplete, trip.complete);
 
