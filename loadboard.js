@@ -3831,6 +3831,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (!trip) return;
       const beforeRouteId = trip.routeId;
       const beforeTrailerOut = trip.trailerOut;
+      const beforeTripDriver = trip.driverId ? findDriver(trip.driverId) : null;
+      const beforeTripDriverName = beforeTripDriver ? beforeTripDriver.name : "";
       trip.routeId = $("#ld-tr-routeId").value.trim();
       trip.tripId = $("#ld-tr-tripId").value.trim();
       trip.trailerOut = $("#ld-tr-trailerOut").value.trim();
@@ -3875,6 +3877,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
       if (beforeRouteId !== trip.routeId) logChange(row.dbId, labelForRow(row), "route_id", beforeRouteId, trip.routeId);
       if (beforeTrailerOut !== trip.trailerOut) logChange(row.dbId, labelForRow(row), "trailer_out", beforeTrailerOut, trip.trailerOut);
+      if (driverNameVal && beforeTripDriverName.toLowerCase() !== driverNameVal.toLowerCase()) {
+        logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "driver_reassigned", beforeTripDriverName, driverNameVal);
+      }
       if (beforePpwkReceived !== trip.ppwkReceived) logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "ppwk_received", beforePpwkReceived, trip.ppwkReceived);
       if (beforeComplete !== trip.complete) logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "route_complete", beforeComplete, trip.complete);
 
