@@ -1080,6 +1080,13 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       case "route_id": return `Route ID changed to ${nv || "(blank)"}`;
       case "trailer_out": return `Trailer # changed to ${nv || "(blank)"}`;
       case "driver_reassigned": return `Driver reassigned to ${nv}`;
+      case "driver_id": {
+        // Older entries logged the raw numeric driver id directly rather
+        // than a name — resolve it to a real name at display time so
+        // this reads correctly no matter how long ago it was logged.
+        const drv = findDriver(nv);
+        return `Driver changed to ${drv ? drv.name : `driver #${nv}`}`;
+      }
       default:
         if (fieldName.startsWith("rate_override_")) return `Rate override updated to $${nv}`;
         // Generic fallback so a future field_name that's added later
