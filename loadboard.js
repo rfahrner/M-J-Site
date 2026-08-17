@@ -1071,6 +1071,18 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // covers every field_name actually logged anywhere in the app. Falls
   // back to a readable-but-generic sentence for anything not explicitly
   // covered here, rather than showing nothing.
+  // Shared phrasing for every "from X to Y" style entry. Handles a
+  // genuinely blank old value gracefully (falls back to "set to Y"
+  // instead of an awkward "changed from  to Y") — this path only
+  // matters for entries logged before the blank-check fix went into
+  // logChange(); nothing new can ever have a blank "from" going forward,
+  // since logChange() skips logging that case entirely now.
+  function fromToPhrase(label, ov, nv, prefix) {
+    prefix = prefix || "";
+    if (!ov) return `${label} set to ${prefix}${nv}`;
+    return `${label} changed from ${prefix}${ov} to ${prefix}${nv}`;
+  }
+
   function formatChangeHistoryEntry(fieldName, oldValue, newValue) {
     const nv = newValue == null ? "" : String(newValue);
     const ov = oldValue == null ? "" : String(oldValue);
@@ -1084,27 +1096,28 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       case "deleted": return "Load deleted";
       case "route_deleted": return "Route deleted";
       case "route_type": return `Route type changed to ${ROUTE_TYPE_LABELS[nv] || nv}`;
-      case "hostler_hours": return `Hostler hours changed from ${ov} to ${nv}`;
+      case "hostler_hours": return fromToPhrase("Hostler hours", ov, nv);
       case "carrier_rate_manual":
-      case "rate": return `Carrier rate changed from $${ov} to $${nv}`;
-      case "route_id": return `Route ID changed from ${ov} to ${nv || "(blank)"}`;
-      case "trailer_out": return `Trailer # changed from ${ov} to ${nv || "(blank)"}`;
-      case "driver_reassigned": return `Driver changed from ${ov} to ${nv}`;
+      case "rate": return fromToPhrase("Carrier rate", ov, nv, "$");
+      case "route_id": return fromToPhrase("Route ID", ov, nv || "(blank)");
+      case "trailer_out": return fromToPhrase("Trailer #", ov, nv || "(blank)");
+      case "driver_reassigned": return ov ? `Driver changed from ${ov} to ${nv}` : `Driver assigned: ${nv}`;
       case "driver_id": {
         // Older entries logged the raw numeric driver id directly rather
         // than a name — resolve both sides to real names at display
         // time so this reads correctly no matter how long ago it was logged.
         const newDrv = findDriver(nv);
-        const oldDrv = findDriver(ov);
         const newName = newDrv ? newDrv.name : `driver #${nv}`;
+        if (!ov) return `Driver assigned: ${newName}`;
+        const oldDrv = findDriver(ov);
         const oldName = oldDrv ? oldDrv.name : `driver #${ov}`;
         return `Driver changed from ${oldName} to ${newName}`;
       }
       default:
-        if (fieldName.startsWith("rate_override_")) return `Rate override changed from ${ov === "" ? "$0" : "$" + ov} to $${nv}`;
+        if (fieldName.startsWith("rate_override_")) return fromToPhrase("Rate override", ov, nv, "$");
         // Generic fallback so a future field_name that's added later
         // without a hand-written sentence here still reads reasonably.
-        return `${fieldName.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())} changed from ${ov} to ${nv}`;
+        return fromToPhrase(fieldName.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()), ov, nv);
     }
   }
 
@@ -3720,7 +3733,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         ${rows.length ? rows.map((h) => `
           <div class="ld-history-row" style="grid-template-columns: 150px 130px 1fr; align-items:start;">
             <div>${new Date(h.changed_at).toLocaleString()}</div>
-            <div>${escapeHtml(h.changed_by || "—")}</div>
+            <div>${escapeHtml(h.changed_by || "Unknown user")}</div>
             <div>
               <div>${escapeHtml(formatChangeHistoryEntry(h.field_name, h.old_value, h.new_value))}</div>
               ${noteSectionHtml(h)}
