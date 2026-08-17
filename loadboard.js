@@ -1042,6 +1042,15 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // readable even after the parent load is deleted.
   async function logChange(shiftDbId, label, fieldName, oldValue, newValue) {
     if (!supabaseClient) return;
+    // Only a genuine CHANGE gets tracked — not the first time a value is
+    // entered into a field that was previously blank. Filling in an empty
+    // start time isn't a change; 15:00 -> 22:00 is. A boolean toggle's
+    // "before" (the literal string "false") still counts as a real prior
+    // value, so those keep logging correctly either way — this only
+    // suppresses the case where there was genuinely nothing there yet.
+    const oldIsBlank = oldValue === null || oldValue === undefined || String(oldValue).trim() === "";
+    if (oldIsBlank) return;
+    if (String(oldValue) === String(newValue)) return;
     try {
       await supabaseClient.from("load_change_history").insert({
         shift_id: shiftDbId || null,
@@ -1062,8 +1071,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // covers every field_name actually logged anywhere in the app. Falls
   // back to a readable-but-generic sentence for anything not explicitly
   // covered here, rather than showing nothing.
-  function formatChangeHistoryEntry(fieldName, newValue) {
+  function formatChangeHistoryEntry(fieldName, oldValue, newValue) {
     const nv = newValue == null ? "" : String(newValue);
+    const ov = oldValue == null ? "" : String(oldValue);
     switch (fieldName) {
       case "ppwk_received": return nv === "true" ? "Paperwork received" : "Paperwork marked not received";
       case "route_complete": return nv === "true" ? "Route marked complete" : "Route marked incomplete";
@@ -1074,24 +1084,27 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       case "deleted": return "Load deleted";
       case "route_deleted": return "Route deleted";
       case "route_type": return `Route type changed to ${ROUTE_TYPE_LABELS[nv] || nv}`;
-      case "hostler_hours": return `Hostler hours set to ${nv}`;
+      case "hostler_hours": return `Hostler hours changed from ${ov} to ${nv}`;
       case "carrier_rate_manual":
-      case "rate": return `Carrier rate changed to $${nv}`;
-      case "route_id": return `Route ID changed to ${nv || "(blank)"}`;
-      case "trailer_out": return `Trailer # changed to ${nv || "(blank)"}`;
-      case "driver_reassigned": return `Driver reassigned to ${nv}`;
+      case "rate": return `Carrier rate changed from $${ov} to $${nv}`;
+      case "route_id": return `Route ID changed from ${ov} to ${nv || "(blank)"}`;
+      case "trailer_out": return `Trailer # changed from ${ov} to ${nv || "(blank)"}`;
+      case "driver_reassigned": return `Driver changed from ${ov} to ${nv}`;
       case "driver_id": {
         // Older entries logged the raw numeric driver id directly rather
-        // than a name — resolve it to a real name at display time so
-        // this reads correctly no matter how long ago it was logged.
-        const drv = findDriver(nv);
-        return `Driver changed to ${drv ? drv.name : `driver #${nv}`}`;
+        // than a name — resolve both sides to real names at display
+        // time so this reads correctly no matter how long ago it was logged.
+        const newDrv = findDriver(nv);
+        const oldDrv = findDriver(ov);
+        const newName = newDrv ? newDrv.name : `driver #${nv}`;
+        const oldName = oldDrv ? oldDrv.name : `driver #${ov}`;
+        return `Driver changed from ${oldName} to ${newName}`;
       }
       default:
-        if (fieldName.startsWith("rate_override_")) return `Rate override updated to $${nv}`;
+        if (fieldName.startsWith("rate_override_")) return `Rate override changed from ${ov === "" ? "$0" : "$" + ov} to $${nv}`;
         // Generic fallback so a future field_name that's added later
         // without a hand-written sentence here still reads reasonably.
-        return `${fieldName.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())} changed to ${nv}`;
+        return `${fieldName.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())} changed from ${ov} to ${nv}`;
     }
   }
 
@@ -3335,6 +3348,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       attachments: [],
       history: [],
       loadNotes: [],
+      editingHistoryNoteId: null,
       stopsByTrip: {}, // trip.id (local) -> [{stopNumber, timeIn, timeOut, dbId}]
       editMode: null, // "overview" | trip.id | null
       editDraft: null, // scratch copy of the fields being edited, discarded on Cancel
@@ -3685,13 +3699,32 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       `;
     } else if (tab === "history") {
       const rows = loadDetailsState.history;
+      const noteSectionHtml = (h) => {
+        if (loadDetailsState.editingHistoryNoteId === h.id) {
+          return `
+            <div style="margin-top:6px;">
+              <textarea class="cell-input" id="ld-hist-note-input-${h.id}" rows="2" style="width:100%;" placeholder="Why was this changed?">${escapeHtml(h.note || "")}</textarea>
+              <div style="margin-top:4px;">
+                <button type="button" class="btn btn-ghost" style="padding:2px 10px; font-size:12px;" data-hist-note-save="${h.id}">Save</button>
+                <button type="button" class="btn btn-ghost" style="padding:2px 10px; font-size:12px;" data-hist-note-cancel="${h.id}">Cancel</button>
+              </div>
+            </div>`;
+        }
+        if (h.note) {
+          return `<div class="subtext" style="margin-top:4px; font-style:italic;">Note: ${escapeHtml(h.note)} <button type="button" class="cell-link-btn" style="width:auto; height:auto; padding:0 4px; font-size:11px;" data-hist-note-edit="${h.id}">Edit</button></div>`;
+        }
+        return `<button type="button" class="cell-link-btn" style="width:auto; height:auto; padding:0 4px; font-size:11px; margin-top:2px;" data-hist-note-edit="${h.id}">+ Add note</button>`;
+      };
       body.innerHTML = `
         <div class="ld-history-row" style="grid-template-columns: 150px 130px 1fr;"><div>When</div><div>By</div><div>What</div></div>
         ${rows.length ? rows.map((h) => `
-          <div class="ld-history-row" style="grid-template-columns: 150px 130px 1fr;">
+          <div class="ld-history-row" style="grid-template-columns: 150px 130px 1fr; align-items:start;">
             <div>${new Date(h.changed_at).toLocaleString()}</div>
             <div>${escapeHtml(h.changed_by || "—")}</div>
-            <div>${escapeHtml(formatChangeHistoryEntry(h.field_name, h.new_value))}</div>
+            <div>
+              <div>${escapeHtml(formatChangeHistoryEntry(h.field_name, h.old_value, h.new_value))}</div>
+              ${noteSectionHtml(h)}
+            </div>
           </div>`).join("") : `<div class="subtext" style="padding:10px 0;">No changes recorded yet.</div>`}
       `;
     }
@@ -3768,7 +3801,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     recomputeRowRate(row);
     logChange(
       row.dbId, labelForRow(row), `rate_override_${kind}_${idOrKey}`,
-      before != null ? String(before) : "(default)",
+      before != null ? String(before) : null,
       bucket[idOrKey] != null ? String(bucket[idOrKey]) : "(default)"
     );
     renderLoadDetailsTabContent();
@@ -4420,6 +4453,42 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (submitBtn) submitBtn.disabled = false;
     }
   }
+
+  // Per-entry notes on Change History — a small explanation of WHY a
+  // given change happened, attached to that specific entry. Lives on
+  // load_change_history itself (keyed by shift_id, same as the rest of
+  // that table), so it automatically travels with the load into
+  // Accounting too — that page opens this exact same modal/tab, it isn't
+  // a separate view that would need its own copy of this data.
+  function startEditHistoryNote(historyId) {
+    if (!loadDetailsState) return;
+    loadDetailsState.editingHistoryNoteId = historyId;
+    renderLoadDetailsTabContent();
+  }
+
+  function cancelEditHistoryNote() {
+    if (!loadDetailsState) return;
+    loadDetailsState.editingHistoryNoteId = null;
+    renderLoadDetailsTabContent();
+  }
+
+  async function saveHistoryNote(historyId) {
+    if (!supabaseClient || !loadDetailsState) return;
+    const input = document.getElementById(`ld-hist-note-input-${historyId}`);
+    if (!input) return;
+    const text = input.value.trim();
+    try {
+      const { error } = await supabaseClient.from("load_change_history").update({ note: text || null }).eq("id", historyId);
+      if (error) throw error;
+      const entry = loadDetailsState.history.find((h) => h.id === historyId);
+      if (entry) entry.note = text || null;
+      loadDetailsState.editingHistoryNoteId = null;
+      renderLoadDetailsTabContent();
+    } catch (e) {
+      console.error("saveHistoryNote failed:", e);
+      setDriverSyncStatus(`Couldn't save that note (${e.message || e}).`, "error");
+    }
+  }
   let driverProfileState = null; // { driverId, activeTab, history: null|[], notes: null|[] }
 
   // Pulls this driver's past PRO#/Aljex# across every board they could
@@ -5047,6 +5116,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         if (saveBtn) saveLoadDetailsEdit(saveBtn.dataset.ldSave);
         if (e.target.id === "ld-rate-reset") resetRateToCalculated();
         if (e.target.id === "ld-note-submit") submitLoadNote();
+        const histNoteEditBtn = e.target.closest('[data-hist-note-edit]');
+        if (histNoteEditBtn) startEditHistoryNote(Number(histNoteEditBtn.dataset.histNoteEdit));
+        const histNoteSaveBtn = e.target.closest('[data-hist-note-save]');
+        if (histNoteSaveBtn) saveHistoryNote(Number(histNoteSaveBtn.dataset.histNoteSave));
+        const histNoteCancelBtn = e.target.closest('[data-hist-note-cancel]');
+        if (histNoteCancelBtn) cancelEditHistoryNote();
         const profileBtn = e.target.closest('[data-action="edit-driver"]');
         if (profileBtn) openEditDriverModal(profileBtn.dataset.driverId);
         const linkBtn = e.target.closest('[data-action="link-driver"]');
