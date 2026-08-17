@@ -1633,7 +1633,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           </select>
       </td>` : ""}
       <td class="col-notes"${rs}><input class="cell-input" placeholder="Notes" data-row="${row.id}" data-field="notes" value="${escapeHtml(row.notes)}"></td>
-      <td class="col-routes"${rs}>${routesChipsHtml(row)}</td>`;
+      <td class="col-routes" style="white-space:normal;"${rs}>${routesChipsHtml(row)}</td>`;
   }
 
   function rowsToHtml(row) {
@@ -3307,7 +3307,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         supabaseClient.from("load_attachments").select("*").eq("shift_id", row.dbId),
         supabaseClient.from("load_change_history").select("*").eq("shift_id", row.dbId),
         tripDbIds.length ? supabaseClient.from("trip_stops").select("*").in("trip_id", tripDbIds) : Promise.resolve({ data: [] }),
-        supabaseClient.from(LOAD_NOTES_TABLE).select("*").eq("shift_id", row.dbId).order("created_at", { ascending: false }),
+        supabaseClient.from(LOAD_NOTES_TABLE).select("*").eq("shift_id", row.dbId).order("created_at", { ascending: true }),
       ]).catch(() => [{ data: [] }, { data: [] }, { data: [] }, { data: [] }]);
       // The modal may have been closed, or reopened for a different load,
       // while these requests were still in flight — writing into a stale
@@ -3530,10 +3530,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       const notes = loadDetailsState.loadNotes || [];
       const notesHtml = notes.length
         ? notes.map((n) => `
-            <div class="ld-history-row" style="grid-template-columns: 150px 130px 1fr;">
-              <span class="subtext">${new Date(n.created_at).toLocaleString()}</span>
-              <span class="subtext">${escapeHtml(n.created_by || "—")}${n.source === "board" ? " (board)" : ""}</span>
-              <span style="white-space:pre-wrap;">${escapeHtml(n.note_text)}</span>
+            <div class="ld-note-entry" style="margin-bottom:14px; padding-bottom:14px; border-bottom:1px solid var(--line, #e5e7eb);">
+              <div style="white-space:pre-wrap;">"${escapeHtml(n.note_text)}"</div>
+              <div class="subtext" style="margin-top:3px;">${escapeHtml(n.created_by || "unknown user")}${n.source === "board" ? " (board)" : ""} — ${new Date(n.created_at).toLocaleString()}</div>
             </div>`).join("")
         : `<div class="subtext">No notes on this load yet.</div>`;
       body.innerHTML = `
@@ -3542,7 +3541,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           <textarea class="cell-input" id="ld-note-input" rows="3" style="width:100%;" placeholder="Notes added here stay on this load's permanent log — they won't show up in the board's own Notes field."></textarea>
           <button type="button" class="btn btn-ghost" id="ld-note-submit" style="margin-top:6px;">Add Note</button>
         </div>
-        <div class="calc-note" style="margin:10px 0;">The board's own Notes field is separate and quick-edit — anything typed there is automatically added to this permanent log too, timestamped and attributed, even if it's later changed or cleared from the board.</div>
+        <div class="calc-note" style="margin:10px 0;">The board's own Notes field is separate and quick-edit — anything typed there is automatically added here too, timestamped and attributed, even if it's later changed or cleared from the board.</div>
         <div style="margin-top:14px;">${notesHtml}</div>
       `;
     } else if (tab.startsWith("trip-")) {
@@ -4365,7 +4364,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         .select();
       if (error) throw error;
       if (!loadDetailsState.loadNotes) loadDetailsState.loadNotes = [];
-      loadDetailsState.loadNotes.unshift(data[0]);
+      loadDetailsState.loadNotes.push(data[0]);
       input.value = "";
       renderLoadDetailsTabContent();
     } catch (e) {
@@ -5283,7 +5282,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           const found = findRowAnywhere(rowId);
           if (found) {
             if (field === "notes") {
-              logChange(found.row.dbId, labelForRow(found.row), "notes", before, t.value);
+              // Notes get tracked in their own permanent log (the Notes
+              // tab) exclusively now — not duplicated into Change History.
               logBoardNoteToPermanentLog(found.row.dbId, t.value);
             } else if (field === "rate") {
               // A manual entry directly into the board's Rate cell — kept
