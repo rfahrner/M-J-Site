@@ -1079,10 +1079,16 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // since logChange() skips logging that case entirely now.
   function fromToPhrase(label, ov, nv, prefix) {
     prefix = prefix || "";
-    if (!ov) return `${label} set to ${prefix}${nv}`;
-    return `${label} changed from ${prefix}${ov} to ${prefix}${nv}`;
+    const boldNv = `<strong>${prefix}${escapeHtml(nv)}</strong>`;
+    if (!ov) return `${label} set to ${boldNv}`;
+    return `${label} changed from ${prefix}${escapeHtml(ov)} to ${boldNv}`;
   }
 
+  // Returns a small HTML string (not plain text) — the changed value
+  // itself is wrapped in <strong> so it stands out from the surrounding
+  // description. Every dynamic value gets escaped individually here,
+  // since the caller no longer escapes the whole result (that would
+  // strip the bold tags right back out).
   function formatChangeHistoryEntry(fieldName, oldValue, newValue) {
     const nv = newValue == null ? "" : String(newValue);
     const ov = oldValue == null ? "" : String(oldValue);
@@ -1095,23 +1101,23 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       case "pre_shift_text_sent": return "Pre-shift text sent";
       case "deleted": return "Load deleted";
       case "route_deleted": return "Route deleted";
-      case "route_type": return `Route type changed to ${ROUTE_TYPE_LABELS[nv] || nv}`;
+      case "route_type": return `Route type changed to <strong>${escapeHtml(ROUTE_TYPE_LABELS[nv] || nv)}</strong>`;
       case "hostler_hours": return fromToPhrase("Hostler hours", ov, nv);
       case "carrier_rate_manual":
       case "rate": return fromToPhrase("Carrier rate", ov, nv, "$");
       case "route_id": return fromToPhrase("Route ID", ov, nv || "(blank)");
       case "trailer_out": return fromToPhrase("Trailer #", ov, nv || "(blank)");
-      case "driver_reassigned": return ov ? `Driver changed from ${ov} to ${nv}` : `Driver assigned: ${nv}`;
+      case "driver_reassigned": return ov ? `Driver changed from ${escapeHtml(ov)} to <strong>${escapeHtml(nv)}</strong>` : `Driver assigned: <strong>${escapeHtml(nv)}</strong>`;
       case "driver_id": {
         // Older entries logged the raw numeric driver id directly rather
         // than a name — resolve both sides to real names at display
         // time so this reads correctly no matter how long ago it was logged.
         const newDrv = findDriver(nv);
         const newName = newDrv ? newDrv.name : `driver #${nv}`;
-        if (!ov) return `Driver assigned: ${newName}`;
+        if (!ov) return `Driver assigned: <strong>${escapeHtml(newName)}</strong>`;
         const oldDrv = findDriver(ov);
         const oldName = oldDrv ? oldDrv.name : `driver #${ov}`;
-        return `Driver changed from ${oldName} to ${newName}`;
+        return `Driver changed from ${escapeHtml(oldName)} to <strong>${escapeHtml(newName)}</strong>`;
       }
       default:
         if (fieldName.startsWith("rate_override_")) return fromToPhrase("Rate override", ov, nv, "$");
@@ -3361,7 +3367,6 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       attachments: [],
       history: [],
       loadNotes: [],
-      editingHistoryNoteId: null,
       stopsByTrip: {}, // trip.id (local) -> [{stopNumber, timeIn, timeOut, dbId}]
       editMode: null, // "overview" | trip.id | null
       editDraft: null, // scratch copy of the fields being edited, discarded on Cancel
@@ -3712,32 +3717,15 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       `;
     } else if (tab === "history") {
       const rows = loadDetailsState.history;
-      const noteSectionHtml = (h) => {
-        if (loadDetailsState.editingHistoryNoteId === h.id) {
-          return `
-            <div style="margin-top:6px;">
-              <textarea class="cell-input" id="ld-hist-note-input-${h.id}" rows="2" style="width:100%;" placeholder="Why was this changed?">${escapeHtml(h.note || "")}</textarea>
-              <div style="margin-top:4px;">
-                <button type="button" class="btn btn-ghost" style="padding:2px 10px; font-size:12px;" data-hist-note-save="${h.id}">Save</button>
-                <button type="button" class="btn btn-ghost" style="padding:2px 10px; font-size:12px;" data-hist-note-cancel="${h.id}">Cancel</button>
-              </div>
-            </div>`;
-        }
-        if (h.note) {
-          return `<div class="subtext" style="margin-top:4px; font-style:italic;">Note: ${escapeHtml(h.note)} <button type="button" class="cell-link-btn" style="width:auto; height:auto; padding:0 4px; font-size:11px;" data-hist-note-edit="${h.id}">Edit</button></div>`;
-        }
-        return `<button type="button" class="cell-link-btn" style="width:auto; height:auto; padding:0 4px; font-size:11px; margin-top:2px;" data-hist-note-edit="${h.id}">+ Add note</button>`;
-      };
       body.innerHTML = `
-        <div class="ld-history-row" style="grid-template-columns: 150px 130px 1fr;"><div>When</div><div>By</div><div>What</div></div>
+        <div class="ld-edit-bar"><button type="button" class="btn btn-ghost" id="ld-hist-notes-save-all">Save Notes</button></div>
+        <div class="ld-history-row" style="grid-template-columns: 130px 110px 1fr 200px;"><div>When</div><div>By</div><div>What</div><div>Note</div></div>
         ${rows.length ? rows.map((h) => `
-          <div class="ld-history-row" style="grid-template-columns: 150px 130px 1fr; align-items:start;">
+          <div class="ld-history-row" style="grid-template-columns: 130px 110px 1fr 200px; align-items:start;">
             <div>${new Date(h.changed_at).toLocaleString()}</div>
             <div>${escapeHtml(h.changed_by || "Unknown user")}</div>
-            <div>
-              <div>${escapeHtml(formatChangeHistoryEntry(h.field_name, h.old_value, h.new_value))}</div>
-              ${noteSectionHtml(h)}
-            </div>
+            <div>${formatChangeHistoryEntry(h.field_name, h.old_value, h.new_value)}</div>
+            <div><input type="text" class="cell-input" style="width:100%;" data-hist-note-id="${h.id}" value="${escapeHtml(h.note || "")}" placeholder="Why was this changed?"></div>
           </div>`).join("") : `<div class="subtext" style="padding:10px 0;">No changes recorded yet.</div>`}
       `;
     }
@@ -4473,34 +4461,34 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // that table), so it automatically travels with the load into
   // Accounting too — that page opens this exact same modal/tab, it isn't
   // a separate view that would need its own copy of this data.
-  function startEditHistoryNote(historyId) {
-    if (!loadDetailsState) return;
-    loadDetailsState.editingHistoryNoteId = historyId;
-    renderLoadDetailsTabContent();
-  }
-
-  function cancelEditHistoryNote() {
-    if (!loadDetailsState) return;
-    loadDetailsState.editingHistoryNoteId = null;
-    renderLoadDetailsTabContent();
-  }
-
-  async function saveHistoryNote(historyId) {
-    if (!supabaseClient || !loadDetailsState) return;
-    const input = document.getElementById(`ld-hist-note-input-${historyId}`);
-    if (!input) return;
-    const text = input.value.trim();
-    try {
-      const { error } = await supabaseClient.from("load_change_history").update({ note: text || null }).eq("id", historyId);
-      if (error) throw error;
+  //
+  // Every row has its own always-editable field; one Save button commits
+  // whichever ones actually changed. Rows whose text matches what's
+  // already stored are skipped entirely, rather than re-writing every
+  // row on every save regardless of whether it changed.
+  async function saveAllHistoryNotes() {
+    if (!loadDetailsState || !supabaseClient) return;
+    const inputs = $all("[data-hist-note-id]");
+    const saveBtn = $("#ld-hist-notes-save-all");
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving…"; }
+    let anyFailed = false;
+    for (const input of inputs) {
+      const historyId = Number(input.dataset.histNoteId);
       const entry = loadDetailsState.history.find((h) => h.id === historyId);
-      if (entry) entry.note = text || null;
-      loadDetailsState.editingHistoryNoteId = null;
-      renderLoadDetailsTabContent();
-    } catch (e) {
-      console.error("saveHistoryNote failed:", e);
-      setDriverSyncStatus(`Couldn't save that note (${e.message || e}).`, "error");
+      const newText = input.value.trim();
+      const currentText = (entry && entry.note) || "";
+      if (newText === currentText) continue; // unchanged — skip the redundant write
+      try {
+        const { error } = await supabaseClient.from("load_change_history").update({ note: newText || null }).eq("id", historyId);
+        if (error) throw error;
+        if (entry) entry.note = newText || null;
+      } catch (e) {
+        console.error("saveAllHistoryNotes failed for entry", historyId, e);
+        anyFailed = true;
+      }
     }
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Save Notes"; }
+    setDriverSyncStatus(anyFailed ? "Some notes couldn't be saved — check the console for details." : "Notes saved.", anyFailed ? "error" : "success");
   }
   let driverProfileState = null; // { driverId, activeTab, history: null|[], notes: null|[] }
 
@@ -5129,12 +5117,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         if (saveBtn) saveLoadDetailsEdit(saveBtn.dataset.ldSave);
         if (e.target.id === "ld-rate-reset") resetRateToCalculated();
         if (e.target.id === "ld-note-submit") submitLoadNote();
-        const histNoteEditBtn = e.target.closest('[data-hist-note-edit]');
-        if (histNoteEditBtn) startEditHistoryNote(Number(histNoteEditBtn.dataset.histNoteEdit));
-        const histNoteSaveBtn = e.target.closest('[data-hist-note-save]');
-        if (histNoteSaveBtn) saveHistoryNote(Number(histNoteSaveBtn.dataset.histNoteSave));
-        const histNoteCancelBtn = e.target.closest('[data-hist-note-cancel]');
-        if (histNoteCancelBtn) cancelEditHistoryNote();
+        if (e.target.id === "ld-hist-notes-save-all") saveAllHistoryNotes();
         const profileBtn = e.target.closest('[data-action="edit-driver"]');
         if (profileBtn) openEditDriverModal(profileBtn.dataset.driverId);
         const linkBtn = e.target.closest('[data-action="link-driver"]');
@@ -5429,6 +5412,18 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
               // driverName: only a REASSIGNMENT if it already had a driver — first-time entry isn't logged as a change
               logChange(found.row.dbId, labelForRow(found.row), "driver_reassigned", before, t.value);
             }
+            if (field === "driverName") {
+              // Both driver-assignment warnings run here — once, on
+              // commit, using the FINAL typed value — rather than on
+              // every keystroke while still mid-type, which could fire
+              // against some other driver whose name happened to exactly
+              // match whatever partial text was on screen at that instant.
+              const match = driversForLocation(found.row.location || state.activeLocation || "atlanta").find((d) => d.name.toLowerCase() === t.value.trim().toLowerCase());
+              if (match) {
+                warnIfDriverAlreadyScheduled(found.row, match.id);
+                checkDriverComplianceWarning(match);
+              }
+            }
           }
         }
       }
@@ -5529,7 +5524,6 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         if (match) found.row.driverId = match.id;
         updateDriverLinkedCellsInPlace(rowId);
         scheduleShiftSave(found.row);
-        if (match) { warnIfDriverAlreadyScheduled(found.row, match.id); checkDriverComplianceWarning(match); }
         if (t.dataset.driverAc === "true") updateDriverAutocomplete(t, state.activeLocation);
         return;
       }
