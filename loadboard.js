@@ -17,6 +17,7 @@ import { initAccountingPage, getAccountingRecordById } from './accounting.js';
 import { sendShiftToAccounting } from './accountingcalc.js';
 import { initHoustonBoardPage } from './houston.js';
 import { initMondelezPage } from './mondelez.js';
+import { initDriverAnalyticsPage } from './analytics-drivers.js';
 import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_MIN, PRE_SHIFT_CALL_FOLLOWUP_MIN, PRE_SHIFT_ESCALATION_MIN, LAST_STOP_RETURN_FOLLOWUP_MIN } from './alerts.js';
 import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRateBreakdown, effectiveTierRate, effectiveSetting, isTierOverridden, isSettingOverridden, isDriverTierOverridden, isDriverSettingOverridden, saveTierRate, saveSetting } from './boardrates.js';
 
@@ -30,9 +31,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     "mondelez.html":   { type: "mondelez",    label: "Mondelez" },
     "accounting.html": { type: "accounting",  label: "Accounting" },
     "driverlist.html": { type: "driverlist",  label: "Driver List" },
+    "analytics-drivers.html": { type: "driver-analytics", label: "Driver Analytics" },
     "historics.html":  { type: "historics",   label: "Historics" },
   };
-  export const NAV_ORDER = ["index.html", "dalaware.html", "buildingc.html", "houston.html", "mondelez.html", "accounting.html", "driverlist.html"];
+  export const NAV_ORDER = ["index.html", "dalaware.html", "buildingc.html", "houston.html", "mondelez.html", "accounting.html", "driverlist.html", "analytics-drivers.html"];
   const LOCATIONS = NAV_ORDER
     .filter((f) => PAGE_MAP[f].type === "board" || PAGE_MAP[f].type === "houston-board")
     .map((f) => ({ file: f, ...PAGE_MAP[f] }));
@@ -348,6 +350,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       hostler_hours: row.hostlerHours !== "" && row.hostlerHours != null ? Number(row.hostlerHours) : null,
       rate_manual: !!row.rateManual,
       rate_overrides: (row.rateOverrides && (Object.keys(row.rateOverrides.tiers || {}).length || Object.keys(row.rateOverrides.settings || {}).length)) ? row.rateOverrides : null,
+      called_off: !!row.calledOff,
+      called_off_reason: row.calledOffReason || null,
+      called_off_notes: row.calledOffNotes || null,
+      called_off_at: row.calledOffAt || null,
     };
   }
   function shiftFromDbRow(dbRow) {
@@ -383,6 +389,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       rateOverrides: dbRow.rate_overrides ? { tiers: dbRow.rate_overrides.tiers || {}, settings: dbRow.rate_overrides.settings || {} } : { tiers: {}, settings: {} },
       selected: false, // local-only UI state, not persisted — see note in chat
       sentToAccounting: !!dbRow.sent_to_accounting,
+      calledOff: !!dbRow.called_off,
+      calledOffReason: dbRow.called_off_reason || "",
+      calledOffNotes: dbRow.called_off_notes || "",
+      calledOffAt: dbRow.called_off_at || null,
       createdAt: dbRow.created_at || null,
       updatedAt: dbRow.updated_at || null,
       addedAt: null,
@@ -682,6 +692,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       preShiftTextSent: false, preShiftCall: false, etaShiftReport: "", actualShiftReport: "", revLevel: "",
       timesheetReceived: false, timesheetStartTime: "", timesheetEndTime: "", trailerDropLocation: "", preShiftTextSentAt: null,
       createdAt: null, updatedAt: null, addedAt: null, sentToAccounting: false,
+      calledOff: false, calledOffReason: "", calledOffNotes: "", calledOffAt: null,
       cellSnapshot: "", mcSnapshot: "", emailSnapshot: "", dispatcherPhoneSnapshot: "", ratingSnapshot: "",
       birm: false, routeType: "birm", hostlerHours: "", rateManual: false, rateOverrides: { tiers: {}, settings: {} },
       trips: [blankTrip()],
@@ -1098,6 +1109,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       case "route_complete": return nv === "true" ? "Route marked complete" : "Route marked incomplete";
       case "tonu": return nv === "true" ? "Marked TONU" : "TONU removed";
       case "shift_complete": return nv === "true" ? "Shift marked complete" : "Shift marked incomplete";
+      case "called_off": return nv === "true" ? "Driver called off" : "Called-off status removed";
       case "timesheet_received": return "Time sheet received";
       case "pre_shift_text_sent": return "Pre-shift text sent";
       case "deleted": return "Load deleted";
@@ -1693,6 +1705,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         <div class="driver-name-wrap">
           <input class="cell-input" data-driver-ac="true" placeholder="Type driver name…"
             data-row="${row.id}" data-field="driverName" value="${escapeHtml(displayName)}">
+          ${row.calledOff ? `<span title="${escapeHtml(row.calledOffNotes || "")}" style="display:inline-block; margin-left:4px; padding:1px 6px; border-radius:4px; background:#dc2626; color:#fff; font-size:10px; font-weight:700; white-space:nowrap; vertical-align:middle;">CALLED OFF</span>` : ""}
         </div>
       </td>
         <td class="col-rate"${rs}>
@@ -1720,6 +1733,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const open = openTripsFor(row);
     const rowClasses = [
       row.tonu ? "is-tonu" : "",
+      row.calledOff ? "is-called-off" : "",
       row.highlighted ? "is-row-pinned" : "",
       row.selected ? "is-row-selected" : "",
       row.addedAt ? "is-new" : "",
@@ -2474,6 +2488,80 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     saveShiftNow(found.row);
     recomputeRowRate(found.row);
     if (!wasTonu && found.row.tonu) logChange(found.row.dbId, labelForRow(found.row), "tonu", "false", "true");
+  }
+
+  // "Called off" is a distinct event from TONU — TONU is a load falling
+  // through after dispatch; this is a driver calling in unable to make
+  // the shift at all (breakdown, family emergency, or no reason given).
+  // Needs a reason captured, so this opens a small modal rather than
+  // toggling instantly like TONU does.
+  function openCalledOffModal(rowId) {
+    const found = findRowAnywhere(rowId);
+    if (!found) return;
+    const row = found.row;
+    const drv = row.driverId ? findDriver(row.driverId) : null;
+    const driverLabel = drv ? drv.name : (row.driverNameText || "This driver");
+    const existing = document.getElementById("called-off-overlay");
+    if (existing) existing.remove();
+    const overlay = document.createElement("div");
+    overlay.className = "overlay";
+    overlay.id = "called-off-overlay";
+    overlay.innerHTML = `
+      <div class="modal">
+        <div class="modal-header">
+          <h3>Driver Called Off</h3>
+          <button class="modal-close" id="called-off-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p style="margin:0 0 10px;">${escapeHtml(driverLabel)} called in and can't make this shift.</p>
+          <div class="field">
+            <label>Reason</label>
+            <div class="radio-row">
+              <label><input type="radio" name="called-off-reason" value="breakdown" checked> Breakdown</label>
+              <label><input type="radio" name="called-off-reason" value="family_emergency"> Family emergency</label>
+              <label><input type="radio" name="called-off-reason" value="other"> Other</label>
+              <label><input type="radio" name="called-off-reason" value="unspecified"> No reason given</label>
+            </div>
+          </div>
+          <div class="field">
+            <label for="called-off-notes">Notes (optional)</label>
+            <textarea class="cell-input" id="called-off-notes" rows="2" style="width:100%;"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" id="called-off-cancel">Cancel</button>
+          <button class="btn" id="called-off-submit">Mark Called Off</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+    $("#called-off-close").addEventListener("click", close);
+    $("#called-off-cancel").addEventListener("click", close);
+    $("#called-off-submit").addEventListener("click", async () => {
+      const checked = overlay.querySelector('input[name="called-off-reason"]:checked');
+      row.calledOff = true;
+      row.calledOffReason = checked ? checked.value : "unspecified";
+      row.calledOffNotes = ($("#called-off-notes").value || "").trim();
+      row.calledOffAt = new Date().toISOString();
+      await saveShiftNow(row);
+      logChange(row.dbId, labelForRow(row), "called_off", "false", "true");
+      close();
+      renderBoardTable();
+    });
+  }
+
+  async function unmarkDriverCalledOff(rowId) {
+    const found = findRowAnywhere(rowId);
+    if (!found) return;
+    const row = found.row;
+    row.calledOff = false;
+    row.calledOffReason = "";
+    row.calledOffNotes = "";
+    row.calledOffAt = null;
+    await saveShiftNow(row);
+    logChange(row.dbId, labelForRow(row), "called_off", "true", "false");
+    renderBoardTable();
   }
 
   function toggleRowPin(rowId) {
@@ -3290,6 +3378,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const row = found.row;
     const items = [
       { label: row.tonu ? "Un-TONU" : "TONU", action: () => toggleTonu(rowId) },
+      { label: row.calledOff ? "Un-mark Called Off" : "Driver Called Off", action: () => row.calledOff ? unmarkDriverCalledOff(rowId) : openCalledOffModal(rowId) },
       { label: row.highlighted ? "Remove Highlight" : "Highlight", action: () => toggleRowPin(rowId) },
       { label: row.shiftComplete ? "Mark Shift Incomplete" : "Shift Complete", action: () => toggleShiftComplete(rowId) },
       { label: "Load Details", action: () => openLoadDetailsModal(rowId) },
@@ -5718,6 +5807,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       else if (info.type === "houston-board") initHoustonBoardPage(info);
       else if (info.type === "mondelez") initMondelezPage();
       else if (info.type === "driverlist") initDriverListPage();
+      else if (info.type === "driver-analytics") initDriverAnalyticsPage();
       else if (info.type === "accounting") initAccountingPage();
     } catch (e) { console.error("page-specific init failed:", e); }
     loadDriversFromSupabase().catch((e) => console.error("loadDriversFromSupabase() failed:", e));
