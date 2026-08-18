@@ -64,25 +64,25 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     { key: "routeMiles",  label: "Miles",             type: "text", small: true, inputmode: "decimal", pistachio: true },
     { key: "stopCount",   label: "Stops",              type: "text", small: true, inputmode: "numeric", pistachio: true },
     { key: "dispatchTime",label: "Dispatch Time",     type: "time", pistachio: true },
-    { key: "lastStopDepart",  label: "Last Stop Depart",   type: "time", pistachio: true },
-    { key: "returnToDC",      label: "Return to DC",       type: "time", pistachio: true },
-    { key: "salvage",     label: "Salvage",            type: "checkbox", group: "backhaul", pistachio: true },
-    { key: "backhaul",    label: "B/Haul",             type: "checkbox", group: "backhaul", pistachio: true },
-    { key: "salvageBhaulRefusedBy",  label: "Refused By",          type: "text", group: "backhaul", pistachio: true },
-    { key: "backhaulTrailerNumber",  label: "B/Haul Trailer #",    type: "text", group: "backhaul", pistachio: true },
-    { key: "returnEtaToDc",          label: "Return ETA to DC",    type: "time", group: "backhaul", pistachio: true },
+    { key: "lastStopDepart",  label: "Last Stop Depart",   type: "time", pistachio: true, excludeLocations: ["delaware"] },
+    { key: "returnToDC",      label: "Return to DC",       type: "time", pistachio: true, excludeLocations: ["delaware"] },
+    { key: "salvage",     label: "Salvage",            type: "checkbox", group: "backhaul", pistachio: true, excludeLocations: ["delaware"] },
+    { key: "backhaul",    label: "B/Haul",             type: "checkbox", group: "backhaul", pistachio: true, excludeLocations: ["delaware"] },
+    { key: "salvageBhaulRefusedBy",  label: "Refused By",          type: "text", group: "backhaul", pistachio: true, excludeLocations: ["delaware"] },
+    { key: "backhaulTrailerNumber",  label: "B/Haul Trailer #",    type: "text", group: "backhaul", pistachio: true, excludeLocations: ["delaware"] },
+    { key: "returnEtaToDc",          label: "Return ETA to DC",    type: "time", group: "backhaul", pistachio: true, excludeLocations: ["delaware"] },
     { key: "routeImage",      label: "Image",              type: "image" },
-    { key: "routeEstHours",   label: "Route Est Hours",    type: "text", small: true, inputmode: "decimal", group: "estimate" },
-    { key: "timeToFinalStop", label: "Time to Last Stop",  type: "text", small: true, inputmode: "decimal", group: "estimate" },
-    { key: "timeToDc",        label: "Time to DC",         type: "text", small: true, inputmode: "decimal", group: "estimate" },
+    { key: "routeEstHours",   label: "Route Est Hours",    type: "text", small: true, inputmode: "decimal", group: "estimate", excludeLocations: ["delaware"] },
+    { key: "timeToFinalStop", label: "Time to Last Stop",  type: "text", small: true, inputmode: "decimal", group: "estimate", excludeLocations: ["delaware"] },
+    { key: "timeToDc",        label: "Time to DC",         type: "text", small: true, inputmode: "decimal", group: "estimate", excludeLocations: ["delaware"] },
     // Not in the latest specified order -- kept available (hidden by
     // default) rather than deleted, since removal wasn't explicit. Flagged
     // in chat; say the word if any of these should actually go.
-    { key: "backhaulType",           label: "B/Haul Type",         type: "text", group: "backhaul" },
-    { key: "etaToFinalStop",         label: "ETA to Final Stop",   type: "time", group: "estimate" },
-    { key: "estRouteComplete",       label: "Est Route Complete",  type: "time", group: "estimate" },
-    { key: "etaNextDispatch", label: "ETA Next Dispatch",  type: "calc" },
-    { key: "tripCallTime",    label: "Trip Call Time",     type: "calc" },
+    { key: "backhaulType",           label: "B/Haul Type",         type: "text", group: "backhaul", excludeLocations: ["delaware"] },
+    { key: "etaToFinalStop",         label: "ETA to Final Stop",   type: "time", group: "estimate", excludeLocations: ["delaware"] },
+    { key: "estRouteComplete",       label: "Est Route Complete",  type: "time", group: "estimate", excludeLocations: ["delaware"] },
+    { key: "etaNextDispatch", label: "ETA Next Dispatch",  type: "calc", excludeLocations: ["delaware"] },
+    { key: "tripCallTime",    label: "Trip Call Time",     type: "calc", excludeLocations: ["delaware"] },
   ];
 
   // Drag-to-reorder for the trip columns, persisted per-browser. Keeps
@@ -105,7 +105,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   function getOrderedTripSubcols() {
     const byKey = {};
     TRIP_SUBCOLS.forEach((c) => { byKey[c.key] = c; });
-    return tripColOrder.map((k) => byKey[k]).filter(Boolean);
+    return tripColOrder.map((k) => byKey[k]).filter(Boolean)
+      .filter((c) => !c.excludeLocations || !c.excludeLocations.includes(state.activeLocation));
   }
 
   function saveTripColOrder() {
@@ -1147,7 +1148,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     // un-minimizing it back onto the active row — matches what the pill's
     // own tooltip already promises ("click to fix" / "click to view").
     await openLoadDetailsModal(rowId, tripId);
-    if (tripMissingFields(trip).length) startLoadDetailsEdit(tripId);
+    if (tripMissingFields(trip, found.row.location).length) startLoadDetailsEdit(tripId);
   }
 
   function addNewTrip(rowId) {
@@ -1585,8 +1586,16 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // What a trip needs before it's genuinely "done" — shared by the board
   // pill (routesChipsHtml) and the Load Details trip tab's banner/field
   // highlighting, so the two can never disagree about what's missing.
-  function tripMissingFields(trip) {
+  function tripMissingFields(trip, locationKey) {
     const missing = [];
+    if (locationKey === "delaware") {
+      // Delaware collects trip info after the fact rather than tracking
+      // it live during the shift — paperwork confirmation, stop times,
+      // check-in, and drop location genuinely don't apply the way they
+      // do for Atlanta or Building C. Only the image is actually required.
+      if (!trip.routeImagePath) missing.push({ key: "image", label: "an image" });
+      return missing;
+    }
     if (!trip.ppwkReceived) missing.push({ key: "ppwk", label: "paperwork confirmation" });
     if (!trip.hasStopTimes) missing.push({ key: "stops", label: "stop times" });
     if (!trip.routeImagePath) missing.push({ key: "image", label: "an image" });
@@ -1605,7 +1614,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const done = row.trips.filter((t) => t.minimized && (String(t.routeId || "").trim() || String(t.tripId || "").trim()));
     return done.length
       ? done.map((t) => {
-          const missing = tripMissingFields(t).map((m) => m.label);
+          const missing = tripMissingFields(t, row.location).map((m) => m.label);
           const undocumented = t.complete && missing.length > 0;
           const statusCls = [t.complete ? "trip-segment-done" : "", undocumented ? "trip-chip-undocumented" : ""].filter(Boolean).join(" ");
           const title = undocumented
@@ -1660,7 +1669,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const displayName = drv ? drv.name : row.driverNameText;
     const proLinkBtn = row.proNumber ? `<button type="button" class="cell-link-btn" data-open-pro="${row.id}" title="Open load details">↗</button>` : "";
     const rs = rowspan > 1 ? ` rowspan="${rowspan}"` : "";
-    const allTripsDocumented = row.trips.every((t) => !t.complete || tripMissingFields(t).length === 0);
+    const allTripsDocumented = row.trips.every((t) => !t.complete || tripMissingFields(t, row.location).length === 0);
     const fullyDocumented = row.shiftComplete && allTripsDocumented;
     return `
       <td class="pin pin-select"${rs}>
@@ -1869,7 +1878,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         <th class="col-trip-actions"></th>
       </tr>
     </thead>`;
-    const totalCols = 20 + TRIP_SUBCOLS.length + 1 + (state.activeLocation === "buildingc" ? 1 : 0);
+    const totalCols = 20 + getOrderedTripSubcols().length + 1 + (state.activeLocation === "buildingc" ? 1 : 0);
     const addRowHtml = `<tr class="quick-add-row"><td colspan="${totalCols}">
       <button type="button" class="quick-add-btn" id="btn-quick-add-row"><span class="quick-add-btn-label">+ Add Row</span></button>
       <button type="button" class="quick-add-btn quick-add-btn-secondary" id="btn-add-time-slots"><span class="quick-add-btn-label">+ Add Time Slots</span></button>
@@ -3625,7 +3634,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (!trip) { body.innerHTML = `<div class="subtext">Trip not found.</div>`; return; }
       const editing = loadDetailsState.editMode === tripLocalId;
       const stops = loadDetailsState.stopsByTrip[tripLocalId] || [];
-      const missing = tripMissingFields(trip);
+      const missing = tripMissingFields(trip, row.location);
       const missingKeys = new Set(missing.map((m) => m.key));
       const missCls = (key) => missingKeys.has(key) ? " field-box-missing" : "";
       const banner = trip.checkedIn
