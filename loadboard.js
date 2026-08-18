@@ -2692,8 +2692,16 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (!confirm(`${rowsWithOpenTrips.length} of these loads still have trips not closed out yet (${label}). Send all selected loads to Accounting anyway?`)) return;
     }
 
-    const [first, ...rest] = rows.map((r) => r.id);
-    openTimesheetModal(first, rest);
+    if (state.activeLocation === "atlanta") {
+      const [first, ...rest] = rows.map((r) => r.id);
+      openTimesheetModal(first, rest);
+    } else {
+      // Atlanta is the only location that tracks routes live and needs
+      // the time sheet gate before completion — every other location
+      // just captures trip sheets and basic info after the fact.
+      for (const row of rows) await finalizeShiftCompletion(row);
+      renderBoardTable();
+    }
   }
 
   function openTextSelectedModal() {
@@ -2767,7 +2775,15 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         const names = open.map((t, i) => t.routeId || t.tripId || `Route ${i + 1}`).join(", ");
         if (!confirm(`This load still has ${open.length} trip(s) not closed out yet (${names}) — likely still waiting on paperwork. Send it to Accounting anyway?`)) return;
       }
-      openTimesheetModal(rowId, []); // required time sheet info gate — finalizeShiftCompletion runs after it's submitted
+      // Atlanta is the only location that tracks routes live and needs
+      // the time sheet gate before completion — every other location
+      // just captures trip sheets and basic info after the fact, so
+      // completing there skips the modal and finalizes directly.
+      if ((row.location || state.activeLocation) === "atlanta") {
+        openTimesheetModal(rowId, []);
+      } else {
+        await finalizeShiftCompletion(row);
+      }
       return;
     }
     // Un-completing needs to bring the load back into active play — every
@@ -3556,7 +3572,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
     if (tab === "overview") {
       const editing = loadDetailsState.editMode === "overview";
-      const timesheetMissing = !row.timesheetReceived || !String(row.timesheetStartTime || "").trim() || !String(row.timesheetEndTime || "").trim();
+      const isAtlanta = (row.location || state.activeLocation) === "atlanta";
+      const timesheetMissing = isAtlanta && (!row.timesheetReceived || !String(row.timesheetStartTime || "").trim() || !String(row.timesheetEndTime || "").trim());
       const banner = row.shiftComplete
         ? `<div class="ld-status-banner ld-status-banner-green">Load Complete</div>`
         : `<div class="ld-status-banner ld-status-banner-red">Load Open</div>`;
@@ -3569,6 +3586,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
             <fieldset class="field-box"><legend>Driver</legend><div class="static-text">${escapeHtml(drv ? drv.name : (row.driverNameText || "—"))}${drv ? ` <button type="button" class="cell-link-btn" data-action="edit-driver" data-driver-id="${drv.id}" title="Open driver profile">↗</button>` : (row.driverNameText ? ` <button type="button" class="cell-link-btn" data-action="link-driver" title="Not linked to a driver profile — click to fix">Link</button>` : "")}</div></fieldset>
             <fieldset class="field-box"><legend>Status</legend><div class="static-text">${row.shiftComplete ? "Complete" : "Active"}</div></fieldset>
             <fieldset class="field-box"><legend>Trips</legend><div class="static-text">${row.trips.length}</div></fieldset>
+            ${isAtlanta ? `
             <fieldset class="field-box${timesheetMissing ? " field-box-missing" : ""}" style="grid-column: span 2;">
               <legend>Time Sheet</legend>
               <div class="ov-timesheet-row">
@@ -3576,9 +3594,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
                 <div><label>Start</label><div class="static-text">${escapeHtml(row.timesheetStartTime || "—")}</div></div>
                 <div><label>Finish</label><div class="static-text">${escapeHtml(row.timesheetEndTime || "—")}</div></div>
               </div>
-            </fieldset>
+            </fieldset>` : ""}
           </div>
-          <div class="calc-note" style="margin-top:10px;">Time sheet info travels with this load — visible here and on the Accounting page once it's sent over.</div>
+          <div class="calc-note" style="margin-top:10px;">${isAtlanta ? "Time sheet info travels with this load — visible here and on the Accounting page once it's sent over." : "This location captures trip sheets and basic load info only — no time sheet is tracked here."}</div>
         `;
       } else {
         const d = loadDetailsState.editDraft;
@@ -3586,6 +3604,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           ${banner}
           <div class="field-box-grid">
             <fieldset class="field-box"><legend>Driver</legend><input class="cell-input" id="ld-ov-driver" data-driver-ac="true" value="${escapeHtml(d.driverName)}"></fieldset>
+            ${isAtlanta ? `
             <fieldset class="field-box${timesheetMissing ? " field-box-missing" : ""}" style="grid-column: span 2;">
               <legend>Time Sheet</legend>
               <div class="ov-timesheet-row">
@@ -3596,7 +3615,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
                 <div><label>Start</label><input class="cell-input" id="ld-ov-timesheet-start" placeholder="--:--" value="${escapeHtml(d.timesheetStartTime)}"></div>
                 <div><label>Finish</label><input class="cell-input" id="ld-ov-timesheet-end" placeholder="--:--" value="${escapeHtml(d.timesheetEndTime)}"></div>
               </div>
-            </fieldset>
+            </fieldset>` : ""}
           </div>
           <div class="ld-edit-bar">
             <button type="button" class="btn btn-ghost" data-ld-cancel="overview">Cancel</button>
@@ -3865,11 +3884,14 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       row.driverId = null;
       const match = driversForLocation(row.location || state.activeLocation || "atlanta").find((x) => x.name.toLowerCase() === nameVal.toLowerCase());
       if (match) row.driverId = match.id;
-      const wasTimesheetReceived = row.timesheetReceived;
-      row.timesheetReceived = $("#ld-ov-timesheet-received").checked;
-      row.timesheetStartTime = $("#ld-ov-timesheet-start").value.trim();
-      row.timesheetEndTime = $("#ld-ov-timesheet-end").value.trim();
-      if (!wasTimesheetReceived && row.timesheetReceived) logChange(row.dbId, labelForRow(row), "timesheet_received", "false", "true");
+      const timesheetReceivedEl = $("#ld-ov-timesheet-received");
+      if (timesheetReceivedEl) {
+        const wasTimesheetReceived = row.timesheetReceived;
+        row.timesheetReceived = timesheetReceivedEl.checked;
+        row.timesheetStartTime = $("#ld-ov-timesheet-start").value.trim();
+        row.timesheetEndTime = $("#ld-ov-timesheet-end").value.trim();
+        if (!wasTimesheetReceived && row.timesheetReceived) logChange(row.dbId, labelForRow(row), "timesheet_received", "false", "true");
+      }
       await saveShiftNow(row);
       // Time sheet start+end both filled in is one of the three auto-send
       // triggers on its own now — no longer forces shift_complete, and no

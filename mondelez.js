@@ -5,7 +5,6 @@
    location's activity for the day at once (fully editable — each
    row still saves back to its own location, the combined view is
    just a different lens on the same data).
-
    Revenue (what Mondelez pays D&L) is calculated from a per-DC rate
    table: Daily Rate + (Stops x Stop Rate) + (Miles over threshold x
    Over-Mileage Rate) + FSC (entered per load — it tracks a live
@@ -14,7 +13,6 @@
    against Addison/West Chester/Indianapolis exactly; only 4 of the
    11 locations have real seeded numbers today — the rest default to
    0 and need filling in via the same editable rate boxes.
-
    Driver pay is NOT auto-calculated here on purpose — there's no
    standard rate for it (confirmed), so it's just a plain editable
    field, same as Houston's.
@@ -28,11 +26,9 @@ import {
   handleRowAwareTab, openEditDriverModal, batchSignImageUrls,
   openLocationNotesModal, closeLocationNotesModal, saveLocationNotes,
 } from './loadboard.js';
-
 export const MONDELEZ_TABLE = "mondelez_loads";
 export const MONDELEZ_RATE_SETTINGS_TABLE = "mondelez_rate_settings";
 export const MONDELEZ_IMAGE_BUCKET = "mondelez-routes";
-
 // Best-cleanup pass of the locations in your spreadsheet — combined
 // "shuttle" entries like "Morris/Franksville" get filed under the
 // origin DC that dispatches them (Morris), since a load only lives on
@@ -51,17 +47,13 @@ export const MONDELEZ_LOCATIONS = [
   { key: "newberlin", label: "New Berlin" },
 ];
 const MONDELEZ_LOCATION_KEYS = new Set(MONDELEZ_LOCATIONS.map((l) => l.key));
-
 export const mondelezState = {
   rowsByDate: {},          // dateKey -> Row[] (every location, filtered client-side for display)
   datesWithData: new Set(),
   activeTab: "westchester", // a location key, or "combined"
 };
-
 let mondelezRateSettings = null; // { [locationKey]: { daily_rate, stop_rate, over_mileage_threshold, over_mileage_rate } }
-
 /* ---------------- data model ---------------- */
-
 function blankMondelezRow(locationKey) {
   return {
     id: uid("mdz"), dbId: null,
@@ -77,7 +69,6 @@ function blankMondelezRow(locationKey) {
     createdAt: null, updatedAt: null, addedAt: null,
   };
 }
-
 function mondelezRowToDbRow(row, dKey) {
   return {
     location: row.location,
@@ -106,7 +97,6 @@ function mondelezRowToDbRow(row, dKey) {
     shift_complete: !!row.shiftComplete,
   };
 }
-
 function mondelezRowFromDbRow(r) {
   return {
     id: uid("mdz"), dbId: r.id,
@@ -129,9 +119,7 @@ function mondelezRowFromDbRow(r) {
     createdAt: r.created_at || null, updatedAt: r.updated_at || null, addedAt: null,
   };
 }
-
 /* ---------------- rate settings + revenue calc ---------------- */
-
 export async function loadMondelezRateSettings() {
   if (!supabaseClient) return;
   const { data, error } = await supabaseClient.from(MONDELEZ_RATE_SETTINGS_TABLE).select("*");
@@ -159,7 +147,6 @@ export async function saveMondelezRateSetting(locationKey, field, value) {
   mondelezRateSettings[locationKey] = { ...(mondelezRateSettings[locationKey] || {}), [field]: value };
   return true;
 }
-
 // Verified against your rate card: Daily Rate + (Stops x Stop Rate) +
 // (Miles over threshold x Over-Mileage Rate) + FSC (+ any Additional
 // Charges you note for Detention/Layover/TONU, which aren't part of
@@ -174,12 +161,10 @@ export function calcMondelezRevenue(row) {
   const stops = parseInt(row.stopCount, 10) || 0;
   const fsc = parseFloat(row.fsc) || 0;
   const additional = parseFloat(row.additionalCharges) || 0;
-
   const stopCharge = Math.round(stops * stopRate * 100) / 100;
   const overMiles = Math.max(0, miles - overThreshold);
   const overCharge = Math.round(overMiles * overRate * 100) / 100;
   const total = Math.round((dailyRate + stopCharge + overCharge + fsc + additional) * 100) / 100;
-
   return {
     total,
     lines: [
@@ -191,7 +176,6 @@ export function calcMondelezRevenue(row) {
     ],
   };
 }
-
 function recomputeMondelezRevenue(row) {
   if (row.revenueManual) return;
   const { total } = calcMondelezRevenue(row);
@@ -202,9 +186,7 @@ function recomputeMondelezRevenue(row) {
   const el = document.querySelector(`input[data-mdz-row="${row.id}"][data-mdz-field="revenueTotal"]`);
   if (el && document.activeElement !== el) el.value = next;
 }
-
 /* ---------------- fetch / cache ---------------- */
-
 function getMondelezRowsForDate(dKey) {
   if (!mondelezState.rowsByDate[dKey]) mondelezState.rowsByDate[dKey] = [];
   return mondelezState.rowsByDate[dKey];
@@ -214,7 +196,6 @@ function getMondelezDisplayRows(dKey) {
   if (mondelezState.activeTab === "combined") return rows;
   return rows.filter((r) => r.location === mondelezState.activeTab);
 }
-
 async function ensureMondelezDateLoaded(dKey) {
   if (mondelezState.rowsByDate[dKey]) return;
   if (!supabaseClient) { mondelezState.rowsByDate[dKey] = []; return; }
@@ -232,7 +213,6 @@ async function ensureMondelezDateLoaded(dKey) {
   await batchSignImageUrls(MONDELEZ_IMAGE_BUCKET, imagePaths, imageTargets);
   mondelezState.rowsByDate[dKey] = rows;
 }
-
 export async function loadMondelezDatesWithData() {
   if (!supabaseClient) return;
   const { data, error } = await supabaseClient
@@ -241,7 +221,6 @@ export async function loadMondelezDatesWithData() {
   if (error) { console.error("Failed to load Mondelez date-availability info:", error); return; }
   mondelezState.datesWithData = new Set((data || []).map((r) => r.shift_date));
 }
-
 async function saveMondelezRowNow(row) {
   if (!supabaseClient) return null;
   try {
@@ -265,14 +244,11 @@ function scheduleMondelezRowSave(row) {
   clearTimeout(mondelezSaveTimers.get(row.id));
   mondelezSaveTimers.set(row.id, setTimeout(() => saveMondelezRowNow(row), SAVE_DEBOUNCE_MS));
 }
-
 /* ---------------- rendering ---------------- */
-
 function mondelezLocationLabel(key) {
   const loc = MONDELEZ_LOCATIONS.find((l) => l.key === key);
   return loc ? loc.label : key;
 }
-
 // Right-click a row to move it to a different Mondelez location tab (e.g. a
 // load built under the wrong tab by mistake) without having to delete and
 // recreate it — everything on the row carries over, only the location changes.
@@ -303,7 +279,6 @@ function openMondelezRowContextMenu(rowId, x, y) {
     btn.addEventListener("click", () => { items[i].action(); closeContextMenu(); });
   });
 }
-
 function moveMondelezRowToLocation(rowId, newLocationKey) {
   const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
   if (!row) return;
@@ -311,7 +286,6 @@ function moveMondelezRowToLocation(rowId, newLocationKey) {
   saveMondelezRowNow(row);
   renderMondelezTable(); // the row now belongs to a different tab, so it drops out of the current view
 }
-
 function toggleMondelezTonu(rowId) {
   const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
   if (!row) return;
@@ -333,14 +307,31 @@ function toggleMondelezShiftComplete(rowId) {
   if (!row) return;
   row.shiftComplete = !row.shiftComplete;
   saveMondelezRowNow(row);
-  renderMondelezTable(); // completed rows sort to the bottom
+  renderMondelezTable(); // completed rows sort to the bottom and collapse to a pill
 }
-
 function mondelezRowHtml(row) {
   const drv = row.driverId ? findDriver(row.driverId) : null;
   const displayName = drv ? drv.name : row.driverName;
   const showLocationCol = mondelezState.activeTab === "combined";
-  const rowClasses = [row.tonu ? "is-tonu" : "", row.highlighted ? "is-row-pinned" : "", row.addedAt ? "is-new" : ""].join(" ");
+  const rowClasses = [row.tonu ? "is-tonu" : "", row.highlighted ? "is-row-pinned" : "", row.addedAt ? "is-new" : "", row.shiftComplete ? "shift-complete-tint" : ""].join(" ");
+  if (row.shiftComplete) {
+    // Minimized to a pill once complete, same idea as Atlanta's
+    // completed-trip chips — nothing left to edit inline, just a quick
+    // way back into the full record (click the pill to open Load
+    // Details, or right-click the row for "Mark Shift Incomplete" to
+    // expand it back to the full editable row).
+    const collapsedCols = showLocationCol ? 17 : 16;
+    return `<tr id="${row.id}" class="${rowClasses}">
+    <td class="pin pin-select"><input type="checkbox" class="chk" data-action="toggle-mdz-select" data-mdz-row="${row.id}" ${row.selected ? "checked" : ""} title="Select"></td>
+    <td class="pin pin-text">
+      <button class="text-btn" data-action="text-mdz-driver" data-mdz-row="${row.id}" title="Text this driver">Text</button>
+      ${MDZ_EMAIL_LOCATIONS.has(row.location) ? `<button class="text-btn" data-action="email-mdz-driver" data-mdz-row="${row.id}" title="Email route info">Email</button>` : ""}
+    </td>
+    <td colspan="${collapsedCols}">
+      <button type="button" class="trip-chip trip-segment-done" data-open-mdz-load="${row.id}" title="Closed out — click to view or edit">${escapeHtml(row.aljexNumber || "(no Aljex#)")} — ${escapeHtml(displayName || "no driver")}</button>
+    </td>
+  </tr>`;
+  }
   return `<tr id="${row.id}" class="${rowClasses}">
     <td class="pin pin-select"><input type="checkbox" class="chk" data-action="toggle-mdz-select" data-mdz-row="${row.id}" ${row.selected ? "checked" : ""} title="Select"></td>
     <td class="pin pin-text">
@@ -378,7 +369,6 @@ function mondelezRowHtml(row) {
     <td class="col-availRemove"><button type="button" class="available-remove-btn" data-action="delete-mdz-row" data-mdz-row="${row.id}" title="Delete">&times;</button></td>
   </tr>`;
 }
-
 function renderMondelezTable() {
   if (!$("#mondelez-table")) return;
   const rows = getMondelezDisplayRows(state.activeDate);
@@ -412,7 +402,6 @@ function renderMondelezTable() {
   refreshDriverDatalist();
   updateMondelezSelectCount();
 }
-
 function updateMondelezSelectCount() {
   const el = $("#mdz-select-count");
   if (!el) return;
@@ -420,7 +409,6 @@ function updateMondelezSelectCount() {
   const selectedCount = rows.filter((r) => r.selected).length;
   el.textContent = `Count ${rows.length} (${selectedCount} selected)`;
 }
-
 function renderMondelezChrome() {
   const d = keyToDate(state.activeDate);
   const isToday = state.activeDate === state.todayKey;
@@ -433,14 +421,12 @@ function renderMondelezChrome() {
     $("#date-prev").disabled = state.activeDate <= state.minDate;
   }
 }
-
 function renderMondelezTabs() {
   const wrap = $("#mondelez-location-tabs");
   if (!wrap) return;
   const allTabs = [...MONDELEZ_LOCATIONS, { key: "combined", label: "All Locations (combined)" }];
   wrap.innerHTML = allTabs.map((t) => `<button type="button" class="location-tab ${mondelezState.activeTab === t.key ? "is-active" : ""}" data-mdz-tab="${t.key}">${escapeHtml(t.label)}</button>`).join("");
 }
-
 function renderMondelezRateSettingsPanel() {
   const box = $("#mondelez-rate-panel");
   if (!box) return;
@@ -461,9 +447,7 @@ function renderMondelezRateSettingsPanel() {
       </div>
     </fieldset>`;
 }
-
 /* ---------------- image upload / view ---------------- */
-
 async function uploadRouteImage(rowId, file) {
   const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
   if (!row || !supabaseClient) return;
@@ -484,7 +468,6 @@ async function uploadRouteImage(rowId, file) {
     setDriverSyncStatus(`Couldn't upload that image (${e.message || e}).`, "error");
   }
 }
-
 function viewRouteImage(rowId) {
   const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
   if (!row || !row.routeImageUrl) return;
@@ -510,7 +493,6 @@ function viewRouteImage(rowId) {
     if (e.key === "Escape") { close(); document.removeEventListener("keydown", escHandler); }
   });
 }
-
 async function deleteRouteImage(rowId) {
   const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
   if (!row || !row.routeImageUrl) return;
@@ -529,16 +511,13 @@ async function deleteRouteImage(rowId) {
     setDriverSyncStatus(`Image removed here, but couldn't delete it from storage (${e.message || e}).`, "error");
   }
 }
-
 /* ---------------- row actions ---------------- */
-
 function quickAddMondelezRow() {
   const row = blankMondelezRow(mondelezState.activeTab === "combined" ? MONDELEZ_LOCATIONS[0].key : mondelezState.activeTab);
   row.addedAt = Date.now();
   getMondelezRowsForDate(state.activeDate).push(row);
   renderMondelezTable();
 }
-
 async function deleteMondelezRow(rowId) {
   const rows = getMondelezRowsForDate(state.activeDate);
   const row = rows.find((r) => r.id === rowId);
@@ -552,18 +531,14 @@ async function deleteMondelezRow(rowId) {
     catch (e) { console.error("deleteMondelezRow failed:", e); }
   }
 }
-
 /* ---------------- Load Details modal ---------------- */
-
 let mdzLoadDetailsRowId = null;
-
 function openMondelezLoadDetailsModal(rowId) {
   const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
   if (!row) return;
   const modal = $("#modal-mdz-load-details");
   if (!modal) { console.error("Mondelez Load Details modal HTML isn't on this page yet."); return; }
   mdzLoadDetailsRowId = rowId;
-
   const setVal = (id, val) => { const el = $("#" + id); if (el) el.value = val == null ? "" : val; };
   const locSelect = $("#mdz-ld-location");
   if (locSelect) {
@@ -593,23 +568,19 @@ function openMondelezLoadDetailsModal(rowId) {
   setVal("mdz-ld-notes", row.notes);
   modal.classList.remove("hidden");
 }
-
 function closeMondelezLoadDetailsModal() {
   const modal = $("#modal-mdz-load-details");
   if (modal) modal.classList.add("hidden");
   closeDriverAutocomplete();
   mdzLoadDetailsRowId = null;
 }
-
 function saveMondelezLoadDetailsModal() {
   if (!mdzLoadDetailsRowId) return;
   const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === mdzLoadDetailsRowId);
   if (!row) { closeMondelezLoadDetailsModal(); return; }
   const getVal = (id) => { const el = $("#" + id); return el ? el.value : ""; };
-
   const newLocation = getVal("mdz-ld-location") || row.location;
   const locationChanged = newLocation !== row.location;
-
   const driverInput = $("#mdz-ld-driver");
   const driverNameTyped = driverInput ? driverInput.value.trim() : row.driverName;
   const explicitDriverId = driverInput ? driverInput.dataset.driverId : "";
@@ -618,7 +589,6 @@ function saveMondelezLoadDetailsModal() {
     const match = driversForLocation("mondelez").find((d) => d.name.toLowerCase() === driverNameTyped.toLowerCase());
     driverId = match ? match.id : null;
   }
-
   row.location = newLocation;
   row.driverName = driverNameTyped;
   row.driverId = driverId;
@@ -636,25 +606,21 @@ function saveMondelezLoadDetailsModal() {
   row.revenueTotal = getVal("mdz-ld-revenue").trim();
   row.revenueManual = row.revenueTotal !== "";
   row.notes = getVal("mdz-ld-notes").trim();
-
   saveMondelezRowNow(row);
   closeMondelezLoadDetailsModal();
   renderMondelezTable(); // if location changed, this drops the row out of the current tab's view
 }
-
 function textMondelezDriverForRow(rowId) {
   const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
   if (!row) return;
   const drv = row.driverId ? findDriver(row.driverId) : null;
   textDriverPhone(drv ? drv.phone : null);
 }
-
 // Only these three locations use this template — the Activation Keys
 // block is a fixed reference list for all three regardless of which one
 // the row itself is at, since it's about which mobile-app organization
 // the driver logs into, not something that varies load to load.
 const MDZ_EMAIL_LOCATIONS = new Set(["morris", "addison", "indianapolis", "westchester"]);
-
 function buildMondelezRouteEmailBody(row, driverName) {
   const line = (label, val) => `${label} ${val || ""}`.trimEnd();
   const screenshotNote = row.routeImageUrl
@@ -688,7 +654,6 @@ function buildMondelezRouteEmailBody(row, driverName) {
     "The delivery app is not used when making shuttle runs.",
   ].join("\n");
 }
-
 // mailto: can prefill a subject and body, but there's no way for a URL
 // scheme to attach a file to the draft it opens — that's a hard browser/
 // OS restriction, not something to work around. The closest practical
@@ -702,39 +667,31 @@ function emailMondelezRouteInfo(rowId) {
   const drv = row.driverId ? findDriver(row.driverId) : null;
   const driverName = drv ? drv.name : (row.driverName || "");
   const driverEmail = drv && drv.email ? drv.email : "";
-
   if (row.routeImageUrl) window.open(row.routeImageUrl, "_blank");
-
   const subject = `Tonight's Route — ${mondelezLocationLabel(row.location)}${row.deliveryGroup ? " — " + row.deliveryGroup : ""}`;
   const body = buildMondelezRouteEmailBody(row, driverName);
   const a = document.createElement("a");
   a.href = `mailto:${encodeURIComponent(driverEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   a.click();
 }
-
 /* ---------------- tab + date switching ---------------- */
-
 export function switchMondelezTab(tabKey) {
   mondelezState.activeTab = tabKey;
   renderMondelezTabs();
   renderMondelezRateSettingsPanel();
   renderMondelezTable();
 }
-
 export async function loadAndRenderMondelez() {
   renderMondelezChrome();
   await ensureMondelezDateLoaded(state.activeDate);
   renderMondelezTable();
 }
-
 export function setMondelezActiveDate(newKey) {
   if (newKey < state.minDate || newKey > state.maxDate) return;
   state.activeDate = newKey;
   loadAndRenderMondelez();
 }
-
 /* ---------------- realtime ---------------- */
-
 function handleRealtimeMondelezChange(payload) {
   if (payload.eventType === "DELETE") return;
   const dbRow = payload.new;
@@ -761,7 +718,6 @@ function handleRealtimeMondelezChange(payload) {
   renderMondelezTable();
   restoreFocus();
 }
-
 function setupMondelezRealtimeSync() {
   if (!supabaseClient) return;
   const channel = supabaseClient.channel("mondelez");
@@ -769,9 +725,7 @@ function setupMondelezRealtimeSync() {
   channel.on("postgres_changes", { event: "*", schema: "public", table: "atlanta_drivers" }, handleRealtimeDriverChange);
   channel.subscribe();
 }
-
 /* ---------------- init ---------------- */
-
 export async function initMondelezPage() {
   state.activeLocation = "mondelez";
   await loadMondelezRateSettings();
@@ -780,12 +734,10 @@ export async function initMondelezPage() {
   loadMondelezDatesWithData().catch((e) => console.error("loadMondelezDatesWithData() failed:", e));
   renderMondelezTabs();
   renderMondelezRateSettingsPanel();
-
   $("#mondelez-location-tabs").addEventListener("click", (e) => {
     const btn = e.target.closest("[data-mdz-tab]");
     if (btn) switchMondelezTab(btn.dataset.mdzTab);
   });
-
   if ($("#modal-location-notes")) {
     on("btn-page-info", "click", () => openLocationNotesModal("mondelez", "Mondelez"));
     on("ln-close", "click", closeLocationNotesModal);
@@ -793,7 +745,6 @@ export async function initMondelezPage() {
     on("ln-save", "click", saveLocationNotes);
     $("#modal-location-notes").addEventListener("click", (e) => { if (e.target.id === "modal-location-notes") closeLocationNotesModal(); });
   }
-
   $("#date-prev").addEventListener("click", () => setMondelezActiveDate(dateKey(addDays(keyToDate(state.activeDate), -1))));
   $("#date-next").addEventListener("click", () => setMondelezActiveDate(dateKey(addDays(keyToDate(state.activeDate), 1))));
   $("#date-input").addEventListener("change", (e) => setMondelezActiveDate(e.target.value));
@@ -811,9 +762,7 @@ export async function initMondelezPage() {
   document.addEventListener("click", (e) => {
     if (!e.target.closest("#date-dropdown") && !e.target.closest("#date-input")) closeDateDropdown();
   });
-
   if ($("#btn-add-driver")) $("#btn-add-driver").addEventListener("click", () => openAddDriverModal(false));
-
   const mdzLdModal = $("#modal-mdz-load-details");
   if (mdzLdModal) {
     const closeBtn = $("#mdz-ld-close"); if (closeBtn) closeBtn.addEventListener("click", closeMondelezLoadDetailsModal);
@@ -843,7 +792,6 @@ export async function initMondelezPage() {
       if (profileLink.dataset.driverId) openEditDriverModal(profileLink.dataset.driverId);
     });
   }
-
   $("#mondelez-rate-panel").addEventListener("change", (e) => {
     const key = e.target.dataset.mdzSetting;
     if (!key) return;
@@ -852,7 +800,6 @@ export async function initMondelezPage() {
       getMondelezRowsForDate(state.activeDate).forEach((r) => { if (r.location === mondelezState.activeTab) recomputeMondelezRevenue(r); });
     });
   });
-
   const table = $("#mondelez-table");
   table.addEventListener("keydown", (e) => handleRowAwareTab(e, "#mondelez-table"));
   table.addEventListener("contextmenu", (e) => {
@@ -940,7 +887,6 @@ export async function initMondelezPage() {
       }
     }
   });
-
   table.addEventListener("focusin", (e) => {
     const t = e.target;
     if (!(t.dataset && t.dataset.mdzRow && t.dataset.driverAc === "true")) return;
@@ -965,7 +911,6 @@ export async function initMondelezPage() {
     if (!rowId || !field) return;
     const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
     if (!row) return;
-
     if (field === "driverAppId") {
       const digitsOnly = t.value.replace(/\D/g, "").slice(0, 9);
       if (digitsOnly !== t.value) t.value = digitsOnly;
@@ -992,7 +937,6 @@ export async function initMondelezPage() {
     scheduleMondelezRowSave(row);
     if (field === "miles" || field === "stopCount" || field === "fsc" || field === "additionalCharges") recomputeMondelezRevenue(row);
   });
-
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeContextMenu(); });
   document.addEventListener("click", (e) => { if (!e.target.closest("#row-context-menu")) closeContextMenu(); });
   document.addEventListener("scroll", closeContextMenu, true);
