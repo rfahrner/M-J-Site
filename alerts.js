@@ -1,7 +1,5 @@
 /* ---------------- board alerts: bottom-right notification panel ---------------- */
-
-import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, parseHHMM, AVG_MPH, minsToClock, escapeHtml, $, openSendTextModal, currentFile, NAV_ORDER, PAGE_MAP, isAccountingUser, signOut, scrollToAndOutlineShiftRow} from './loadboard.js';
-
+import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, parseHHMM, AVG_MPH, minsToClock, escapeHtml, $, openSendTextModal, currentFile, NAV_ORDER, PAGE_MAP, isAccountingUser, isAdminUser, signOut, scrollToAndOutlineShiftRow} from './loadboard.js';
   const ALL_ALERT_LOCATIONS = ["atlanta", "buildingc", "delaware"];
   export const IDLE_THRESHOLD_MIN = 45; // Stage 4: 45 min after shift start, no dispatch yet -- repeats every 45 min after that
   export const PRE_SHIFT_TEXT_LEAD_MIN = 60; // Stage 1: pre-shift ETA text needed 60 min before shift start
@@ -15,7 +13,6 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
   let alertScanTimer = null;
   let alertPanelExpanded = false;
   let alertPanelHasUnread = false;
-
   export function minsSinceMidnightNow() {
     // Every alert threshold and the Next Call Time column are all built on
     // this one function -- it needs to reflect Atlanta's actual clock time,
@@ -30,7 +27,6 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
     const minute = Number(parts.find((p) => p.type === "minute").value);
     return hour * 60 + minute;
   }
-
   // Same idea, but for an arbitrary timestamp instead of always "now" --
   // needed to compare a trip's completed_at against its return_eta_to_dc
   // on the same Atlanta-local clock, for the "at DC" alert below.
@@ -43,7 +39,6 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
     const minute = Number(parts.find((p) => p.type === "minute").value);
     return hour * 60 + minute;
   }
-
   export function driverPhoneForShift(s) {
     const drv = s.driver_id ? findDriver(String(s.driver_id)) : null;
     return (drv && drv.phone) || s.driver_cell_snapshot || "";
@@ -52,7 +47,6 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
     const drv = s.driver_id ? findDriver(String(s.driver_id)) : null;
     return (drv && drv.name) || s.driver_name_text || "Unnamed driver";
   }
-
   export async function scanForBoardAlerts() {
     if (!supabaseClient) return [];
     // Alerts are exclusive to whichever board tab is currently open --
@@ -65,12 +59,10 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
     const { data: shifts, error: shiftErr } = await supabaseClient
       .from(SHIFTS_TABLE).select("*").in("location", thisLocation).eq("shift_date", todayKey);
     if (shiftErr || !shifts || !shifts.length) return [];
-
     const shiftIds = shifts.map((s) => s.id);
     const { data: trips } = await supabaseClient.from(TRIPS_TABLE).select("*").in("shift_id", shiftIds);
     const tripsByShift = {};
     (trips || []).forEach((t) => { (tripsByShift[t.shift_id] = tripsByShift[t.shift_id] || []).push(t); });
-
     // trip_stops -- used by the missing-paperwork rule below to tell
     // whether an open trip has any REAL in/out times recorded yet. Has to
     // check actual time_in/time_out values, not just row existence -- a
@@ -82,11 +74,9 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
       const { data: stopRows } = await supabaseClient.from("trip_stops").select("trip_id, time_in, time_out").in("trip_id", allTripIds);
       (stopRows || []).forEach((s) => { if (s.time_in || s.time_out) stopsByTrip[s.trip_id] = (stopsByTrip[s.trip_id] || 0) + 1; });
     }
-
     const nowMin = minsSinceMidnightNow();
     const alerts = [];
     const preShiftTextNeeded = []; // collected across all shifts, then grouped by shift time below
-
     for (const s of shifts) {
       if (s.shift_complete) continue; // finished loads don't need attention
       const rowTrips = (tripsByShift[s.id] || []).sort((a, b) => a.trip_number - b.trip_number);
@@ -95,7 +85,6 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
       const driverName = driverNameForShift(s);
       const driverPhone = driverPhoneForShift(s);
       const shiftStartMin = parseHHMM(s.shift_start);
-
       // ---- Pre-shift ETA cascade (Stages 1-3) ----
       // Gated on eta_shift_report being blank AND the driver not already
       // having a real dispatched trip -- if they've been dispatched, that's
@@ -127,7 +116,6 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
           preShiftTextNeeded.push({ shiftStartMin, driverName, driverPhone, label, shiftDbId: s.id });
         }
       }
-
       // ---- Stage 4: dispatch check, 45 min after shift start, repeating ----
       // Only starts once the ETA is actually confirmed -- if we're still
       // waiting to hear from the driver at all, stages 1-3 above are the
@@ -146,7 +134,6 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
           });
         }
       }
-
       // Rule: missing paperwork -- a later trip has started while an
       // earlier trip is still open with no stop times recorded at all.
       for (let i = 0; i < rowTrips.length; i++) {
@@ -170,7 +157,6 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
           });
         }
       }
-
       // Rules: missing dispatch time, and the Stage 5/6 last-stop cascade,
       // per active (non-minimized, non-complete) trip. Each trip is its own
       // independent cycle, so a driver starting a new route naturally
@@ -180,7 +166,6 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
         const hasRoute = (t.route_id || "").trim() || (t.trip_id || "").trim();
         if (!hasRoute) continue; // not dispatched yet -- Stage 4 above covers that case
         const tripLabel = t.trip_id || t.route_id;
-
         if (!t.dispatch_time) {
           alerts.push({
             key: `noeta-${t.id}`, type: "missing_eta", location: s.location, shiftDbId: s.id,
@@ -189,16 +174,13 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
           });
           continue; // no dispatch time means last-stop timing can't be evaluated either
         }
-
         // if a later trip's already been dispatched, this trip's cycle is
         // done regardless of what stage it was on -- the next trip's own
         // cycle (checked independently, this same loop) takes over
         const laterDispatched = rowTrips.some((t2) => t2.trip_number > t.trip_number && ((t2.route_id || "").trim() || (t2.trip_id || "").trim()));
         if (laterDispatched) continue;
-
         const lastStopMin = parseHHMM(t.last_stop_depart);
         const returnEtaMin = parseHHMM(t.return_eta_to_dc);
-
         if (lastStopMin != null && returnEtaMin == null && nowMin >= lastStopMin) {
           // Stage 5: last-stop-depart time has arrived, no return ETA yet --
           // this ONLY asks whether the driver made it and what their ETA
@@ -224,7 +206,6 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
           });
         }
       }
-
       // Stage 7: driver waiting at the DC between trips -- every trip on
       // this shift is closed out, but the shift itself isn't complete,
       // meaning they're sitting idle waiting on their next dispatch.
@@ -257,7 +238,6 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
         }
       }
     }
-
     // Group pre-shift-text-needed drivers by shift time -- same time means
     // the same message text, so one alert with one button covers all of them.
     const byShiftTime = {};
@@ -275,14 +255,11 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
         markShiftIdsOnSent: withPhone.map((d) => d.shiftDbId), // Pre Shift Text Sent gets marked automatically once this actually sends
       });
     });
-
     return alerts;
   }
-
   export function formatAlertTimestamp(d) {
     return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
   }
-
   export function loadAlertWidgetPrefs() {
     try {
       return JSON.parse(localStorage.getItem("dl-alert-widget-prefs") || "{}");
@@ -292,18 +269,15 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
     const prefs = { ...loadAlertWidgetPrefs(), ...patch };
     try { localStorage.setItem("dl-alert-widget-prefs", JSON.stringify(prefs)); } catch (e) { /* ignore quota errors */ }
   }
-
   export function renderAlertPanel() {
     const widget = $("#alert-widget");
     if (!widget) return;
     const headerCount = $("#alert-widget-count");
     const body = $("#alert-widget-body");
     const count = boardAlerts.length;
-
     headerCount.textContent = count ? `(${count})` : "";
     widget.classList.toggle("expanded", alertPanelExpanded);
     widget.classList.toggle("blinking", alertPanelHasUnread && !alertPanelExpanded);
-
     if (!count) {
       body.innerHTML = `<div class="alert-empty">Nothing needs attention right now.</div>`;
       return;
@@ -323,7 +297,6 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
     `;
     }).join("");
   }
-
   export async function refreshBoardAlerts() {
     let fresh = [];
     try {
@@ -347,26 +320,22 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
     if (sawNew && !alertPanelExpanded) alertPanelHasUnread = true;
     renderAlertPanel();
   }
-
   export function toggleAlertPanel() {
     alertPanelExpanded = !alertPanelExpanded;
     if (alertPanelExpanded) alertPanelHasUnread = false;
     saveAlertWidgetPrefs({ expanded: alertPanelExpanded });
     renderAlertPanel();
   }
-
   export function closeAlertWidget() {
     $("#alert-widget").classList.add("hidden");
     $("#alert-widget-reopen").classList.remove("hidden");
     saveAlertWidgetPrefs({ closed: true });
   }
-
   export function reopenAlertWidget() {
     $("#alert-widget").classList.remove("hidden");
     $("#alert-widget-reopen").classList.add("hidden");
     saveAlertWidgetPrefs({ closed: false });
   }
-
   export function applyAlertWidgetPosition(widget, pos) {
     if (pos && typeof pos.left === "number" && typeof pos.top === "number") {
       widget.style.left = pos.left + "px";
@@ -375,7 +344,6 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
       widget.style.bottom = "auto";
     }
   }
-
   export function wireAlertWidgetDrag(widget, header) {
     let dragging = false, moved = false, startX = 0, startY = 0, origLeft = 0, origTop = 0;
     header.addEventListener("mousedown", (e) => {
@@ -411,18 +379,15 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
       }
     });
   }
-
   export function startAlertScanning() {
     if (!$("#alert-widget")) injectAlertWidget();
     refreshBoardAlerts();
     if (alertScanTimer) clearInterval(alertScanTimer);
     alertScanTimer = setInterval(refreshBoardAlerts, 60 * 1000);
   }
-
   export function injectAlertWidget() {
     const prefs = loadAlertWidgetPrefs();
     alertPanelExpanded = !!prefs.expanded;
-
     const el = document.createElement("div");
     el.id = "alert-widget";
     if (prefs.closed) el.classList.add("hidden");
@@ -438,7 +403,6 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
     `;
     document.body.appendChild(el);
     applyAlertWidgetPosition(el, prefs);
-
     const reopenBtn = document.createElement("button");
     reopenBtn.id = "alert-widget-reopen";
     reopenBtn.className = "hidden";
@@ -447,12 +411,10 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
     reopenBtn.textContent = "🔔";
     document.body.appendChild(reopenBtn);
     if (prefs.closed) reopenBtn.classList.remove("hidden");
-
     $("#alert-widget-minimize").addEventListener("click", (e) => { e.stopPropagation(); toggleAlertPanel(); });
     $("#alert-widget-close").addEventListener("click", (e) => { e.stopPropagation(); closeAlertWidget(); });
     reopenBtn.addEventListener("click", reopenAlertWidget);
     wireAlertWidgetDrag(el, $("#alert-widget-header"));
-
     // Delegated -- alert items are re-rendered wholesale on every scan, so
     // listeners attached directly to them would be lost each time.
     el.addEventListener("click", (e) => {
@@ -475,14 +437,13 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
       }
     });
   }
-
-
   export function renderNav() {
     const tabsEl = $("#tabs");
     if (!tabsEl) return;
     const cur = currentFile();
     tabsEl.innerHTML = NAV_ORDER
       .filter((file) => PAGE_MAP[file].type !== "accounting" || isAccountingUser())
+      .filter((file) => PAGE_MAP[file].type !== "location-analytics" || isAdminUser())
       .map((file) => {
         const info = PAGE_MAP[file];
         return `<a class="tab-btn${file === cur ? " active" : ""}" href="${file}">${info.label}</a>`;
