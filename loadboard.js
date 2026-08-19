@@ -297,7 +297,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       "atlanta_rate_overrides": d.atlantaRateOverrides && (Object.keys(d.atlantaRateOverrides.tiers || {}).length || Object.keys(d.atlantaRateOverrides.settings || {}).length) ? d.atlantaRateOverrides : null,
     };
   }
-  function driverFromDbRow(row) {
+  export function driverFromDbRow(row) {
     return {
       id: row.id,
       name: row["Driver Name"] || "",
@@ -1109,7 +1109,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       case "route_complete": return nv === "true" ? "Route marked complete" : "Route marked incomplete";
       case "tonu": return nv === "true" ? "Marked TONU" : "TONU removed";
       case "shift_complete": return nv === "true" ? "Shift marked complete" : "Shift marked incomplete";
-      case "called_off": return nv === "true" ? "Driver called off" : "Called-off status removed";
+      case "called_off": return nv === "true" ? "Marked as cancellation" : "Cancellation removed";
       case "timesheet_received": return "Time sheet received";
       case "pre_shift_text_sent": return "Pre-shift text sent";
       case "deleted": return "Load deleted";
@@ -1705,7 +1705,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         <div class="driver-name-wrap">
           <input class="cell-input" data-driver-ac="true" placeholder="Type driver name…"
             data-row="${row.id}" data-field="driverName" value="${escapeHtml(displayName)}">
-          ${row.calledOff ? `<span title="${escapeHtml(row.calledOffNotes || "")}" style="display:inline-block; margin-left:4px; padding:1px 6px; border-radius:4px; background:#dc2626; color:#fff; font-size:10px; font-weight:700; white-space:nowrap; vertical-align:middle;">CALLED OFF</span>` : ""}
+          ${row.calledOff ? `<span title="${escapeHtml(row.calledOffNotes || "")}" style="display:inline-block; margin-left:4px; padding:1px 6px; border-radius:4px; background:#dc2626; color:#fff; font-size:10px; font-weight:700; white-space:nowrap; vertical-align:middle;">CANCELLED</span>` : ""}
         </div>
       </td>
         <td class="col-rate"${rs}>
@@ -2509,28 +2509,19 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     overlay.innerHTML = `
       <div class="modal">
         <div class="modal-header">
-          <h3>Driver Called Off</h3>
+          <h3>Cancellation</h3>
           <button class="modal-close" id="called-off-close">&times;</button>
         </div>
         <div class="modal-body">
           <p style="margin:0 0 10px;">${escapeHtml(driverLabel)} called in and can't make this shift.</p>
           <div class="field">
-            <label>Reason</label>
-            <div class="radio-row">
-              <label><input type="radio" name="called-off-reason" value="breakdown" checked> Breakdown</label>
-              <label><input type="radio" name="called-off-reason" value="family_emergency"> Family emergency</label>
-              <label><input type="radio" name="called-off-reason" value="other"> Other</label>
-              <label><input type="radio" name="called-off-reason" value="unspecified"> No reason given</label>
-            </div>
-          </div>
-          <div class="field">
-            <label for="called-off-notes">Notes (optional)</label>
-            <textarea class="cell-input" id="called-off-notes" rows="2" style="width:100%;"></textarea>
+            <label for="called-off-notes">Reason for cancellation:</label>
+            <textarea class="cell-input" id="called-off-notes" rows="3" style="width:100%;" placeholder="e.g. truck broke down, family emergency, no reason given"></textarea>
           </div>
         </div>
         <div class="modal-footer">
           <button class="btn btn-ghost" id="called-off-cancel">Cancel</button>
-          <button class="btn" id="called-off-submit">Mark Called Off</button>
+          <button class="btn" id="called-off-submit">Mark Cancellation</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -2539,10 +2530,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     $("#called-off-close").addEventListener("click", close);
     $("#called-off-cancel").addEventListener("click", close);
     $("#called-off-submit").addEventListener("click", async () => {
-      const checked = overlay.querySelector('input[name="called-off-reason"]:checked');
+      const reasonText = ($("#called-off-notes").value || "").trim();
       row.calledOff = true;
-      row.calledOffReason = checked ? checked.value : "unspecified";
-      row.calledOffNotes = ($("#called-off-notes").value || "").trim();
+      row.calledOffReason = reasonText;
+      row.calledOffNotes = reasonText;
       row.calledOffAt = new Date().toISOString();
       await saveShiftNow(row);
       logChange(row.dbId, labelForRow(row), "called_off", "false", "true");
@@ -3378,7 +3369,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const row = found.row;
     const items = [
       { label: row.tonu ? "Un-TONU" : "TONU", action: () => toggleTonu(rowId) },
-      { label: row.calledOff ? "Un-mark Called Off" : "Driver Called Off", action: () => row.calledOff ? unmarkDriverCalledOff(rowId) : openCalledOffModal(rowId) },
+      { label: row.calledOff ? "Un-mark Cancellation" : "Cancellation", action: () => row.calledOff ? unmarkDriverCalledOff(rowId) : openCalledOffModal(rowId) },
       { label: row.highlighted ? "Remove Highlight" : "Highlight", action: () => toggleRowPin(rowId) },
       { label: row.shiftComplete ? "Mark Shift Incomplete" : "Shift Complete", action: () => toggleShiftComplete(rowId) },
       { label: "Load Details", action: () => openLoadDetailsModal(rowId) },
