@@ -60,29 +60,41 @@ function chunk(arr, size) {
   return out;
 }
 
-async function loadFullDriverRoster() {
+// Every query in this file needs this — Supabase silently caps an
+// unbounded .select() at a default row limit. A windowed query might
+// stay under that cap by luck while an all-time query quietly doesn't,
+// which is exactly the bug that produced an all-time total lower than
+// a 60-day windowed count. Paginating everything through here removes
+// that risk instead of hoping each individual query happens to stay small.
+async function fetchAllRows(table, columns, applyFilters) {
   const PAGE_SIZE = 1000;
   let all = [];
   let from = 0;
   while (true) {
-    const { data, error } = await supabaseClient.from('atlanta_drivers').select('*').range(from, from + PAGE_SIZE - 1);
-    if (error) { console.error('Failed to load driver roster:', error); setDriverSyncStatus(`Couldn't load drivers (${error.message}).`, 'error'); return []; }
+    let q = supabaseClient.from(table).select(columns).range(from, from + PAGE_SIZE - 1);
+    if (applyFilters) q = applyFilters(q);
+    const { data, error } = await q;
+    if (error) { console.error(`Failed to load ${table}:`, error); return all; }
     all = all.concat(data || []);
     if (!data || data.length < PAGE_SIZE) break;
     from += PAGE_SIZE;
   }
-  return all.map(driverFromDbRow); // same mapping every other page relies on -- raw rows use "Driver Name" etc, not .name
+  return all;
+}
+
+async function loadFullDriverRoster() {
+  const rows = await fetchAllRows('atlanta_drivers', '*');
+  return rows.map(driverFromDbRow); // same mapping every other page relies on -- raw rows use "Driver Name" etc, not .name
 }
 
 async function loadWindowData(rangeStart) {
-  const { data: shifts, error: shiftErr } = await supabaseClient
-    .from(SHIFTS_TABLE).select('id, location, shift_date, driver_id, tonu, called_off, called_off_reason, shift_complete')
-    .in('location', ['atlanta', 'buildingc', 'delaware'])
-    .gte('shift_date', rangeStart)
-    .not('driver_id', 'is', null);
-  if (shiftErr) { console.error('Failed to load shifts:', shiftErr); setDriverSyncStatus(`Couldn't load shift data (${shiftErr.message}).`, 'error'); return { shifts: [], tripsByShiftId: {} }; }
+  const shifts = await fetchAllRows(
+    SHIFTS_TABLE,
+    'id, location, shift_date, driver_id, tonu, called_off, called_off_reason, shift_complete',
+    (q) => q.in('location', ['atlanta', 'buildingc', 'delaware']).gte('shift_date', rangeStart).not('driver_id', 'is', null)
+  );
 
-  const shiftIds = (shifts || []).map((s) => s.id);
+  const shiftIds = shifts.map((s) => s.id);
   const tripsByShiftId = {};
   for (const idChunk of chunk(shiftIds, 150)) {
     const { data: trips, error: tripErr } = await supabaseClient.from(TRIPS_TABLE).select('shift_id, route_id, trip_id, route_miles').in('shift_id', idChunk);
@@ -92,32 +104,27 @@ async function loadWindowData(rangeStart) {
       tripsByShiftId[t.shift_id].push(t);
     });
   }
-  return { shifts: shifts || [], tripsByShiftId };
+  return { shifts, tripsByShiftId };
 }
 
 async function loadHoustonWindow(rangeStart) {
-  const { data, error } = await supabaseClient
-    .from(HOUSTON_TABLE).select('id, shift_date, driver_id, aljex_number, tonu, shift_complete')
-    .gte('shift_date', rangeStart)
-    .not('driver_id', 'is', null);
-  if (error) { console.error('Failed to load Houston window:', error); return []; }
-  return data || [];
+  return fetchAllRows(
+    HOUSTON_TABLE, 'id, shift_date, driver_id, aljex_number, tonu, shift_complete',
+    (q) => q.gte('shift_date', rangeStart).not('driver_id', 'is', null)
+  );
 }
 
 async function loadMondelezWindow(rangeStart) {
-  const { data, error } = await supabaseClient
-    .from(MONDELEZ_TABLE).select('id, shift_date, driver_id, aljex_number, miles, tonu, shift_complete')
-    .gte('shift_date', rangeStart)
-    .not('driver_id', 'is', null);
-  if (error) { console.error('Failed to load Mondelez window:', error); return []; }
-  return data || [];
+  return fetchAllRows(
+    MONDELEZ_TABLE, 'id, shift_date, driver_id, aljex_number, miles, tonu, shift_complete',
+    (q) => q.gte('shift_date', rangeStart).not('driver_id', 'is', null)
+  );
 }
 
 async function loadNotesCounts() {
-  const { data, error } = await supabaseClient.from('driver_notes').select('driver_id');
-  if (error) { console.error('Failed to load driver notes counts:', error); return {}; }
+  const rows = await fetchAllRows('driver_notes', 'driver_id');
   const counts = {};
-  (data || []).forEach((n) => { counts[n.driver_id] = (counts[n.driver_id] || 0) + 1; });
+  rows.forEach((n) => { counts[n.driver_id] = (counts[n.driver_id] || 0) + 1; });
   return counts;
 }
 
@@ -142,9 +149,7 @@ async function loadAllTimeTotals() {
     totals[driverId].routesPulled += routes;
   };
 
-  const { data: shifts, error: shiftErr } = await supabaseClient.from(SHIFTS_TABLE).select('id, driver_id').not('driver_id', 'is', null);
-  if (shiftErr) { console.error('Failed to load all-time shifts:', shiftErr); }
-  const allShifts = shifts || [];
+  const allShifts = await fetchAllRows(SHIFTS_TABLE, 'id, driver_id', (q) => q.not('driver_id', 'is', null));
   const shiftIds = allShifts.map((s) => s.id);
   const routeCountByShiftId = {};
   for (const idChunk of chunk(shiftIds, 150)) {
@@ -158,13 +163,11 @@ async function loadAllTimeTotals() {
   }
   allShifts.forEach((s) => bump(s.driver_id, 1, routeCountByShiftId[s.id] || 0));
 
-  const { data: houstonAll, error: houstonErr } = await supabaseClient.from(HOUSTON_TABLE).select('driver_id, aljex_number').not('driver_id', 'is', null);
-  if (houstonErr) console.error('Failed to load all-time Houston:', houstonErr);
-  (houstonAll || []).forEach((r) => { const real = r.aljex_number && String(r.aljex_number).trim(); bump(r.driver_id, 1, real ? 1 : 0); });
+  const houstonAll = await fetchAllRows(HOUSTON_TABLE, 'driver_id, aljex_number', (q) => q.not('driver_id', 'is', null));
+  houstonAll.forEach((r) => { const real = r.aljex_number && String(r.aljex_number).trim(); bump(r.driver_id, 1, real ? 1 : 0); });
 
-  const { data: mdzAll, error: mdzErr } = await supabaseClient.from(MONDELEZ_TABLE).select('driver_id, aljex_number').not('driver_id', 'is', null);
-  if (mdzErr) console.error('Failed to load all-time Mondelez:', mdzErr);
-  (mdzAll || []).forEach((r) => { const real = r.aljex_number && String(r.aljex_number).trim(); bump(r.driver_id, 1, real ? 1 : 0); });
+  const mdzAll = await fetchAllRows(MONDELEZ_TABLE, 'driver_id, aljex_number', (q) => q.not('driver_id', 'is', null));
+  mdzAll.forEach((r) => { const real = r.aljex_number && String(r.aljex_number).trim(); bump(r.driver_id, 1, real ? 1 : 0); });
 
   return totals;
 }
@@ -258,13 +261,13 @@ function renderTable() {
     <th></th>
     <th>Driver</th>
     <th>Shifts (window)</th>
+    <th>Cancellations</th>
     <th>Routes (window)</th>
     <th>Total Shifts Worked</th>
     <th>Total Routes Pulled</th>
     <th>Avg Route Mi</th>
     <th>Avg Routes/Shift (Atlanta pull)</th>
     <th>TONU</th>
-    <th>Cancellations</th>
     <th>Holiday Days Ran</th>
     <th>Notes</th>
   </tr></thead>`;
@@ -278,13 +281,13 @@ function renderTable() {
       <td><button type="button" class="cell-link-btn" data-action="open-driver-profile" data-driver-id="${driver.id}" title="Open driver profile">↗</button></td>
       <td>${escapeHtml(driver.name)}</td>
       <td>${s.shiftCount}</td>
+      <td title="${escapeHtml(cancellationTitle)}">${noCancellationTracking ? '—' : (s.cancellationCount || '—')}</td>
       <td>${s.routeCount}</td>
       <td>${allTime.shiftsWorked || '—'}</td>
       <td>${allTime.routesPulled || '—'}</td>
       <td>${avgMiles}</td>
       <td>${pull}</td>
       <td>${s.tonuCount || '—'}</td>
-      <td title="${escapeHtml(cancellationTitle)}">${noCancellationTracking ? '—' : (s.cancellationCount || '—')}</td>
       <td>${s.holidayDays.size || '—'}</td>
       <td>${notesCount || '—'}</td>
     </tr>`;
