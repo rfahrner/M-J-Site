@@ -7,7 +7,6 @@
   <link rel="stylesheet" href="loadboard.css">
 </head>
 <body>
-
   <div class="topbar">
     <div class="brand">
       <div class="brand-mark"></div>
@@ -15,7 +14,6 @@
     </div>
     <div class="tabs" id="tabs"></div>
   </div>
-
   <div id="driverlist-view" class="panel">
     <div class="toolbar" style="padding-left:0;padding-right:0;border-bottom:none;">
       <div class="toolbar-left">
@@ -59,7 +57,6 @@
       </table>
     </div>
   </div>
-
   <!-- ================= Add Driver modal ================= -->
   <div class="overlay hidden" id="modal-add-driver">
     <div class="modal">
@@ -168,7 +165,6 @@
       </div>
     </div>
   </div>
-
   <!-- ================= Text Group modal ================= -->
   <div class="overlay hidden" id="modal-text-group">
     <div class="modal">
@@ -183,6 +179,13 @@
             <select id="tg-group-select" class="cell-input"></select>
           </div>
           <div class="field">
+            <label>How to text them</label>
+            <div class="radio-row">
+              <label><input type="radio" name="tg-phone-mode" value="driver" checked> Text drivers directly</label>
+              <label><input type="radio" name="tg-phone-mode" value="dispatch"> Text dispatch where applicable</label>
+            </div>
+          </div>
+          <div class="field">
             <label for="tg-message">Message</label>
             <textarea id="tg-message" rows="5" placeholder="Type the message to send to this group…"></textarea>
           </div>
@@ -192,8 +195,7 @@
           <div id="tg-progress-body"></div>
         </div>
       </div>
-      
-
+     
       <div class="modal-footer">
         <button class="btn btn-ghost" id="tg-cancel">Cancel</button>
         <button class="btn" id="tg-start">Start</button>
@@ -204,7 +206,6 @@
       </div>
     </div>
   </div>
-
   <!-- ================= Page Notes modal (free-form, editable, next to the page title) ================= -->
   <div class="overlay hidden" id="modal-location-notes">
     <div class="modal modal-large">

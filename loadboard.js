@@ -2794,6 +2794,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     groupTextState = null;
     $("#tg-group-tabs-wrap").classList.add("hidden"); // no group to pick — the checkboxes already picked them
     $("#tg-message").value = "";
+    const driverModeRadio = document.querySelector('input[name="tg-phone-mode"][value="driver"]');
+    if (driverModeRadio) driverModeRadio.checked = true;
     $("#tg-setup-step").classList.remove("hidden");
     $("#tg-progress-step").classList.add("hidden");
     $("#tg-error").classList.add("hidden");
@@ -2808,9 +2810,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const rows = getSheet(state.activeLocation, state.activeDate).filter((r) => r.selected);
     const members = rows.map((r) => {
       const drv = r.driverId ? findDriver(r.driverId) : null;
-      return { name: drv ? drv.name : (r.driverNameText || "Unnamed"), phone: drv ? drv.phone : "" };
+      return { name: drv ? drv.name : (r.driverNameText || "Unnamed"), phone: drv ? drv.phone : "", dispatcherPhone: drv ? drv.dispatcherPhone : "" };
     });
-    beginTextBatchFlow(members, "Selected Loads", message);
+    beginTextBatchFlow(applyPhoneMode(members), "Selected Loads", message);
   }
 
   function openTripsForRow(row) {
@@ -3108,12 +3110,23 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
   export function openSendTextModal(recipients, prefilledMessage, markShiftIdsOnSent) {
     const withPhone = recipients.filter((r) => formatTextAddress(r.phone));
-    if (!withPhone.length) {
+    // De-dupe by normalized phone — several drivers can share the same
+    // dispatcher (or even the same cell), and nobody should get texted
+    // more than once just because multiple of their drivers were selected.
+    const seen = new Set();
+    const deduped = [];
+    withPhone.forEach((r) => {
+      const normalized = formatTextAddress(r.phone);
+      if (seen.has(normalized)) return;
+      seen.add(normalized);
+      deduped.push(r);
+    });
+    if (!deduped.length) {
       setDriverSyncStatus("No phone number on file for this driver.", "error");
       return;
     }
-    sendTextModalState = { recipients: withPhone, markShiftIdsOnSent: markShiftIdsOnSent || null };
-    $("#send-text-phone-display").textContent = withPhone.map((r) => r.name || r.phone).join(", ");
+    sendTextModalState = { recipients: deduped, markShiftIdsOnSent: markShiftIdsOnSent || null };
+    $("#send-text-phone-display").textContent = deduped.map((r) => r.name || r.phone).join(", ");
     $("#send-text-message").value = prefilledMessage || "";
     $("#send-text-status").textContent = "";
     updateSendTextCounter();
@@ -3238,17 +3251,43 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     }
     const msgEl = $("#tg-message");
     if (msgEl) msgEl.value = "";
+    const driverModeRadio = document.querySelector('input[name="tg-phone-mode"][value="driver"]');
+    if (driverModeRadio) driverModeRadio.checked = true;
     $("#tg-setup-step").classList.remove("hidden");
     $("#tg-progress-step").classList.add("hidden");
     $("#tg-error").classList.add("hidden");
     modal.classList.remove("hidden");
   }
 
+  // Shared by both Text Group flows (driver-list group texting and the
+  // board's "text selected rows") — when dispatch mode is on, prefers
+  // each member's dispatcher phone if one's on file, falling back to
+  // their own cell if not. De-duplication for shared dispatcher numbers
+  // happens downstream in beginTextBatchFlow, so this only needs to
+  // pick the right number per member.
+  function applyPhoneMode(members) {
+    const mode = (document.querySelector('input[name="tg-phone-mode"]:checked') || {}).value || "driver";
+    if (mode !== "dispatch") return members;
+    return members.map((m) => {
+      const dispatchPhone = m.dispatcherPhone && String(m.dispatcherPhone).trim();
+      if (!dispatchPhone) return m;
+      return { ...m, name: `${m.name} (dispatch)`, phone: dispatchPhone };
+    });
+  }
+
   export function beginTextBatchFlow(members, label, message) {
     const errEl = $("#tg-error");
     const withPhone = [];
     const skipped = [];
-    members.forEach((d) => { (formatTextAddress(d.phone) ? withPhone : skipped).push(d); });
+    const deduped = [];
+    const seenPhones = new Set();
+    members.forEach((d) => {
+      const normalized = formatTextAddress(d.phone);
+      if (!normalized) { skipped.push(d); return; }
+      if (seenPhones.has(normalized)) { deduped.push(d); return; } // shares a number with someone already queued -- don't text it twice
+      seenPhones.add(normalized);
+      withPhone.push(d);
+    });
 
     if (withPhone.length === 0) {
       errEl.textContent = `No one in ${label} has a phone number on file.`;
@@ -3260,7 +3299,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const batches = [];
     for (let i = 0; i < withPhone.length; i += GROUP_BATCH_SIZE) batches.push(withPhone.slice(i, i + GROUP_BATCH_SIZE));
 
-    groupTextState = { groupKey: label, message, batches, batchIndex: 0, skipped, totalSent: 0 };
+    groupTextState = { groupKey: label, message, batches, batchIndex: 0, skipped, deduped, totalSent: 0 };
     $("#tg-setup-step").classList.add("hidden");
     $("#tg-progress-step").classList.remove("hidden");
     renderGroupTextProgress();
@@ -3275,9 +3314,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     errEl.classList.add("hidden");
 
     const pool = driversForLocation(state.driverListTab || "atlanta");
-    const members = groupKey === "ALL" ? pool : pool.filter((d) => driverClassification(d) === groupKey);
+    const rawMembers = groupKey === "ALL" ? pool : pool.filter((d) => driverClassification(d) === groupKey);
     const label = groupKey === "ALL" ? "All Drivers" : (groupKey === "DNU" ? "DNU" : `Rating ${groupKey}`);
-    beginTextBatchFlow(members, label, message);
+    beginTextBatchFlow(applyPhoneMode(rawMembers), label, message);
   }
 
   function renderGroupTextProgress() {
@@ -3287,11 +3326,14 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const skipNote = s.skipped.length
       ? `<div class="calc-note" style="margin-top:8px;">${s.skipped.length} driver(s) in this group have no phone on file and were skipped: ${escapeHtml(s.skipped.map((d) => d.name).join(", "))}</div>`
       : "";
+    const dedupedNote = s.deduped && s.deduped.length
+      ? `<div class="calc-note" style="margin-top:4px;">${s.deduped.length} driver(s) share a number with someone already in this batch, so only one text went to that number: ${escapeHtml(s.deduped.map((d) => d.name).join(", "))}</div>`
+      : "";
 
     if (isDone) {
       $("#tg-progress-body").innerHTML = `
         <div class="subtext" style="font-weight:700; font-size:14px;">All done — ${s.totalSent} driver(s) in ${escapeHtml(s.groupKey)} texted across ${s.batches.length} batch(es).</div>
-        ${skipNote}`;
+        ${skipNote}${dedupedNote}`;
       $("#tg-send-now").classList.add("hidden");
       $("#tg-open-batch").classList.add("hidden");
       $("#tg-confirm-sent").classList.add("hidden");
@@ -3302,7 +3344,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     $("#tg-progress-body").innerHTML = `
       <div class="subtext" style="font-weight:700;">Batch ${s.batchIndex + 1} of ${s.batches.length} — ${batch.length} recipient(s)</div>
       <div class="subtext" style="margin-top:6px;">${escapeHtml(batch.map((d) => d.name).join(", "))}</div>
-      ${skipNote}
+      ${skipNote}${dedupedNote}
       <div class="calc-note" style="margin-top:10px;" id="tg-batch-status">Click "Send Now" to send this batch automatically, or fall back to Outlook if needed.</div>
     `;
     $("#tg-send-now").classList.remove("hidden");
