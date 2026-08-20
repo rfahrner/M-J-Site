@@ -334,7 +334,7 @@ function renderTable() {
     if (row.rowType === 'day') {
       const zebra = dayIndex % 2 === 1;
       dayIndex += 1;
-      const cellStyle = zebra ? 'background:#AED0E7;' : '';
+      const cellStyle = zebra ? 'background:#C4DEEE;' : '';
       const dow = DAY_NAMES[new Date(row.date + 'T00:00:00').getDay()];
       const note = laState.notesByDate[row.date] || '';
       const metricCells = FIELD_DEFS.map((f) => rowTd(fmtValue(f, row[f.key]), cellStyle)).join('');
