@@ -237,7 +237,18 @@ function buildDisplayRows(rangeData, startDate, endDate) {
 
   const flushWeek = () => {
     if (!weekDays.length) return;
-    const wStart = weekDays[0], wEnd = weekDays[weekDays.length - 1];
+    // Always the TRUE Sun-Sat week, even if the currently-displayed
+    // range only contains a partial slice of it (e.g. viewing "Period"
+    // right at a quarter's start/end, where the week's earlier days
+    // belong to the previous quarter). The period boundary changes
+    // which days render as their own rows — it never changes what a
+    // week itself is. rangeData is fetched padded out to full weeks at
+    // each end specifically so this has real data to compute from.
+    const anyDayInWeek = new Date(weekDays[0] + 'T00:00:00');
+    const trueWeekStart = startOfWeek(anyDayInWeek);
+    const trueWeekEnd = addDays(trueWeekStart, 6);
+    const wStart = dateKey(trueWeekStart);
+    const wEnd = dateKey(trueWeekEnd);
     rows.push({ rowType: 'weekRecap', date: `Weekly Recap (${wStart} to ${wEnd})`, rangeStart: wStart, rangeEnd: wEnd, ...computeMetricsForDateRange(rangeData, wStart, wEnd) });
     weekDays = [];
   };
@@ -378,13 +389,23 @@ async function reload() {
   const { start, end } = await computeRangeDates(laState.rangeMode);
   laState.rangeStart = start;
   laState.rangeEnd = end;
+  // Fetch wider than what's actually displayed — padded out to the full
+  // containing week at each end — so the first/last Weekly Recap rows
+  // can be computed from the TRUE 7-day week even when the displayed
+  // period boundary cuts a week short (e.g. "Period" starting mid-week).
+  // The padding days themselves are never rendered as their own day rows.
+  const fetchStart = dateKey(startOfWeek(new Date(start + 'T00:00:00')));
+  const fetchEnd = dateKey(addDays(startOfWeek(new Date(end + 'T00:00:00')), 6));
   const [rangeData, notes] = await Promise.all([
-    fetchRangeData(start, end, laState.activeTab),
+    fetchRangeData(fetchStart, fetchEnd, laState.activeTab),
     loadNotesForRange(start, end, laState.activeTab),
   ]);
   laState.notesByDate = notes;
   laState.displayRows = buildDisplayRows(rangeData, start, end);
-  laState.recap = computeAggregate(rangeData);
+  // Running total stays scoped to exactly the displayed range, not the
+  // padded fetch — otherwise borrowed days from the adjacent period
+  // would silently inflate it.
+  laState.recap = computeMetricsForDateRange(rangeData, start, end);
   setDriverSyncStatus('');
   renderRangeDisplay();
   renderTable();
