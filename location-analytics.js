@@ -321,20 +321,29 @@ function renderTable() {
   const headerCells = ['Date', 'Day', 'Notes', ...FIELD_DEFS.map((f) => f.label), ''].map((h) => `<th>${escapeHtml(h)}</th>`).join('');
   const blankSpacerRows = `<tr><td colspan="${totalCols}" style="background:#fff; height:14px; border:none;"></td></tr>`.repeat(2);
 
+  // Styling has to go on each <td> directly, not the parent <tr> —
+  // table.board's own existing CSS sets `background` on td elements
+  // directly (both a base rule and a tr:nth-child(even) td rule for its
+  // own native zebra striping), which sits on top of and completely
+  // covers any background set only on the row. A per-cell inline style
+  // has the specificity to actually win against that.
+  const rowTd = (content, style, extraAttrs) => `<td${style ? ` style="${style}"` : ''}${extraAttrs || ''}>${content}</td>`;
+
   let dayIndex = 0; // for zebra striping across DAY rows only
   const bodyRows = laState.displayRows.map((row) => {
     if (row.rowType === 'day') {
       const zebra = dayIndex % 2 === 1;
       dayIndex += 1;
+      const cellStyle = zebra ? 'background:#3271a1;' : '';
       const dow = DAY_NAMES[new Date(row.date + 'T00:00:00').getDay()];
       const note = laState.notesByDate[row.date] || '';
-      const metricCells = FIELD_DEFS.map((f) => `<td>${fmtValue(f, row[f.key])}</td>`).join('');
-      return `<tr${zebra ? ' style="background:#3271a1; color:#fff;"' : ''}>
-        <td>${escapeHtml(row.date)}</td>
-        <td>${escapeHtml(dow)}</td>
-        <td><input type="text" class="cell-input la-note-input" data-note-date="${row.date}" value="${escapeHtml(note)}" placeholder="Note…" style="width:100%;"></td>
+      const metricCells = FIELD_DEFS.map((f) => rowTd(fmtValue(f, row[f.key]), cellStyle)).join('');
+      return `<tr>
+        ${rowTd(escapeHtml(row.date), cellStyle)}
+        ${rowTd(escapeHtml(dow), cellStyle)}
+        ${rowTd(`<input type="text" class="cell-input la-note-input" data-note-date="${row.date}" value="${escapeHtml(note)}" placeholder="Note…" style="width:100%;">`, cellStyle)}
         ${metricCells}
-        <td></td>
+        ${rowTd('', cellStyle)}
       </tr>`;
     }
     // weekRecap: light background, D&L blue text — readable, on-brand.
@@ -343,12 +352,13 @@ function renderTable() {
     // boundaries at a glance. Followed by two blank rows for breathing
     // room before the next section starts.
     const isPeriod = row.rowType === 'periodRecap';
-    const rowStyle = isPeriod ? 'background:#006495; color:#fff; font-weight:700;' : 'background:#e6f0f6; color:#006495; font-weight:700;';
-    const metricCells = FIELD_DEFS.map((f) => `<td>${fmtValue(f, row[f.key])}</td>`).join('');
-    const rowHtml = `<tr style="${rowStyle}">
-      <td colspan="3">${escapeHtml(row.date)}</td>
+    const cellStyle = isPeriod ? 'background:#006495; color:#fff; font-weight:700;' : 'background:#e6f0f6; color:#006495; font-weight:700;';
+    const metricCells = FIELD_DEFS.map((f) => rowTd(fmtValue(f, row[f.key]), cellStyle)).join('');
+    const reportBtn = `<button type="button" class="btn btn-ghost" style="padding:2px 10px; font-size:11px;" data-report-start="${row.rangeStart}" data-report-end="${row.rangeEnd}" data-report-weekly="${row.rowType === 'weekRecap' ? '1' : '0'}">Generate Report</button>`;
+    const rowHtml = `<tr>
+      ${rowTd(escapeHtml(row.date), cellStyle, ' colspan="3"')}
       ${metricCells}
-      <td><button type="button" class="btn btn-ghost" style="padding:2px 10px; font-size:11px;" data-report-start="${row.rangeStart}" data-report-end="${row.rangeEnd}" data-report-weekly="${row.rowType === 'weekRecap' ? '1' : '0'}">Generate Report</button></td>
+      ${rowTd(reportBtn, cellStyle)}
     </tr>`;
     return isPeriod ? rowHtml + blankSpacerRows : rowHtml;
   }).join('');
@@ -364,11 +374,12 @@ function renderTable() {
 
   let totalRow = '';
   if (!lastRowIsRedundant) {
-    const totalCells = FIELD_DEFS.map((f) => `<td>${fmtValue(f, laState.recap ? laState.recap[f.key] : null)}</td>`).join('');
-    totalRow = `<tr style="background:#006495; color:#fff; font-weight:700;">
-      <td colspan="3">Running Total (${escapeHtml(laState.rangeStart)} to ${escapeHtml(laState.rangeEnd)})</td>
+    const totalStyle = 'background:#006495; color:#fff; font-weight:700;';
+    const totalCells = FIELD_DEFS.map((f) => rowTd(fmtValue(f, laState.recap ? laState.recap[f.key] : null), totalStyle)).join('');
+    totalRow = `<tr>
+      ${rowTd(`Running Total (${escapeHtml(laState.rangeStart)} to ${escapeHtml(laState.rangeEnd)})`, totalStyle, ' colspan="3"')}
       ${totalCells}
-      <td></td>
+      ${rowTd('', totalStyle)}
     </tr>`;
   }
 
