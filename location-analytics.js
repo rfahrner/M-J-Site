@@ -4,22 +4,25 @@
    selected date range, rather than a separately-maintained recap
    table that could drift from the real data.
 
-   Main table: one row per DAY within the selected range, metrics
-   across the top as columns — matches the original workbook's own
-   Daily Recap layout rather than a collapsed single summary. Data is
-   fetched ONCE for the whole range, then bucketed by day client-side,
-   rather than a separate round trip per day.
+   Page starts on "Period" (current quarter) by default. Within any
+   range, days are grouped into weeks with a "Weekly Recap" summary row
+   after each week, and (when the range spans more than one quarter)
+   a "Period Recap" row after each quarter. Metrics run across the top
+   as columns, one row per day/week/period — matches the original
+   workbook's own Daily Recap layout.
 
-   "Period" = calendar quarter (Jan-Mar, Apr-Jun, Jul-Sep, Oct-Dec),
-   1st of the current quarter through today — the daily table
-   naturally becomes a fresh running sheet once a new quarter starts,
-   since the date range recalculates to the new quarter's start.
+   Week boundary is Sunday-Saturday (WEEK_START_DAY below) — flagged
+   assumption, since the one concrete example given (March 30 - April 3,
+   2026) is actually a Mon-Fri span. One-line change if that's meant
+   literally rather than as a partial illustration.
 
-   Send Recap still sends an AGGREGATE summary (not a dump of every
-   daily row) for whatever range is selected — for Daily mode specifically
-   that aggregate already equals that one day's numbers. Each day row in
-   the main table also has its own Send link, since seeing the days is
-   what makes picking the right one to send easy.
+   Boundary-straddling weeks: the on-screen Weekly Recap row for a week
+   that crosses a quarter boundary may reflect only the portion of that
+   week within the currently-loaded range (e.g., viewing "Period" alone
+   near a quarter's edge). Clicking "Generate Report" on that row always
+   re-fetches the true, complete 7-day week fresh, independent of what's
+   currently loaded — so the generated report itself is always accurate
+   for the full week, even in that edge case.
 
    Financial figures come from loads_accounting, which today is
    populated for Atlanta. Houston/Mondelez track their own revenue on
@@ -37,38 +40,47 @@ const LA_LOCATIONS = [
   { key: 'delaware', label: 'Delaware' },
 ];
 
-// category: 'default' fields are pre-checked in Send Recap (matches the
-// reference email exactly); 'extra' fields are available to add but
+const WEEK_START_DAY = 0; // 0 = Sunday. See header note.
+const NOTES_TABLE = 'location_analytics_daily_notes';
+
+function fmtNum(v, decimals) {
+  return Number(v).toLocaleString('en-US', { minimumFractionDigits: decimals || 0, maximumFractionDigits: decimals || 0 });
+}
+function fmtMoney(v) { return `$${fmtNum(v, 2)}`; }
+
+// category: 'default' fields are pre-checked in Generate Report (matches
+// the reference email exactly); 'extra' fields are available to add but
 // unchecked by default.
 const FIELD_DEFS = [
-  { key: 'drivers', label: 'Drivers', category: 'default' },
-  { key: 'mileage', label: 'Mileage', category: 'default', fmt: (v) => v.toFixed(1) },
-  { key: 'routes', label: 'Routes', category: 'default' },
-  { key: 'stops', label: 'Stops', category: 'default' },
-  { key: 'turn', label: 'Turn', category: 'default', fmt: (v) => v.toFixed(2) },
-  { key: 'salvage', label: 'Salvage', category: 'default' },
-  { key: 'backhauls', label: 'Backhauls', category: 'default' },
-  { key: 'tonu', label: "TONU's", category: 'extra' },
-  { key: 'revenue', label: 'Revenue', category: 'extra', fmt: (v) => `$${v.toFixed(2)}` },
-  { key: 'cost', label: 'Cost', category: 'extra', fmt: (v) => `$${v.toFixed(2)}` },
-  { key: 'margin', label: 'Margin', category: 'extra', fmt: (v) => `$${v.toFixed(2)}` },
-  { key: 'gmPct', label: 'GM%', category: 'extra', fmt: (v) => `${v.toFixed(1)}%` },
-  { key: 'revPerMile', label: 'Rev/mi', category: 'extra', fmt: (v) => `$${v.toFixed(2)}` },
-  { key: 'revPerRoute', label: 'Rev/route', category: 'extra', fmt: (v) => `$${v.toFixed(2)}` },
-  { key: 'revPerDriver', label: 'Rev/Driver', category: 'extra', fmt: (v) => `$${v.toFixed(2)}` },
-  { key: 'avrLoh', label: 'AVR LOH', category: 'extra', fmt: (v) => v.toFixed(1) },
-  { key: 'marginPerDriver', label: 'Margin/DR', category: 'extra', fmt: (v) => `$${v.toFixed(2)}` },
-  { key: 'revPerStop', label: 'Rev/stop', category: 'extra', fmt: (v) => `$${v.toFixed(2)}` },
-  { key: 'marginPerRoute', label: 'Margin/Route', category: 'extra', fmt: (v) => `$${v.toFixed(2)}` },
+  { key: 'drivers', label: 'Drivers', category: 'default', fmt: (v) => fmtNum(v) },
+  { key: 'mileage', label: 'Mileage', category: 'default', fmt: (v) => fmtNum(v, 1) },
+  { key: 'routes', label: 'Routes', category: 'default', fmt: (v) => fmtNum(v) },
+  { key: 'stops', label: 'Stops', category: 'default', fmt: (v) => fmtNum(v) },
+  { key: 'turn', label: 'Turn', category: 'default', fmt: (v) => fmtNum(v, 2) },
+  { key: 'salvage', label: 'Salvage', category: 'default', fmt: (v) => fmtNum(v) },
+  { key: 'backhauls', label: 'Backhauls', category: 'default', fmt: (v) => fmtNum(v) },
+  { key: 'tonu', label: "TONU's", category: 'extra', fmt: (v) => fmtNum(v) },
+  { key: 'revenue', label: 'Revenue', category: 'extra', fmt: fmtMoney },
+  { key: 'cost', label: 'Cost', category: 'extra', fmt: fmtMoney },
+  { key: 'margin', label: 'Margin', category: 'extra', fmt: fmtMoney },
+  { key: 'gmPct', label: 'GM%', category: 'extra', fmt: (v) => `${fmtNum(v, 1)}%` },
+  { key: 'revPerMile', label: 'Rev/mi', category: 'extra', fmt: fmtMoney },
+  { key: 'revPerRoute', label: 'Rev/route', category: 'extra', fmt: fmtMoney },
+  { key: 'revPerDriver', label: 'Rev/Driver', category: 'extra', fmt: fmtMoney },
+  { key: 'avrLoh', label: 'AVR LOH', category: 'extra', fmt: (v) => fmtNum(v, 1) },
+  { key: 'marginPerDriver', label: 'Margin/DR', category: 'extra', fmt: fmtMoney },
+  { key: 'revPerStop', label: 'Rev/stop', category: 'extra', fmt: fmtMoney },
+  { key: 'marginPerRoute', label: 'Margin/Route', category: 'extra', fmt: fmtMoney },
 ];
 
 const laState = {
   activeTab: 'atlanta',
-  rangeMode: 'daily',
+  rangeMode: 'period',
   rangeStart: '',
   rangeEnd: '',
-  dailyRows: [],
+  displayRows: [], // mixed: {rowType:'day'|'weekRecap'|'periodRecap', ...}
   recap: null,
+  notesByDate: {},
   includedFields: new Set(FIELD_DEFS.filter((f) => f.category === 'default').map((f) => f.key)),
 };
 
@@ -94,26 +106,55 @@ async function fetchAllRows(table, columns, applyFilters) {
   return all;
 }
 
-function computeRangeDates(mode) {
+/* ---------------- Week / quarter helpers ---------------- */
+
+function quarterIndex(d) { return Math.floor(d.getMonth() / 3); }
+function quarterRange(year, qIdx) {
+  const start = new Date(year, qIdx * 3, 1);
+  const end = new Date(year, qIdx * 3 + 3, 0); // last day of the quarter
+  return { start, end };
+}
+function quarterLabel(year, qIdx) { return `Q${qIdx + 1} ${year}`; }
+function shiftQuarter(year, qIdx, delta) {
+  let y = year, q = qIdx + delta;
+  while (q < 0) { q += 4; y -= 1; }
+  while (q > 3) { q -= 4; y += 1; }
+  return { year: y, qIdx: q };
+}
+
+async function fetchEarliestDate(location) {
+  const { data, error } = await supabaseClient
+    .from(SHIFTS_TABLE).select('shift_date').eq('location', location)
+    .order('shift_date', { ascending: true }).limit(1);
+  if (error || !data || !data.length) return dateKey(addDays(todayDate(), -365));
+  return data[0].shift_date;
+}
+
+async function computeRangeDates(mode) {
   const today = todayDate();
-  if (mode === 'daily') return { start: dateKey(today), end: dateKey(today) };
-  if (mode === 'weekly') return { start: dateKey(addDays(today, -6)), end: dateKey(today) };
   if (mode === 'period') {
-    // A period is a calendar quarter: Jan-Mar, Apr-Jun, Jul-Sep, Oct-Dec.
-    const quarterStartMonth = Math.floor(today.getMonth() / 3) * 3;
-    const firstOfQuarter = new Date(today.getFullYear(), quarterStartMonth, 1);
-    return { start: dateKey(firstOfQuarter), end: dateKey(today) };
+    const { start } = quarterRange(today.getFullYear(), quarterIndex(today));
+    return { start: dateKey(start), end: dateKey(today) };
+  }
+  if (mode === 'past5quarters') {
+    const { year, qIdx } = shiftQuarter(today.getFullYear(), quarterIndex(today), -4);
+    const { start } = quarterRange(year, qIdx);
+    return { start: dateKey(start), end: dateKey(today) };
+  }
+  if (mode === 'alltime') {
+    const earliest = await fetchEarliestDate(laState.activeTab);
+    return { start: earliest, end: dateKey(today) };
   }
   return { start: laState.rangeStart || dateKey(today), end: laState.rangeEnd || dateKey(today) };
 }
+
+/* ---------------- Fetch + compute ---------------- */
 
 async function fetchRangeData(startDate, endDate, location) {
   const shifts = await fetchAllRows(
     SHIFTS_TABLE, 'id, shift_date, driver_id, tonu',
     (q) => q.eq('location', location).gte('shift_date', startDate).lte('shift_date', endDate)
   );
-  const shiftById = {};
-  shifts.forEach((s) => { shiftById[s.id] = s; });
   const shiftIds = shifts.map((s) => s.id);
 
   let trips = [];
@@ -128,12 +169,12 @@ async function fetchRangeData(startDate, endDate, location) {
     (q) => q.eq('location', location).gte('shift_date', startDate).lte('shift_date', endDate)
   );
 
-  return { shifts, shiftById, trips, accountingRows };
+  return { shifts, trips, accountingRows };
 }
 
-// Computes every metric from whatever subset of rows it's given — the
-// same function powers both a single day's row and the overall
-// aggregate used for Send Recap, just called with different scopes.
+// Computes every metric from whatever subset of rows it's given — reused
+// for a single day, a week, a quarter, or the overall aggregate, just
+// called with different scopes.
 function computeMetricsFromRows(shiftsInScope, tripsInScope, accountingInScope) {
   const realTrips = tripsInScope.filter((t) => (t.route_id && String(t.route_id).trim()) || (t.trip_id && String(t.trip_id).trim()));
   const distinctDrivers = new Set(shiftsInScope.filter((s) => s.driver_id != null).map((s) => s.driver_id)).size;
@@ -148,17 +189,9 @@ function computeMetricsFromRows(shiftsInScope, tripsInScope, accountingInScope) 
   const margin = revenue - cost;
 
   return {
-    drivers: distinctDrivers,
-    mileage,
-    routes,
-    stops,
+    drivers: distinctDrivers, mileage, routes, stops,
     turn: distinctDrivers ? routes / distinctDrivers : 0,
-    salvage,
-    backhauls,
-    tonu,
-    revenue,
-    cost,
-    margin,
+    salvage, backhauls, tonu, revenue, cost, margin,
     gmPct: revenue ? (margin / revenue) * 100 : 0,
     revPerMile: mileage ? revenue / mileage : 0,
     revPerRoute: routes ? revenue / routes : 0,
@@ -170,34 +203,68 @@ function computeMetricsFromRows(shiftsInScope, tripsInScope, accountingInScope) 
   };
 }
 
-// One row per calendar day in [startDate, endDate], including days with
-// zero activity — a true running sheet, not just the days that happened
-// to have data.
-function computeDailyBreakdown(rangeData, startDate, endDate) {
-  const { shifts, trips, accountingRows } = rangeData;
-  const shiftIdsByDay = {};
-  shifts.forEach((s) => {
-    if (!shiftIdsByDay[s.shift_date]) shiftIdsByDay[s.shift_date] = new Set();
-    shiftIdsByDay[s.shift_date].add(s.id);
-  });
-
-  const days = [];
-  let cursor = new Date(startDate + 'T00:00:00');
-  const endCursor = new Date(endDate + 'T00:00:00');
-  while (cursor <= endCursor) {
-    const dayKey = dateKey(cursor);
-    const idsForDay = shiftIdsByDay[dayKey] || new Set();
-    const shiftsForDay = shifts.filter((s) => s.shift_date === dayKey);
-    const tripsForDay = trips.filter((t) => idsForDay.has(t.shift_id));
-    const accountingForDay = accountingRows.filter((r) => r.shift_date === dayKey);
-    days.push({ date: dayKey, ...computeMetricsFromRows(shiftsForDay, tripsForDay, accountingForDay) });
-    cursor = addDays(cursor, 1);
-  }
-  return days;
+function computeMetricsForDateRange(rangeData, startKey, endKey) {
+  const shiftsInScope = rangeData.shifts.filter((s) => s.shift_date >= startKey && s.shift_date <= endKey);
+  const shiftIdsInScope = new Set(shiftsInScope.map((s) => s.id));
+  const tripsInScope = rangeData.trips.filter((t) => shiftIdsInScope.has(t.shift_id));
+  const accountingInScope = rangeData.accountingRows.filter((r) => r.shift_date >= startKey && r.shift_date <= endKey);
+  return computeMetricsFromRows(shiftsInScope, tripsInScope, accountingInScope);
 }
 
 function computeAggregate(rangeData) {
   return computeMetricsFromRows(rangeData.shifts, rangeData.trips, rangeData.accountingRows);
+}
+
+// Builds the mixed day/weekRecap/periodRecap row sequence for the
+// currently-loaded range. Period Recap rows only appear when the range
+// actually spans more than one quarter (Past 5 Quarters / All Time /
+// a wide Custom range) — a single-quarter Period view ends with just
+// the final Weekly Recap, since there's only one period to summarize.
+function buildDisplayRows(rangeData, startDate, endDate) {
+  const rows = [];
+  let weekDays = [];
+  let periodDays = [];
+  let currentQLabel = null;
+  let startQLabel = null;
+  let sawSecondPeriod = false;
+
+  const flushWeek = () => {
+    if (!weekDays.length) return;
+    const wStart = weekDays[0], wEnd = weekDays[weekDays.length - 1];
+    rows.push({ rowType: 'weekRecap', date: `Weekly Recap (${wStart} to ${wEnd})`, rangeStart: wStart, rangeEnd: wEnd, ...computeMetricsForDateRange(rangeData, wStart, wEnd) });
+    weekDays = [];
+  };
+  const flushPeriod = () => {
+    if (!periodDays.length) return;
+    const pStart = periodDays[0], pEnd = periodDays[periodDays.length - 1];
+    rows.push({ rowType: 'periodRecap', date: `${currentQLabel} Recap`, rangeStart: pStart, rangeEnd: pEnd, ...computeMetricsForDateRange(rangeData, pStart, pEnd) });
+    periodDays = [];
+  };
+
+  let cursor = new Date(startDate + 'T00:00:00');
+  const endCursor = new Date(endDate + 'T00:00:00');
+  while (cursor <= endCursor) {
+    const dayKey = dateKey(cursor);
+    const qLabel = quarterLabel(cursor.getFullYear(), quarterIndex(cursor));
+    if (startQLabel === null) startQLabel = qLabel;
+    if (qLabel !== startQLabel) sawSecondPeriod = true;
+
+    if (currentQLabel !== null && qLabel !== currentQLabel) {
+      flushWeek();
+      flushPeriod();
+    }
+    currentQLabel = qLabel;
+
+    if (weekDays.length && cursor.getDay() === WEEK_START_DAY) flushWeek();
+
+    rows.push({ rowType: 'day', date: dayKey, ...computeMetricsForDateRange(rangeData, dayKey, dayKey) });
+    weekDays.push(dayKey);
+    periodDays.push(dayKey);
+    cursor = addDays(cursor, 1);
+  }
+  flushWeek();
+  if (sawSecondPeriod) flushPeriod();
+  return rows;
 }
 
 function fmtValue(def, value) {
@@ -205,21 +272,69 @@ function fmtValue(def, value) {
   return def.fmt ? def.fmt(value) : String(value);
 }
 
+/* ---------------- Per-day notes ---------------- */
+
+async function loadNotesForRange(startDate, endDate, location) {
+  const { data, error } = await supabaseClient
+    .from(NOTES_TABLE).select('note_date, note')
+    .eq('location', location).gte('note_date', startDate).lte('note_date', endDate);
+  if (error) { console.error('Failed to load daily notes:', error); return {}; }
+  const map = {};
+  (data || []).forEach((r) => { map[r.note_date] = r.note || ''; });
+  return map;
+}
+
+async function saveNote(dateKeyVal, text) {
+  try {
+    const { error } = await supabaseClient.from(NOTES_TABLE)
+      .upsert({ location: laState.activeTab, note_date: dateKeyVal, note: text }, { onConflict: 'location,note_date' });
+    if (error) throw error;
+    laState.notesByDate[dateKeyVal] = text;
+  } catch (e) {
+    console.error('Failed to save note:', e);
+    setDriverSyncStatus(`Couldn't save that note (${e.message || e}).`, 'error');
+  }
+}
+
+/* ---------------- Rendering ---------------- */
+
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
 function renderTable() {
   const table = $('#la-table');
   if (!table) return;
-  const headerCells = ['Date', ...FIELD_DEFS.map((f) => f.label), ''].map((h) => `<th>${escapeHtml(h)}</th>`).join('');
-  const bodyRows = (laState.dailyRows || []).map((day) => {
-    const metricCells = FIELD_DEFS.map((f) => `<td>${fmtValue(f, day[f.key])}</td>`).join('');
-    return `<tr>
-      <td>${escapeHtml(day.date)}</td>
+  const headerCells = ['Date', 'Day', 'Notes', ...FIELD_DEFS.map((f) => f.label), ''].map((h) => `<th>${escapeHtml(h)}</th>`).join('');
+
+  let dayIndex = 0; // for zebra striping across DAY rows only
+  const bodyRows = laState.displayRows.map((row) => {
+    if (row.rowType === 'day') {
+      const zebra = dayIndex % 2 === 1;
+      dayIndex += 1;
+      const dow = DAY_NAMES[new Date(row.date + 'T00:00:00').getDay()];
+      const note = laState.notesByDate[row.date] || '';
+      const metricCells = FIELD_DEFS.map((f) => `<td>${fmtValue(f, row[f.key])}</td>`).join('');
+      return `<tr${zebra ? ' style="background:#dbeafe;"' : ''}>
+        <td>${escapeHtml(row.date)}</td>
+        <td>${escapeHtml(dow)}</td>
+        <td><input type="text" class="cell-input la-note-input" data-note-date="${row.date}" value="${escapeHtml(note)}" placeholder="Note…" style="width:100%;"></td>
+        ${metricCells}
+        <td></td>
+      </tr>`;
+    }
+    // weekRecap / periodRecap summary rows — visually distinct, with
+    // their own Generate Report action.
+    const isPeriod = row.rowType === 'periodRecap';
+    const metricCells = FIELD_DEFS.map((f) => `<td>${fmtValue(f, row[f.key])}</td>`).join('');
+    return `<tr style="background:${isPeriod ? '#1e3a5f' : '#2c5282'}; color:#fff; font-weight:600;">
+      <td colspan="3">${escapeHtml(row.date)}</td>
       ${metricCells}
-      <td><button type="button" class="cell-link-btn" style="width:auto; height:auto; padding:2px 8px; font-size:11px;" data-send-day="${day.date}">Send</button></td>
+      <td><button type="button" class="btn btn-ghost" style="padding:2px 10px; font-size:11px;" data-report-start="${row.rangeStart}" data-report-end="${row.rangeEnd}" data-report-weekly="${row.rowType === 'weekRecap' ? '1' : '0'}">Generate Report</button></td>
     </tr>`;
   }).join('');
+
   table.innerHTML = `<thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody>`;
   const emptyState = $('#la-empty-state');
-  const hasAnyData = (laState.dailyRows || []).some((d) => d.routes > 0 || d.drivers > 0);
+  const hasAnyData = laState.displayRows.some((r) => r.rowType === 'day' && (r.routes > 0 || r.drivers > 0));
   if (emptyState) emptyState.classList.toggle('hidden', hasAnyData);
 }
 
@@ -242,18 +357,22 @@ function renderTabs() {
 
 async function reload() {
   setDriverSyncStatus('Loading location analytics…', 'loading');
-  const { start, end } = computeRangeDates(laState.rangeMode);
+  const { start, end } = await computeRangeDates(laState.rangeMode);
   laState.rangeStart = start;
   laState.rangeEnd = end;
-  const rangeData = await fetchRangeData(start, end, laState.activeTab);
-  laState.dailyRows = computeDailyBreakdown(rangeData, start, end);
+  const [rangeData, notes] = await Promise.all([
+    fetchRangeData(start, end, laState.activeTab),
+    loadNotesForRange(start, end, laState.activeTab),
+  ]);
+  laState.notesByDate = notes;
+  laState.displayRows = buildDisplayRows(rangeData, start, end);
   laState.recap = computeAggregate(rangeData);
   setDriverSyncStatus('');
   renderRangeDisplay();
   renderTable();
 }
 
-/* ---------------- Send Recap modal ---------------- */
+/* ---------------- Generate Report modal ---------------- */
 
 function renderFieldCheckboxes() {
   const wrap = $('#sr-field-checkboxes');
@@ -266,7 +385,7 @@ function renderFieldCheckboxes() {
 function buildRecapText() {
   const locLabel = (LA_LOCATIONS.find((l) => l.key === laState.activeTab) || {}).label || laState.activeTab;
   const rangeLabel = laState.rangeStart === laState.rangeEnd ? laState.rangeStart : `${laState.rangeStart} to ${laState.rangeEnd}`;
-  const lines = [`${locLabel} Recap — ${rangeLabel}`, ''];
+  const lines = [`${locLabel} Report — ${rangeLabel}`, ''];
   FIELD_DEFS.filter((d) => laState.includedFields.has(d.key)).forEach((def) => {
     lines.push(`${def.label}: ${fmtValue(def, laState.recap ? laState.recap[def.key] : null)}`);
   });
@@ -279,43 +398,48 @@ function renderRecapPreview() {
   el.innerHTML = `<pre style="white-space:pre-wrap; margin:0; font-family:inherit;">${escapeHtml(buildRecapText())}</pre>`;
 }
 
-async function openSendRecapForDay(dayKey) {
+// Generic — works for any date range (a week or a period), not just a
+// single day. Always re-fetches fresh for the EXACT given range, so a
+// week that straddles a quarter boundary still generates a complete,
+// accurate report regardless of what's currently loaded on screen.
+async function openReportForRange(startKey, endKey, isWeekly) {
   laState.rangeMode = 'custom';
-  laState.rangeStart = dayKey;
-  laState.rangeEnd = dayKey;
-  const rangeData = await fetchRangeData(dayKey, dayKey, laState.activeTab);
+  laState.rangeStart = startKey;
+  laState.rangeEnd = endKey;
+  const rangeData = await fetchRangeData(startKey, endKey, laState.activeTab);
   laState.recap = computeAggregate(rangeData);
-  await openSendRecapModal();
+  await openGenerateReportModal(isWeekly ? 'Weekly Report' : 'Period Report');
   const customRadio = document.querySelector('input[name="sr-timeframe"][value="custom"]');
   if (customRadio) customRadio.checked = true;
   const customField = $('#sr-custom-range-field');
   if (customField) customField.classList.remove('hidden');
   const srStart = $('#sr-custom-start');
   const srEnd = $('#sr-custom-end');
-  if (srStart) srStart.value = dayKey;
-  if (srEnd) srEnd.value = dayKey;
+  if (srStart) srStart.value = startKey;
+  if (srEnd) srEnd.value = endKey;
 }
 
-async function openSendRecapModal() {
+async function openGenerateReportModal(labelOverride) {
   const overlay = $('#modal-send-recap');
   if (!overlay) return;
   overlay.classList.remove('hidden');
   const subjectInput = $('#sr-subject');
   const locLabel = (LA_LOCATIONS.find((l) => l.key === laState.activeTab) || {}).label || laState.activeTab;
-  if (subjectInput) subjectInput.value = `${locLabel} Recap — ${laState.rangeStart === laState.rangeEnd ? laState.rangeStart : `${laState.rangeStart} to ${laState.rangeEnd}`}`;
+  const kind = labelOverride || 'Report';
+  if (subjectInput) subjectInput.value = `${locLabel} ${kind} — ${laState.rangeStart === laState.rangeEnd ? laState.rangeStart : `${laState.rangeStart} to ${laState.rangeEnd}`}`;
   renderFieldCheckboxes();
   renderRecapPreview();
 }
 
-function closeSendRecapModal() {
+function closeGenerateReportModal() {
   const overlay = $('#modal-send-recap');
   if (overlay) overlay.classList.add('hidden');
 }
 
-async function applySendRecapTimeframe(mode) {
+async function applyReportTimeframe(mode) {
   laState.rangeMode = mode;
   if (mode !== 'custom') {
-    const { start, end } = computeRangeDates(mode);
+    const { start, end } = await computeRangeDates(mode);
     laState.rangeStart = start;
     laState.rangeEnd = end;
   } else {
@@ -329,7 +453,7 @@ async function applySendRecapTimeframe(mode) {
   renderRecapPreview();
 }
 
-function openRecapInEmail() {
+function openReportInEmail() {
   const to = ($('#sr-to').value || '').trim();
   const subject = ($('#sr-subject').value || '').trim();
   const body = buildRecapText();
@@ -364,10 +488,16 @@ export async function initLocationAnalyticsPage() {
   });
 
   const table = $('#la-table');
-  if (table) table.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-send-day]');
-    if (btn) openSendRecapForDay(btn.dataset.sendDay);
-  });
+  if (table) {
+    table.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-report-start]');
+      if (btn) openReportForRange(btn.dataset.reportStart, btn.dataset.reportEnd, btn.dataset.reportWeekly === '1');
+    });
+    table.addEventListener('blur', (e) => {
+      const input = e.target.closest('.la-note-input');
+      if (input) saveNote(input.dataset.noteDate, input.value.trim());
+    }, true);
+  }
 
   document.querySelectorAll('.la-range-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -382,20 +512,20 @@ export async function initLocationAnalyticsPage() {
     reload();
   });
 
-  on('btn-send-recap', 'click', openSendRecapModal);
-  on('sr-close', 'click', closeSendRecapModal);
-  on('sr-cancel', 'click', closeSendRecapModal);
-  on('sr-open-email', 'click', openRecapInEmail);
+  on('btn-send-recap', 'click', () => openGenerateReportModal());
+  on('sr-close', 'click', closeGenerateReportModal);
+  on('sr-cancel', 'click', closeGenerateReportModal);
+  on('sr-open-email', 'click', openReportInEmail);
 
   document.querySelectorAll('input[name="sr-timeframe"]').forEach((radio) => {
     radio.addEventListener('change', (e) => {
       const customField = $('#sr-custom-range-field');
       if (customField) customField.classList.toggle('hidden', e.target.value !== 'custom');
-      if (e.target.value !== 'custom') applySendRecapTimeframe(e.target.value);
+      if (e.target.value !== 'custom') applyReportTimeframe(e.target.value);
     });
   });
-  on('sr-custom-start', 'change', () => applySendRecapTimeframe('custom'));
-  on('sr-custom-end', 'change', () => applySendRecapTimeframe('custom'));
+  on('sr-custom-start', 'change', () => applyReportTimeframe('custom'));
+  on('sr-custom-end', 'change', () => applyReportTimeframe('custom'));
 
   const fieldWrap = $('#sr-field-checkboxes');
   if (fieldWrap) fieldWrap.addEventListener('change', (e) => {

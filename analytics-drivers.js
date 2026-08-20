@@ -142,14 +142,15 @@ async function loadHolidayDates() {
 // as every other unbounded-query fix this session.
 async function loadAllTimeTotals() {
   const totals = {};
-  const bump = (driverId, shifts, routes) => {
+  const bump = (driverId, shifts, routes, cancellations) => {
     if (driverId == null) return;
-    if (!totals[driverId]) totals[driverId] = { shiftsWorked: 0, routesPulled: 0 };
+    if (!totals[driverId]) totals[driverId] = { shiftsWorked: 0, routesPulled: 0, cancellations: 0 };
     totals[driverId].shiftsWorked += shifts;
     totals[driverId].routesPulled += routes;
+    totals[driverId].cancellations += (cancellations || 0);
   };
 
-  const allShifts = await fetchAllRows(SHIFTS_TABLE, 'id, driver_id', (q) => q.not('driver_id', 'is', null));
+  const allShifts = await fetchAllRows(SHIFTS_TABLE, 'id, driver_id, called_off', (q) => q.not('driver_id', 'is', null));
   const shiftIds = allShifts.map((s) => s.id);
   const routeCountByShiftId = {};
   for (const idChunk of chunk(shiftIds, 150)) {
@@ -161,13 +162,15 @@ async function loadAllTimeTotals() {
       routeCountByShiftId[t.shift_id] = (routeCountByShiftId[t.shift_id] || 0) + 1;
     });
   }
-  allShifts.forEach((s) => bump(s.driver_id, 1, routeCountByShiftId[s.id] || 0));
+  allShifts.forEach((s) => bump(s.driver_id, 1, routeCountByShiftId[s.id] || 0, s.called_off ? 1 : 0));
 
+  // Houston/Mondelez don't have a called_off column at all yet, so they
+  // always contribute 0 cancellations — same known gap as the windowed view.
   const houstonAll = await fetchAllRows(HOUSTON_TABLE, 'driver_id, aljex_number', (q) => q.not('driver_id', 'is', null));
-  houstonAll.forEach((r) => { const real = r.aljex_number && String(r.aljex_number).trim(); bump(r.driver_id, 1, real ? 1 : 0); });
+  houstonAll.forEach((r) => { const real = r.aljex_number && String(r.aljex_number).trim(); bump(r.driver_id, 1, real ? 1 : 0, 0); });
 
   const mdzAll = await fetchAllRows(MONDELEZ_TABLE, 'driver_id, aljex_number', (q) => q.not('driver_id', 'is', null));
-  mdzAll.forEach((r) => { const real = r.aljex_number && String(r.aljex_number).trim(); bump(r.driver_id, 1, real ? 1 : 0); });
+  mdzAll.forEach((r) => { const real = r.aljex_number && String(r.aljex_number).trim(); bump(r.driver_id, 1, real ? 1 : 0, 0); });
 
   return totals;
 }
@@ -253,7 +256,7 @@ function renderTable() {
   const rows = daState.drivers.map((d) => ({
     driver: d,
     stats: stats[d.id] || { shiftCount: 0, routeCount: 0, totalMiles: 0, milesSamples: 0, tonuCount: 0, cancellationCount: 0, cancellationReasons: [], holidayDays: new Set(), atlantaShiftCount: 0, atlantaRouteCount: 0 },
-    allTime: daState.allTimeByDriverId[d.id] || { shiftsWorked: 0, routesPulled: 0 },
+    allTime: daState.allTimeByDriverId[d.id] || { shiftsWorked: 0, routesPulled: 0, cancellations: 0 },
   })).filter((r) => r.stats.shiftCount > 0);
   rows.sort((a, b) => b.stats.shiftCount - a.stats.shiftCount);
 
@@ -261,7 +264,8 @@ function renderTable() {
     <th></th>
     <th>Driver</th>
     <th>Shifts (window)</th>
-    <th>Cancellations</th>
+    <th>Cancellations (window)</th>
+    <th>Total Cancellations</th>
     <th>Routes (window)</th>
     <th>Total Shifts Worked</th>
     <th>Total Routes Pulled</th>
@@ -282,6 +286,7 @@ function renderTable() {
       <td>${escapeHtml(driver.name)}</td>
       <td>${s.shiftCount}</td>
       <td title="${escapeHtml(cancellationTitle)}">${noCancellationTracking ? '—' : (s.cancellationCount || '—')}</td>
+      <td>${allTime.cancellations || '—'}</td>
       <td>${s.routeCount}</td>
       <td>${allTime.shiftsWorked || '—'}</td>
       <td>${allTime.routesPulled || '—'}</td>

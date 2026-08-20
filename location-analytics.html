@@ -22,7 +22,7 @@
         <div class="subtext">Admin only. Every number below is computed live from real shift/trip/accounting data for the selected range.</div>
       </div>
       <div class="toolbar-actions">
-        <button class="btn" id="btn-send-recap">Send Recap</button>
+        <button class="btn" id="btn-send-recap">Generate Report</button>
       </div>
     </div>
 
@@ -32,9 +32,9 @@
 
     <div class="toolbar" style="padding: 10px 20px; border-bottom:none;">
       <div class="toolbar-left" style="gap:8px;">
-        <button type="button" class="btn btn-ghost la-range-btn" data-la-range="daily">Daily</button>
-        <button type="button" class="btn btn-ghost la-range-btn" data-la-range="weekly">Weekly</button>
         <button type="button" class="btn btn-ghost la-range-btn" data-la-range="period">Period (this quarter)</button>
+        <button type="button" class="btn btn-ghost la-range-btn" data-la-range="past5quarters">Past 5 Quarters</button>
+        <button type="button" class="btn btn-ghost la-range-btn" data-la-range="alltime">All Time</button>
         <button type="button" class="btn btn-ghost la-range-btn" data-la-range="custom">Custom…</button>
         <span id="la-custom-range-inputs" class="hidden" style="display:inline-flex; gap:6px; align-items:center;">
           <input type="date" class="cell-input" id="la-custom-start" style="width:auto;">
@@ -60,16 +60,16 @@
   <div class="overlay hidden" id="modal-send-recap">
     <div class="modal modal-large">
       <div class="modal-header">
-        <h3>Send Recap</h3>
+        <h3>Generate Report</h3>
         <button class="modal-close" id="sr-close">&times;</button>
       </div>
       <div class="modal-body">
         <div class="field">
           <label>Timeframe</label>
           <div class="radio-row">
-            <label><input type="radio" name="sr-timeframe" value="daily" checked> Daily</label>
-            <label><input type="radio" name="sr-timeframe" value="weekly"> Weekly</label>
-            <label><input type="radio" name="sr-timeframe" value="period"> Period (this quarter)</label>
+            <label><input type="radio" name="sr-timeframe" value="period" checked> Period (this quarter)</label>
+            <label><input type="radio" name="sr-timeframe" value="past5quarters"> Past 5 Quarters</label>
+            <label><input type="radio" name="sr-timeframe" value="alltime"> All Time</label>
             <label><input type="radio" name="sr-timeframe" value="custom"> Custom timeframe</label>
           </div>
         </div>
