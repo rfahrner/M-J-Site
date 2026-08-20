@@ -2794,8 +2794,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     groupTextState = null;
     $("#tg-group-tabs-wrap").classList.add("hidden"); // no group to pick — the checkboxes already picked them
     $("#tg-message").value = "";
-    const driverModeRadio = document.querySelector('input[name="tg-phone-mode"][value="driver"]');
-    if (driverModeRadio) driverModeRadio.checked = true;
+    const dispatchModeRadio = document.querySelector('input[name="tg-phone-mode"][value="dispatch"]');
+    if (dispatchModeRadio) dispatchModeRadio.checked = true;
     $("#tg-setup-step").classList.remove("hidden");
     $("#tg-progress-step").classList.add("hidden");
     $("#tg-error").classList.add("hidden");
@@ -3251,8 +3251,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     }
     const msgEl = $("#tg-message");
     if (msgEl) msgEl.value = "";
-    const driverModeRadio = document.querySelector('input[name="tg-phone-mode"][value="driver"]');
-    if (driverModeRadio) driverModeRadio.checked = true;
+    const dispatchModeRadio = document.querySelector('input[name="tg-phone-mode"][value="dispatch"]');
+    if (dispatchModeRadio) dispatchModeRadio.checked = true;
     $("#tg-setup-step").classList.remove("hidden");
     $("#tg-progress-step").classList.add("hidden");
     $("#tg-error").classList.add("hidden");
