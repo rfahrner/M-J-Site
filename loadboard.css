@@ -331,6 +331,13 @@ table.board thead th {
   white-space: nowrap;
   z-index: 5;
 }
+/* Location Analytics specifically — column headers at least as large as
+   the table's own body text (13px). Scoped to #la-table only; the main
+   board pages keep the smaller 9.5px header size above, which is
+   likely deliberate given how many more columns those tables carry. */
+#la-table thead th {
+  font-size: 13px;
+}
 table.board thead th.col-draggable { cursor: grab; }
 table.board thead th.col-draggable:active { cursor: grabbing; }
 table.board thead th.col-drop-target { box-shadow: inset 3px 0 0 var(--focus); }
