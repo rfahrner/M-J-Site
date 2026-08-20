@@ -42,6 +42,16 @@ html, body {
   font-family: var(--font-ui);
   font-size: 13px;
 }
+/* Belt-and-suspenders on top of #board-view's own overflow:hidden — this
+   guarantees the body itself can never scroll on pages using the
+   #board-view pattern (every board page, Location/Driver Analytics),
+   even if some minor height discrepancy would otherwise let it. Scoped
+   with :has() so driverlist.html, which has no internal scroll
+   container of its own and genuinely needs the whole page to scroll,
+   is completely unaffected. */
+body:has(#board-view) {
+  overflow: hidden;
+}
 button {
   font-family: inherit;
   cursor: pointer;
