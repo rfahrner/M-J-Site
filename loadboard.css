@@ -295,6 +295,7 @@ button {
   flex-direction: column;
   margin-top: 52px; /* topbar is now position:fixed and out of flow — this replaces the space it used to occupy */
   max-height: calc(100vh - 52px); /* 52px = .topbar height — caps a large board so it still scrolls internally instead of stretching the page, but doesn't force this height when there's little content */
+  overflow: hidden; /* without this, content taller than max-height (e.g. a page with a tall toolbar section above the table) makes the page itself scroll too, on top of .grid-scroll's own internal scrollbar — two scrollbars instead of one */
 }
 .grid-scroll {
   flex: 1;
