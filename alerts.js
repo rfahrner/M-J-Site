@@ -1,5 +1,5 @@
 /* ---------------- board alerts: bottom-right notification panel ---------------- */
-import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, parseHHMM, AVG_MPH, minsToClock, escapeHtml, $, openSendTextModal, currentFile, NAV_ORDER, PAGE_MAP, isAccountingUser, isAdminUser, signOut, scrollToAndOutlineShiftRow} from './loadboard.js';
+import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, parseHHMM, AVG_MPH, minsToClock, escapeHtml, $, openSendTextModal, currentFile, isAccountingUser, isAdminUser, signOut, scrollToAndOutlineShiftRow} from './loadboard.js';
   const ALL_ALERT_LOCATIONS = ["atlanta", "buildingc", "delaware"];
   export const IDLE_THRESHOLD_MIN = 45; // Stage 4: 45 min after shift start, no dispatch yet -- repeats every 45 min after that
   export const PRE_SHIFT_TEXT_LEAD_MIN = 60; // Stage 1: pre-shift ETA text needed 60 min before shift start
@@ -437,17 +437,125 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
       }
     });
   }
+  // Nav structure — top-level items in order. Plain data, easy to
+  // hand-edit: reorder items, add/remove children, flip comingSoon on
+  // or off. The rendering logic below doesn't need to change for any
+  // of that.
+  //   - No "children" + has "href": simple link.
+  //   - "children": hover dropdown. Clicking the parent label itself
+  //     (not a dropdown item) goes to the FIRST child's href.
+  //   - "comingSoon: true": shown but not clickable.
+  //   - "visible": optional function: () => boolean. Omit to always show.
+  const NAV_STRUCTURE = [
+    {
+      label: "Kroger",
+      children: [
+        { label: "Atlanta", href: "index.html" },
+        { label: "Delaware", href: "dalaware.html" },
+        { label: "Building C", href: "buildingc.html" },
+        { label: "Houston", href: "houston.html" },
+      ],
+    },
+    {
+      label: "Mondelez",
+      children: [
+        { label: "West Chester", href: "mondelez.html?loc=westchester" },
+        { label: "Morris", href: "mondelez.html?loc=morris" },
+        { label: "Addison", href: "mondelez.html?loc=addison" },
+        { label: "Indianapolis", href: "mondelez.html?loc=indianapolis" },
+        { label: "Louisville", href: "mondelez.html?loc=louisville" },
+        { label: "Spokane", href: "mondelez.html?loc=spokane" },
+        { label: "Las Vegas", href: "mondelez.html?loc=lasvegas" },
+        { label: "Boise", href: "mondelez.html?loc=boise" },
+        { label: "Kent", href: "mondelez.html?loc=kent" },
+        { label: "Salt Lake City", href: "mondelez.html?loc=saltlakecity" },
+        { label: "New Berlin", href: "mondelez.html?loc=newberlin" },
+        { label: "All Locations", href: "mondelez.html?loc=combined" },
+      ],
+    },
+    { label: "Racetrac", comingSoon: true },
+    { label: "Carlstar", comingSoon: true },
+    { label: "Global Pallets", comingSoon: true },
+    { label: "LTL", comingSoon: true },
+    { label: "Driver List", href: "driverlist.html" },
+    { label: "Accounting", href: "accounting.html", visible: () => isAccountingUser() },
+    {
+      label: "Analytics",
+      children: [
+        { label: "Driver Analytics", href: "analytics-drivers.html" },
+        { label: "Location Analytics", href: "location-analytics.html", visible: () => isAdminUser() },
+      ],
+    },
+  ];
+
+  let navDropdownCssInjected = false;
+  function ensureNavDropdownCss() {
+    if (navDropdownCssInjected) return;
+    navDropdownCssInjected = true;
+    const style = document.createElement("style");
+    style.textContent = `
+      .nav-dropdown-wrap { position: relative; display: inline-block; }
+      .nav-dropdown-menu {
+        display: none; position: absolute; top: 100%; left: 0;
+        background: #fff; border: 1px solid #d1d9e0; border-radius: 6px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15); min-width: 180px;
+        z-index: 1000; padding: 4px 0; margin-top: 2px;
+      }
+      .nav-dropdown-wrap:hover .nav-dropdown-menu { display: block; }
+      .nav-dropdown-item {
+        display: block; padding: 8px 14px; color: #172542;
+        text-decoration: none; font-size: 13px; white-space: nowrap;
+      }
+      .nav-dropdown-item:hover { background: #eef1f6; }
+      .nav-dropdown-item.active { font-weight: 700; color: #006495; }
+      .tab-btn-disabled {
+        opacity: 0.45; cursor: default; padding: 8px 14px; display: inline-block;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  // A dropdown child is "active" if its file matches the current page
+  // AND (for Mondelez children specifically) its ?loc= param matches
+  // what's actually in the URL right now.
+  function isNavChildActive(child, curFile, curLocParam) {
+    const [childFile, childQuery] = child.href.split("?");
+    if (childFile !== curFile) return false;
+    if (!childQuery) return true;
+    const childParams = new URLSearchParams(childQuery);
+    return childParams.get("loc") === curLocParam;
+  }
+
   export function renderNav() {
     const tabsEl = $("#tabs");
     if (!tabsEl) return;
+    ensureNavDropdownCss();
     const cur = currentFile();
-    tabsEl.innerHTML = NAV_ORDER
-      .filter((file) => PAGE_MAP[file].type !== "accounting" || isAccountingUser())
-      .filter((file) => PAGE_MAP[file].type !== "location-analytics" || isAdminUser())
-      .map((file) => {
-        const info = PAGE_MAP[file];
-        return `<a class="tab-btn${file === cur ? " active" : ""}" href="${file}">${info.label}</a>`;
-      }).join("") + `<button type="button" class="tab-btn" id="nav-logout" style="margin-left:auto;">Log Out</button>`;
+    const curLocParam = new URLSearchParams(window.location.search).get("loc");
+
+    tabsEl.innerHTML = NAV_STRUCTURE.map((item) => {
+      if (item.visible && !item.visible()) return "";
+
+      if (item.comingSoon) {
+        return `<span class="tab-btn-disabled" title="Coming soon">${escapeHtml(item.label)}</span>`;
+      }
+
+      if (item.children) {
+        const visibleChildren = item.children.filter((c) => !c.visible || c.visible());
+        if (!visibleChildren.length) return "";
+        const first = visibleChildren[0];
+        const isActiveParent = visibleChildren.some((c) => isNavChildActive(c, cur, curLocParam));
+        return `
+          <div class="nav-dropdown-wrap">
+            <a class="tab-btn${isActiveParent ? " active" : ""}" href="${escapeHtml(first.href)}">${escapeHtml(item.label)}</a>
+            <div class="nav-dropdown-menu">
+              ${visibleChildren.map((c) => `<a class="nav-dropdown-item${isNavChildActive(c, cur, curLocParam) ? " active" : ""}" href="${escapeHtml(c.href)}">${escapeHtml(c.label)}</a>`).join("")}
+            </div>
+          </div>`;
+      }
+
+      return `<a class="tab-btn${item.href === cur ? " active" : ""}" href="${escapeHtml(item.href)}">${escapeHtml(item.label)}</a>`;
+    }).join("") + `<button type="button" class="tab-btn" id="nav-logout" style="margin-left:auto;">Log Out</button>`;
     const logoutBtn = $("#nav-logout");
     if (logoutBtn) logoutBtn.addEventListener("click", signOut);
   }

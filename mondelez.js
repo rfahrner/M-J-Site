@@ -728,6 +728,14 @@ function setupMondelezRealtimeSync() {
 /* ---------------- init ---------------- */
 export async function initMondelezPage() {
   state.activeLocation = "mondelez";
+  // Deep-link support: ?loc=westchester (or any MONDELEZ_LOCATIONS key,
+  // or "combined" for All Locations) selects that tab on load — this is
+  // what lets the nav bar's Mondelez dropdown link straight into a
+  // specific DC instead of always landing on the default tab.
+  const requestedLoc = new URLSearchParams(window.location.search).get("loc");
+  if (requestedLoc === "combined" || MONDELEZ_LOCATION_KEYS.has(requestedLoc)) {
+    mondelezState.activeTab = requestedLoc;
+  }
   await loadMondelezRateSettings();
   loadAndRenderMondelez();
   setupMondelezRealtimeSync();
