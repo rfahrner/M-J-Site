@@ -232,8 +232,6 @@ function buildDisplayRows(rangeData, startDate, endDate) {
   let weekDays = [];
   let periodDays = [];
   let currentQLabel = null;
-  let startQLabel = null;
-  let sawSecondPeriod = false;
 
   const flushWeek = () => {
     if (!weekDays.length) return;
@@ -264,8 +262,6 @@ function buildDisplayRows(rangeData, startDate, endDate) {
   while (cursor <= endCursor) {
     const dayKey = dateKey(cursor);
     const qLabel = quarterLabel(cursor.getFullYear(), quarterIndex(cursor));
-    if (startQLabel === null) startQLabel = qLabel;
-    if (qLabel !== startQLabel) sawSecondPeriod = true;
 
     if (currentQLabel !== null && qLabel !== currentQLabel) {
       flushWeek();
@@ -281,7 +277,7 @@ function buildDisplayRows(rangeData, startDate, endDate) {
     cursor = addDays(cursor, 1);
   }
   flushWeek();
-  if (sawSecondPeriod) flushPeriod();
+  flushPeriod(); // always, even for a single-quarter "Period" view — that quarter still gets its own recap row
   return rows;
 }
 
@@ -321,7 +317,9 @@ const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frid
 function renderTable() {
   const table = $('#la-table');
   if (!table) return;
+  const totalCols = FIELD_DEFS.length + 4; // Date, Day, Notes, ...metrics, action
   const headerCells = ['Date', 'Day', 'Notes', ...FIELD_DEFS.map((f) => f.label), ''].map((h) => `<th>${escapeHtml(h)}</th>`).join('');
+  const blankSpacerRows = `<tr><td colspan="${totalCols}" style="background:#fff; height:14px; border:none;"></td></tr>`.repeat(2);
 
   let dayIndex = 0; // for zebra striping across DAY rows only
   const bodyRows = laState.displayRows.map((row) => {
@@ -331,7 +329,7 @@ function renderTable() {
       const dow = DAY_NAMES[new Date(row.date + 'T00:00:00').getDay()];
       const note = laState.notesByDate[row.date] || '';
       const metricCells = FIELD_DEFS.map((f) => `<td>${fmtValue(f, row[f.key])}</td>`).join('');
-      return `<tr${zebra ? ' style="background:#bcd6ea;"' : ''}>
+      return `<tr${zebra ? ' style="background:#3271a1; color:#fff;"' : ''}>
         <td>${escapeHtml(row.date)}</td>
         <td>${escapeHtml(dow)}</td>
         <td><input type="text" class="cell-input la-note-input" data-note-date="${row.date}" value="${escapeHtml(note)}" placeholder="Note…" style="width:100%;"></td>
@@ -339,27 +337,40 @@ function renderTable() {
         <td></td>
       </tr>`;
     }
-    // weekRecap / periodRecap summary rows — visually distinct, with
-    // their own Generate Report action. Light background with the
-    // actual D&L brand blue (#006495, sampled from the logo) for text —
-    // white-on-dark was hard to read, this reads clearly and stays on-brand.
+    // weekRecap: light background, D&L blue text — readable, on-brand.
+    // periodRecap: solid D&L blue with white text — deliberately bolder
+    // than weekly, so quarter boundaries stand out clearly from week
+    // boundaries at a glance. Followed by two blank rows for breathing
+    // room before the next section starts.
     const isPeriod = row.rowType === 'periodRecap';
+    const rowStyle = isPeriod ? 'background:#006495; color:#fff; font-weight:700;' : 'background:#e6f0f6; color:#006495; font-weight:700;';
     const metricCells = FIELD_DEFS.map((f) => `<td>${fmtValue(f, row[f.key])}</td>`).join('');
-    return `<tr style="background:${isPeriod ? '#cfe0ea' : '#e6f0f6'}; color:#006495; font-weight:700;">
+    const rowHtml = `<tr style="${rowStyle}">
       <td colspan="3">${escapeHtml(row.date)}</td>
       ${metricCells}
       <td><button type="button" class="btn btn-ghost" style="padding:2px 10px; font-size:11px;" data-report-start="${row.rangeStart}" data-report-end="${row.rangeEnd}" data-report-weekly="${row.rowType === 'weekRecap' ? '1' : '0'}">Generate Report</button></td>
     </tr>`;
+    return isPeriod ? rowHtml + blankSpacerRows : rowHtml;
   }).join('');
 
-  // Running total row — the full displayed range's own aggregate, always
-  // last, regardless of how many weeks/periods are shown above it.
-  const totalCells = FIELD_DEFS.map((f) => `<td>${fmtValue(f, laState.recap ? laState.recap[f.key] : null)}</td>`).join('');
-  const totalRow = `<tr style="background:#006495; color:#fff; font-weight:700;">
-    <td colspan="3">Running Total (${escapeHtml(laState.rangeStart)} to ${escapeHtml(laState.rangeEnd)})</td>
-    ${totalCells}
-    <td></td>
-  </tr>`;
+  // Running total row — the full displayed range's own aggregate.
+  // Skipped when the last row above is already a Period Recap covering
+  // this exact same range (e.g. viewing "Period" mode, a single
+  // quarter) — that row already IS the running total in that case, so
+  // showing both would just repeat the same numbers twice.
+  const lastRow = laState.displayRows[laState.displayRows.length - 1];
+  const lastRowIsRedundant = lastRow && lastRow.rowType === 'periodRecap'
+    && lastRow.rangeStart === laState.rangeStart && lastRow.rangeEnd === laState.rangeEnd;
+
+  let totalRow = '';
+  if (!lastRowIsRedundant) {
+    const totalCells = FIELD_DEFS.map((f) => `<td>${fmtValue(f, laState.recap ? laState.recap[f.key] : null)}</td>`).join('');
+    totalRow = `<tr style="background:#006495; color:#fff; font-weight:700;">
+      <td colspan="3">Running Total (${escapeHtml(laState.rangeStart)} to ${escapeHtml(laState.rangeEnd)})</td>
+      ${totalCells}
+      <td></td>
+    </tr>`;
+  }
 
   table.innerHTML = `<thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}${totalRow}</tbody>`;
   const emptyState = $('#la-empty-state');

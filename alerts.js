@@ -507,7 +507,10 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
       .nav-dropdown-item:hover { background: #eef1f6; }
       .nav-dropdown-item.active { font-weight: 700; color: #006495; }
       .tab-btn-disabled {
-        opacity: 0.45; cursor: default; padding: 8px 14px; display: inline-block;
+        border: none; background: transparent; color: #000; opacity: 0.45;
+        padding: 0 16px; height: 100%; display: inline-flex; align-items: center;
+        font-size: 13px; font-weight: 600; letter-spacing: 0.01em;
+        white-space: nowrap; cursor: default;
       }
     `;
     document.head.appendChild(style);
