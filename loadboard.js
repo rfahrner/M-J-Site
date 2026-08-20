@@ -2794,8 +2794,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     groupTextState = null;
     $("#tg-group-tabs-wrap").classList.add("hidden"); // no group to pick — the checkboxes already picked them
     $("#tg-message").value = "";
-    const dispatchModeRadio = document.querySelector('input[name="tg-phone-mode"][value="dispatch"]');
-    if (dispatchModeRadio) dispatchModeRadio.checked = true;
+    const dispatchModeCheckbox = $("#tg-dispatch-mode");
+    if (dispatchModeCheckbox) dispatchModeCheckbox.checked = true;
     $("#tg-setup-step").classList.remove("hidden");
     $("#tg-progress-step").classList.add("hidden");
     $("#tg-error").classList.add("hidden");
@@ -3251,8 +3251,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     }
     const msgEl = $("#tg-message");
     if (msgEl) msgEl.value = "";
-    const dispatchModeRadio = document.querySelector('input[name="tg-phone-mode"][value="dispatch"]');
-    if (dispatchModeRadio) dispatchModeRadio.checked = true;
+    const dispatchModeCheckbox = $("#tg-dispatch-mode");
+    if (dispatchModeCheckbox) dispatchModeCheckbox.checked = true;
     $("#tg-setup-step").classList.remove("hidden");
     $("#tg-progress-step").classList.add("hidden");
     $("#tg-error").classList.add("hidden");
@@ -3266,8 +3266,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // happens downstream in beginTextBatchFlow, so this only needs to
   // pick the right number per member.
   function applyPhoneMode(members) {
-    const mode = (document.querySelector('input[name="tg-phone-mode"]:checked') || {}).value || "driver";
-    if (mode !== "dispatch") return members;
+    const checkbox = $("#tg-dispatch-mode");
+    const dispatchMode = checkbox ? checkbox.checked : true;
+    if (!dispatchMode) return members;
     return members.map((m) => {
       const dispatchPhone = m.dispatcherPhone && String(m.dispatcherPhone).trim();
       if (!dispatchPhone) return m;
@@ -4471,7 +4472,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const mc = getVal("ad-mc").trim();
     const email = getVal("ad-email").trim();
     let ok = true;
-    [["ad-name", name], ["ad-phone", phone], ["ad-mc", mc], ["ad-email", email]].forEach(([id, val]) => {
+    [["ad-name", name], ["ad-phone", phone], ["ad-mc", mc]].forEach(([id, val]) => {
       const el = $("#" + id);
       const field = el ? el.closest(".field") : null;
       if (field) field.classList.toggle("has-error", !val);
