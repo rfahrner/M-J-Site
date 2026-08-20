@@ -68,10 +68,15 @@
           <label>Timeframe</label>
           <div class="radio-row">
             <label><input type="radio" name="sr-timeframe" value="period" checked> Period (this quarter)</label>
+            <label><input type="radio" name="sr-timeframe" value="weekly"> Weekly</label>
             <label><input type="radio" name="sr-timeframe" value="past5quarters"> Past 5 Quarters</label>
             <label><input type="radio" name="sr-timeframe" value="alltime"> All Time</label>
             <label><input type="radio" name="sr-timeframe" value="custom"> Custom timeframe</label>
           </div>
+        </div>
+        <div class="field hidden" id="sr-week-field">
+          <label for="sr-week-pick">Pick any day in the week (Sun–Sat)</label>
+          <input type="date" class="cell-input" id="sr-week-pick" style="width:auto;">
         </div>
         <div class="field hidden" id="sr-custom-range-field">
           <label>Date range</label>
@@ -91,7 +96,7 @@
         </div>
         <div class="field">
           <label>Fields to include</label>
-          <div id="sr-field-checkboxes" class="checkbox-row" style="flex-wrap:wrap;"></div>
+          <div id="sr-field-checkboxes" style="display:grid; grid-template-columns: repeat(3, 1fr); gap:6px 16px;"></div>
         </div>
         <div class="field">
           <label>Preview</label>

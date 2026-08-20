@@ -109,6 +109,13 @@ async function fetchAllRows(table, columns, applyFilters) {
 /* ---------------- Week / quarter helpers ---------------- */
 
 function quarterIndex(d) { return Math.floor(d.getMonth() / 3); }
+function startOfWeek(d) {
+  const out = new Date(d);
+  const day = out.getDay();
+  const diff = (day - WEEK_START_DAY + 7) % 7;
+  out.setDate(out.getDate() - diff);
+  return out;
+}
 function quarterRange(year, qIdx) {
   const start = new Date(year, qIdx * 3, 1);
   const end = new Date(year, qIdx * 3 + 3, 0); // last day of the quarter
@@ -313,7 +320,7 @@ function renderTable() {
       const dow = DAY_NAMES[new Date(row.date + 'T00:00:00').getDay()];
       const note = laState.notesByDate[row.date] || '';
       const metricCells = FIELD_DEFS.map((f) => `<td>${fmtValue(f, row[f.key])}</td>`).join('');
-      return `<tr${zebra ? ' style="background:#dbeafe;"' : ''}>
+      return `<tr${zebra ? ' style="background:#bcd6ea;"' : ''}>
         <td>${escapeHtml(row.date)}</td>
         <td>${escapeHtml(dow)}</td>
         <td><input type="text" class="cell-input la-note-input" data-note-date="${row.date}" value="${escapeHtml(note)}" placeholder="Note…" style="width:100%;"></td>
@@ -322,17 +329,28 @@ function renderTable() {
       </tr>`;
     }
     // weekRecap / periodRecap summary rows — visually distinct, with
-    // their own Generate Report action.
+    // their own Generate Report action. Light background with the
+    // actual D&L brand blue (#006495, sampled from the logo) for text —
+    // white-on-dark was hard to read, this reads clearly and stays on-brand.
     const isPeriod = row.rowType === 'periodRecap';
     const metricCells = FIELD_DEFS.map((f) => `<td>${fmtValue(f, row[f.key])}</td>`).join('');
-    return `<tr style="background:${isPeriod ? '#1e3a5f' : '#2c5282'}; color:#fff; font-weight:600;">
+    return `<tr style="background:${isPeriod ? '#cfe0ea' : '#e6f0f6'}; color:#006495; font-weight:700;">
       <td colspan="3">${escapeHtml(row.date)}</td>
       ${metricCells}
       <td><button type="button" class="btn btn-ghost" style="padding:2px 10px; font-size:11px;" data-report-start="${row.rangeStart}" data-report-end="${row.rangeEnd}" data-report-weekly="${row.rowType === 'weekRecap' ? '1' : '0'}">Generate Report</button></td>
     </tr>`;
   }).join('');
 
-  table.innerHTML = `<thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody>`;
+  // Running total row — the full displayed range's own aggregate, always
+  // last, regardless of how many weeks/periods are shown above it.
+  const totalCells = FIELD_DEFS.map((f) => `<td>${fmtValue(f, laState.recap ? laState.recap[f.key] : null)}</td>`).join('');
+  const totalRow = `<tr style="background:#006495; color:#fff; font-weight:700;">
+    <td colspan="3">Running Total (${escapeHtml(laState.rangeStart)} to ${escapeHtml(laState.rangeEnd)})</td>
+    ${totalCells}
+    <td></td>
+  </tr>`;
+
+  table.innerHTML = `<thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}${totalRow}</tbody>`;
   const emptyState = $('#la-empty-state');
   const hasAnyData = laState.displayRows.some((r) => r.rowType === 'day' && (r.routes > 0 || r.drivers > 0));
   if (emptyState) emptyState.classList.toggle('hidden', hasAnyData);
@@ -438,7 +456,13 @@ function closeGenerateReportModal() {
 
 async function applyReportTimeframe(mode) {
   laState.rangeMode = mode;
-  if (mode !== 'custom') {
+  if (mode === 'weekly') {
+    const pickInput = $('#sr-week-pick');
+    const picked = (pickInput && pickInput.value) || dateKey(todayDate());
+    const weekStart = startOfWeek(new Date(picked + 'T00:00:00'));
+    laState.rangeStart = dateKey(weekStart);
+    laState.rangeEnd = dateKey(addDays(weekStart, 6));
+  } else if (mode !== 'custom') {
     const { start, end } = await computeRangeDates(mode);
     laState.rangeStart = start;
     laState.rangeEnd = end;
@@ -475,6 +499,8 @@ export async function initLocationAnalyticsPage() {
   const srEndInput = $('#sr-custom-end');
   if (srStartInput) srStartInput.value = today;
   if (srEndInput) srEndInput.value = today;
+  const srWeekInput = $('#sr-week-pick');
+  if (srWeekInput) srWeekInput.value = today;
 
   await reload();
 
@@ -512,7 +538,21 @@ export async function initLocationAnalyticsPage() {
     reload();
   });
 
-  on('btn-send-recap', 'click', () => openGenerateReportModal());
+  on('btn-send-recap', 'click', async () => {
+    laState.rangeMode = 'period';
+    const { start, end } = await computeRangeDates('period');
+    laState.rangeStart = start;
+    laState.rangeEnd = end;
+    const rangeData = await fetchRangeData(start, end, laState.activeTab);
+    laState.recap = computeAggregate(rangeData);
+    await openGenerateReportModal();
+    const periodRadio = document.querySelector('input[name="sr-timeframe"][value="period"]');
+    if (periodRadio) periodRadio.checked = true;
+    const customField = $('#sr-custom-range-field');
+    if (customField) customField.classList.add('hidden');
+    const weekField = $('#sr-week-field');
+    if (weekField) weekField.classList.add('hidden');
+  });
   on('sr-close', 'click', closeGenerateReportModal);
   on('sr-cancel', 'click', closeGenerateReportModal);
   on('sr-open-email', 'click', openReportInEmail);
@@ -521,11 +561,15 @@ export async function initLocationAnalyticsPage() {
     radio.addEventListener('change', (e) => {
       const customField = $('#sr-custom-range-field');
       if (customField) customField.classList.toggle('hidden', e.target.value !== 'custom');
-      if (e.target.value !== 'custom') applyReportTimeframe(e.target.value);
+      const weekField = $('#sr-week-field');
+      if (weekField) weekField.classList.toggle('hidden', e.target.value !== 'weekly');
+      if (e.target.value !== 'custom' && e.target.value !== 'weekly') applyReportTimeframe(e.target.value);
+      if (e.target.value === 'weekly') applyReportTimeframe('weekly');
     });
   });
   on('sr-custom-start', 'change', () => applyReportTimeframe('custom'));
   on('sr-custom-end', 'change', () => applyReportTimeframe('custom'));
+  on('sr-week-pick', 'change', () => applyReportTimeframe('weekly'));
 
   const fieldWrap = $('#sr-field-checkboxes');
   if (fieldWrap) fieldWrap.addEventListener('change', (e) => {
