@@ -271,7 +271,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     return true;
   }
 
-  export function isAccountingUser() { return currentUserRole === "accounting"; }
+  export function isAccountingUser() { return currentUserRole === "accounting" || currentUserRole === "admin"; }
   export function isAdminUser() { return currentUserRole === "admin"; }
 
   export async function signOut() {

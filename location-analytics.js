@@ -4,16 +4,22 @@
    selected date range, rather than a separately-maintained recap
    table that could drift from the real data.
 
-   Default field set (pre-checked in Send Recap) covers the core recap
-   metrics from the reference email: Drivers, Mileage, Routes, Stops,
-   Turn, Salvage, Backhauls. Everything else (TONU's, and the financial
-   metrics pulled from the 2024 Miles sheet's own formulas — Revenue,
-   Cost, Margin, GM%, Rev/mi, Rev/route, Rev/Driver, AVR LOH,
-   Margin/Driver, Rev/stop, Margin/Route) is available to add, not
-   included by default.
+   Main table: one row per DAY within the selected range, metrics
+   across the top as columns — matches the original workbook's own
+   Daily Recap layout rather than a collapsed single summary. Data is
+   fetched ONCE for the whole range, then bucketed by day client-side,
+   rather than a separate round trip per day.
 
-   Period = calendar quarter (Jan-Mar, Apr-Jun, Jul-Sep, Oct-Dec),
-   1st of the current quarter through today.
+   "Period" = calendar quarter (Jan-Mar, Apr-Jun, Jul-Sep, Oct-Dec),
+   1st of the current quarter through today — the daily table
+   naturally becomes a fresh running sheet once a new quarter starts,
+   since the date range recalculates to the new quarter's start.
+
+   Send Recap still sends an AGGREGATE summary (not a dump of every
+   daily row) for whatever range is selected — for Daily mode specifically
+   that aggregate already equals that one day's numbers. Each day row in
+   the main table also has its own Send link, since seeing the days is
+   what makes picking the right one to send easy.
 
    Financial figures come from loads_accounting, which today is
    populated for Atlanta. Houston/Mondelez track their own revenue on
@@ -61,6 +67,7 @@ const laState = {
   rangeMode: 'daily',
   rangeStart: '',
   rangeEnd: '',
+  dailyRows: [],
   recap: null,
   includedFields: new Set(FIELD_DEFS.filter((f) => f.category === 'default').map((f) => f.key)),
 };
@@ -100,11 +107,13 @@ function computeRangeDates(mode) {
   return { start: laState.rangeStart || dateKey(today), end: laState.rangeEnd || dateKey(today) };
 }
 
-async function computeRecap(startDate, endDate, location) {
+async function fetchRangeData(startDate, endDate, location) {
   const shifts = await fetchAllRows(
     SHIFTS_TABLE, 'id, shift_date, driver_id, tonu',
     (q) => q.eq('location', location).gte('shift_date', startDate).lte('shift_date', endDate)
   );
+  const shiftById = {};
+  shifts.forEach((s) => { shiftById[s.id] = s; });
   const shiftIds = shifts.map((s) => s.id);
 
   let trips = [];
@@ -113,22 +122,29 @@ async function computeRecap(startDate, endDate, location) {
     if (error) { console.error('Failed to load trips (chunk):', error); continue; }
     trips = trips.concat(data || []);
   }
-  const realTrips = trips.filter((t) => (t.route_id && String(t.route_id).trim()) || (t.trip_id && String(t.trip_id).trim()));
 
   const accountingRows = await fetchAllRows(
-    ACCOUNTING_TABLE, 'total_cost, total_revenue',
+    ACCOUNTING_TABLE, 'shift_date, total_cost, total_revenue',
     (q) => q.eq('location', location).gte('shift_date', startDate).lte('shift_date', endDate)
   );
 
-  const distinctDrivers = new Set(shifts.filter((s) => s.driver_id != null).map((s) => s.driver_id)).size;
+  return { shifts, shiftById, trips, accountingRows };
+}
+
+// Computes every metric from whatever subset of rows it's given — the
+// same function powers both a single day's row and the overall
+// aggregate used for Send Recap, just called with different scopes.
+function computeMetricsFromRows(shiftsInScope, tripsInScope, accountingInScope) {
+  const realTrips = tripsInScope.filter((t) => (t.route_id && String(t.route_id).trim()) || (t.trip_id && String(t.trip_id).trim()));
+  const distinctDrivers = new Set(shiftsInScope.filter((s) => s.driver_id != null).map((s) => s.driver_id)).size;
   const mileage = realTrips.reduce((sum, t) => sum + (Number(t.route_miles) || 0), 0);
   const routes = realTrips.length;
   const stops = realTrips.reduce((sum, t) => sum + (Number(t.stop_count) || 0), 0);
   const salvage = realTrips.filter((t) => t.salvage).length;
   const backhauls = realTrips.filter((t) => t.backhaul).length;
-  const tonu = shifts.filter((s) => s.tonu).length;
-  const revenue = accountingRows.reduce((sum, r) => sum + (Number(r.total_revenue) || 0), 0);
-  const cost = accountingRows.reduce((sum, r) => sum + (Number(r.total_cost) || 0), 0);
+  const tonu = shiftsInScope.filter((s) => s.tonu).length;
+  const revenue = accountingInScope.reduce((sum, r) => sum + (Number(r.total_revenue) || 0), 0);
+  const cost = accountingInScope.reduce((sum, r) => sum + (Number(r.total_cost) || 0), 0);
   const margin = revenue - cost;
 
   return {
@@ -154,6 +170,36 @@ async function computeRecap(startDate, endDate, location) {
   };
 }
 
+// One row per calendar day in [startDate, endDate], including days with
+// zero activity — a true running sheet, not just the days that happened
+// to have data.
+function computeDailyBreakdown(rangeData, startDate, endDate) {
+  const { shifts, trips, accountingRows } = rangeData;
+  const shiftIdsByDay = {};
+  shifts.forEach((s) => {
+    if (!shiftIdsByDay[s.shift_date]) shiftIdsByDay[s.shift_date] = new Set();
+    shiftIdsByDay[s.shift_date].add(s.id);
+  });
+
+  const days = [];
+  let cursor = new Date(startDate + 'T00:00:00');
+  const endCursor = new Date(endDate + 'T00:00:00');
+  while (cursor <= endCursor) {
+    const dayKey = dateKey(cursor);
+    const idsForDay = shiftIdsByDay[dayKey] || new Set();
+    const shiftsForDay = shifts.filter((s) => s.shift_date === dayKey);
+    const tripsForDay = trips.filter((t) => idsForDay.has(t.shift_id));
+    const accountingForDay = accountingRows.filter((r) => r.shift_date === dayKey);
+    days.push({ date: dayKey, ...computeMetricsFromRows(shiftsForDay, tripsForDay, accountingForDay) });
+    cursor = addDays(cursor, 1);
+  }
+  return days;
+}
+
+function computeAggregate(rangeData) {
+  return computeMetricsFromRows(rangeData.shifts, rangeData.trips, rangeData.accountingRows);
+}
+
 function fmtValue(def, value) {
   if (value == null) return '—';
   return def.fmt ? def.fmt(value) : String(value);
@@ -161,11 +207,20 @@ function fmtValue(def, value) {
 
 function renderTable() {
   const table = $('#la-table');
-  if (!table || !laState.recap) return;
-  const rows = FIELD_DEFS.map((def) => `<tr><td>${escapeHtml(def.label)}</td><td>${fmtValue(def, laState.recap[def.key])}</td></tr>`).join('');
-  table.innerHTML = `<thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>${rows}</tbody>`;
+  if (!table) return;
+  const headerCells = ['Date', ...FIELD_DEFS.map((f) => f.label), ''].map((h) => `<th>${escapeHtml(h)}</th>`).join('');
+  const bodyRows = (laState.dailyRows || []).map((day) => {
+    const metricCells = FIELD_DEFS.map((f) => `<td>${fmtValue(f, day[f.key])}</td>`).join('');
+    return `<tr>
+      <td>${escapeHtml(day.date)}</td>
+      ${metricCells}
+      <td><button type="button" class="cell-link-btn" style="width:auto; height:auto; padding:2px 8px; font-size:11px;" data-send-day="${day.date}">Send</button></td>
+    </tr>`;
+  }).join('');
+  table.innerHTML = `<thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody>`;
   const emptyState = $('#la-empty-state');
-  if (emptyState) emptyState.classList.toggle('hidden', laState.recap.routes > 0 || laState.recap.drivers > 0);
+  const hasAnyData = (laState.dailyRows || []).some((d) => d.routes > 0 || d.drivers > 0);
+  if (emptyState) emptyState.classList.toggle('hidden', hasAnyData);
 }
 
 function renderRangeDisplay() {
@@ -190,7 +245,9 @@ async function reload() {
   const { start, end } = computeRangeDates(laState.rangeMode);
   laState.rangeStart = start;
   laState.rangeEnd = end;
-  laState.recap = await computeRecap(start, end, laState.activeTab);
+  const rangeData = await fetchRangeData(start, end, laState.activeTab);
+  laState.dailyRows = computeDailyBreakdown(rangeData, start, end);
+  laState.recap = computeAggregate(rangeData);
   setDriverSyncStatus('');
   renderRangeDisplay();
   renderTable();
@@ -222,6 +279,23 @@ function renderRecapPreview() {
   el.innerHTML = `<pre style="white-space:pre-wrap; margin:0; font-family:inherit;">${escapeHtml(buildRecapText())}</pre>`;
 }
 
+async function openSendRecapForDay(dayKey) {
+  laState.rangeMode = 'custom';
+  laState.rangeStart = dayKey;
+  laState.rangeEnd = dayKey;
+  const rangeData = await fetchRangeData(dayKey, dayKey, laState.activeTab);
+  laState.recap = computeAggregate(rangeData);
+  await openSendRecapModal();
+  const customRadio = document.querySelector('input[name="sr-timeframe"][value="custom"]');
+  if (customRadio) customRadio.checked = true;
+  const customField = $('#sr-custom-range-field');
+  if (customField) customField.classList.remove('hidden');
+  const srStart = $('#sr-custom-start');
+  const srEnd = $('#sr-custom-end');
+  if (srStart) srStart.value = dayKey;
+  if (srEnd) srEnd.value = dayKey;
+}
+
 async function openSendRecapModal() {
   const overlay = $('#modal-send-recap');
   if (!overlay) return;
@@ -244,14 +318,14 @@ async function applySendRecapTimeframe(mode) {
     const { start, end } = computeRangeDates(mode);
     laState.rangeStart = start;
     laState.rangeEnd = end;
-    laState.recap = await computeRecap(start, end, laState.activeTab);
   } else {
     const startInput = $('#sr-custom-start');
     const endInput = $('#sr-custom-end');
     if (startInput && startInput.value) laState.rangeStart = startInput.value;
     if (endInput && endInput.value) laState.rangeEnd = endInput.value;
-    laState.recap = await computeRecap(laState.rangeStart, laState.rangeEnd, laState.activeTab);
   }
+  const rangeData = await fetchRangeData(laState.rangeStart, laState.rangeEnd, laState.activeTab);
+  laState.recap = computeAggregate(rangeData);
   renderRecapPreview();
 }
 
@@ -287,6 +361,12 @@ export async function initLocationAnalyticsPage() {
     laState.activeTab = btn.dataset.laTab;
     renderTabs();
     reload();
+  });
+
+  const table = $('#la-table');
+  if (table) table.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-send-day]');
+    if (btn) openSendRecapForDay(btn.dataset.sendDay);
   });
 
   document.querySelectorAll('.la-range-btn').forEach((btn) => {
