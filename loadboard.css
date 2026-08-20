@@ -4,7 +4,6 @@
    shift, not a marketing page. Density, legibility, and fast
    visual scanning (status color) matter more than decoration.
    ============================================================ */
-
 :root {
   --navy-950: #0b1220;
   --navy-900: #101a2e;
@@ -15,7 +14,6 @@
   --slate-100: #eef1f6;
   --paper: #f7f8fb;
   --line: #dbe1eb;
-
   --amber-bg: #fdf3d0;
   --amber-line: #e8cf7e;
   --green-bg: #dcf3e4;
@@ -24,23 +22,17 @@
   --blue-line: #a9c4ea;
   --red-600: #c0362c;
   --red-bg: #f8d6d3;
-
   --good-surf: #92A2A6;
   --pea-flower: #6777B6;
   --butter-yellow: #EFCE7B;
   --pistachio: #CBD183;
-
   --focus: #2f6fed;
-
   --radius-sm: 4px;
   --radius-md: 8px;
-
   --font-ui: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
   --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
 }
-
 * { box-sizing: border-box; }
-
 html, body {
   margin: 0;
   padding: 0;
@@ -50,14 +42,11 @@ html, body {
   font-family: var(--font-ui);
   font-size: 13px;
 }
-
 button {
   font-family: inherit;
   cursor: pointer;
 }
-
 /* ---------------- Top bar / brand + nav ---------------- */
-
 .topbar {
   display: flex;
   align-items: center;
@@ -65,11 +54,12 @@ button {
   background: var(--good-surf);
   padding: 0 20px;
   height: 52px;
-  position: sticky;
+  position: fixed;
   top: 0;
+  left: 0;
+  right: 0;
   z-index: 50;
 }
-
 .brand {
   display: flex;
   align-items: center;
@@ -79,7 +69,6 @@ button {
   letter-spacing: 0.02em;
   white-space: nowrap;
 }
-
 .brand-mark {
   width: 26px;
   height: 26px;
@@ -87,7 +76,6 @@ button {
   background: linear-gradient(135deg, #2f6fed, #17b06b);
   flex: none;
 }
-
 .tabs {
   display: flex;
   gap: 2px;
@@ -95,7 +83,6 @@ button {
   overflow-x: auto;
   flex: 1;
 }
-
 /* Bottom-right notification widget — chat-window style, always visible
    (even with zero alerts), collapsed by default, blinks when a genuinely
    new alert arrives while collapsed. Draggable by its header; position
@@ -136,13 +123,11 @@ button {
   border: none; border-radius: var(--radius-sm, 4px); background: var(--navy-900, #1e293b); color: #fff; cursor: pointer;
 }
 .alert-action-btn:hover { background: var(--navy-800, #334155); }
-
 #alert-widget.blinking .alert-widget-header { animation: alertBlink 1s ease-in-out infinite; }
 @keyframes alertBlink {
   0%, 100% { background: var(--navy-950, #0f172a); }
   50% { background: #dc2626; }
 }
-
 #alert-widget-reopen {
   position: fixed; bottom: 16px; right: 16px; z-index: 200; width: 44px; height: 44px;
   border-radius: 999px; border: none; background: var(--navy-950, #0f172a); color: #fff;
@@ -150,7 +135,6 @@ button {
 }
 #alert-widget-reopen.hidden { display: none; }
 #alert-widget-reopen:hover { background: #1e293b; }
-
 .tab-btn {
   border: none;
   background: transparent;
@@ -167,18 +151,14 @@ button {
   transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
   white-space: nowrap;
 }
-
 .tab-btn:hover { background: rgba(0,0,0,0.08); }
-
 .tab-btn.active {
   color: #000;
   border-bottom-color: #000;
   background: rgba(0,0,0,0.12);
   font-weight: 800;
 }
-
 /* ---------------- Toolbar (title / date nav / actions) ---------------- */
-
 .toolbar {
   display: flex;
   align-items: center;
@@ -189,26 +169,22 @@ button {
   background: #fff;
   flex-wrap: wrap;
 }
-
 .toolbar-left h1 {
   margin: 0;
   font-size: 17px;
   font-weight: 800;
   color: var(--navy-950);
 }
-
 .toolbar-left .subtext {
   margin-top: 2px;
   font-size: 12px;
   color: var(--slate-500);
 }
-
 .date-nav {
   display: flex;
   align-items: center;
   gap: 6px;
 }
-
 .date-nav button:not(.today-pill) {
   border: 1px solid var(--line);
   background: #fff;
@@ -220,7 +196,6 @@ button {
 }
 .date-nav button:not(.today-pill):hover { background: var(--slate-100); }
 .date-nav button:disabled { opacity: 0.35; cursor: not-allowed; }
-
 .date-nav input[type="date"] {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
@@ -229,7 +204,6 @@ button {
   font-size: 12.5px;
   font-family: var(--font-ui);
 }
-
 .today-pill {
   border: 1px solid var(--line);
   background: var(--slate-100);
@@ -241,9 +215,7 @@ button {
   white-space: nowrap;
   flex-shrink: 0;
 }
-
 .toolbar-actions { display: flex; gap: 8px; position: relative; }
-
 .btn {
   border: 1px solid var(--slate-700);
   background: var(--navy-900);
@@ -257,21 +229,18 @@ button {
   flex-shrink: 0;
 }
 .btn:hover { background: var(--navy-800); }
-
 .btn-ghost {
   background: #fff;
   color: var(--navy-950);
   border: 1px solid var(--line);
 }
 .btn-ghost:hover { background: var(--slate-100); }
-
 .btn-danger-outline {
   background: #fff;
   color: var(--red-600);
   border: 1px solid var(--red-600);
 }
 .btn-danger-outline:hover { background: var(--red-bg); }
-
 /* Columns visibility panel */
 .columns-panel {
   position: absolute;
@@ -320,23 +289,19 @@ button {
   padding: 0;
 }
 .columns-panel-footer button:hover { text-decoration: underline; }
-
 /* ---------------- Grid ---------------- */
-
-
 #board-view {
   display: flex;
   flex-direction: column;
+  margin-top: 52px; /* topbar is now position:fixed and out of flow — this replaces the space it used to occupy */
   max-height: calc(100vh - 52px); /* 52px = .topbar height — caps a large board so it still scrolls internally instead of stretching the page, but doesn't force this height when there's little content */
 }
-
 .grid-scroll {
   flex: 1;
   min-height: 0; /* required so a flex child can actually shrink and scroll internally */
   overflow: auto;
   border-top: 1px solid var(--line);
 }
-
 .board-empty {
   padding: 40px 20px;
   text-align: center;
@@ -344,14 +309,12 @@ button {
   font-size: 13px;
   border-top: 1px solid var(--line);
 }
-
 table.board {
   border-collapse: separate;
   border-spacing: 0;
   width: max-content;
   min-width: 100%;
 }
-
 table.board thead th {
   position: sticky;
   top: 0;
@@ -367,11 +330,9 @@ table.board thead th {
   white-space: nowrap;
   z-index: 5;
 }
-
 table.board thead th.col-draggable { cursor: grab; }
 table.board thead th.col-draggable:active { cursor: grabbing; }
 table.board thead th.col-drop-target { box-shadow: inset 3px 0 0 var(--focus); }
-
 table.board td {
   border-right: 1px solid #000;
   border-bottom: 1px solid #000;
@@ -380,11 +341,9 @@ table.board td {
   white-space: nowrap;
   background: #fff;
 }
-
 table.board tbody tr:nth-child(even) td { background: #fbfcfe; }
 table.board tbody tr.is-row-pinned td { background: rgba(234, 179, 8, 0.14); }
 table.board tbody tr.is-row-selected td { background: rgba(59, 130, 246, 0.14); }
-
 /* Temporary attention-flash when clicking an alert jumps to its row —
    fades out on its own after a few seconds, doesn't need manual dismissal. */
 @keyframes alert-outline-pulse {
@@ -411,7 +370,6 @@ table.board tbody tr.is-being-edited td.pin-select {
   box-shadow: inset 3px 0 0 0 #2563eb, inset 0 3px 0 0 #2563eb, inset 0 -3px 0 0 #2563eb;
 }
 table.board tbody tr:hover td { background: #f0f5ff; }
-
 /* Column highlights, per request: Shift Start in pea flower, Next Call
    Time in butter yellow, the whole Route ID -> Ppwk Rec'd range in
    pistachio. Full column, header through every data row. */
@@ -421,8 +379,6 @@ table.board th.col-nextCallTimeCalc,
 table.board td.col-nextCallTimeCalc { background: var(--butter-yellow) !important; }
 table.board th.col-pistachio,
 table.board td.col-pistachio { background: var(--pistachio) !important; }
-
-
 /* pinned/sticky left columns */
 .pin {
   position: sticky;
@@ -452,13 +408,11 @@ table.board tbody tr.is-row-pinned td.pin { background: rgba(234, 179, 8, 0.22);
 table.board tbody tr.is-row-selected td.pin { background: rgba(59, 130, 246, 0.22); }
 table.board tbody tr:hover td.pin { background: #eaf1ff; }
 table.board thead th.pin { z-index: 6; }
-
 /* Shift Complete — green tint specifically on the PRO# cell */
 td.pin-pro.shift-complete-tint {
   background: rgba(34, 197, 94, 0.18) !important;
 }
 table.board tbody tr:hover td.pin-pro.shift-complete-tint { background: rgba(34, 197, 94, 0.28) !important; }
-
 /* Fully documented — every trip clean (no red pill) AND the time sheet is
    in. A stricter, more saturated green than the basic completion tint
    above, since a shift can be "complete" while a trip is still missing
@@ -468,14 +422,12 @@ td.pin-pro.pro-fully-documented {
   border-color: #15803d !important;
 }
 table.board tbody tr:hover td.pin-pro.pro-fully-documented { background: rgba(21, 128, 61, 0.42) !important; }
-
 .trip-chip.shift-complete-tint { background: rgba(34, 197, 94, 0.18) !important; }
 @keyframes tripCompletedFlash {
   0% { background: rgba(34, 197, 94, 0.55); }
   100% { background: rgba(34, 197, 94, 0.18); }
 }
 .trip-chip.trip-just-completed-flash { animation: tripCompletedFlash 1.5s ease-out; }
-
 tr.quick-add-row td { background: var(--slate-100) !important; padding: 0; border-top: 1px dashed var(--line); }
 .quick-add-btn {
   border: none;
@@ -500,7 +452,6 @@ tr.quick-add-row td { background: var(--slate-100) !important; padding: 0; borde
    the first one once both are pinned during a horizontal scroll. */
 .quick-add-btn-secondary .quick-add-btn-label { left: 150px; }
 .quick-add-btn:hover .quick-add-btn-label { border-style: solid; }
-
 .text-btn {
   border: 1px solid var(--slate-500);
   background: #fff;
@@ -512,7 +463,6 @@ tr.quick-add-row td { background: var(--slate-100) !important; padding: 0; borde
   width: 40px;
 }
 .text-btn:hover { background: var(--slate-100); }
-
 /* Right-click context menu */
 .row-context-menu {
   position: fixed;
@@ -538,7 +488,6 @@ tr.quick-add-row td { background: var(--slate-100) !important; padding: 0; borde
 .context-menu-item:hover { background: var(--slate-100); }
 .context-menu-item-danger { color: var(--red-600, #dc2626); border-top: 1px solid var(--line); margin-top: 4px; padding-top: 10px; }
 .context-menu-item-danger:hover { background: rgba(220, 38, 38, 0.08); }
-
 .tg-group-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
 .tg-group-tab {
   border: 1px solid var(--slate-500);
@@ -555,7 +504,6 @@ tr.quick-add-row td { background: var(--slate-100) !important; padding: 0; borde
   border-color: var(--navy-950);
   color: #fff;
 }
-
 .location-tabs { display: flex; gap: 8px; padding: 0 0 14px 0; }
 .location-tab {
   border: 1px solid var(--slate-500);
@@ -572,9 +520,7 @@ tr.quick-add-row td { background: var(--slate-100) !important; padding: 0; borde
   border-color: var(--navy-950);
   color: #fff;
 }
-
 #date-input[readonly] { cursor: pointer; background: #fff; }
-
 .date-dropdown {
   position: absolute;
   top: calc(100% + 6px);
@@ -663,7 +609,6 @@ tr.quick-add-row td { background: var(--slate-100) !important; padding: 0; borde
 .cal-cell-today:not(.cal-cell-selected) {
   box-shadow: inset 0 0 0 1.5px var(--navy-950);
 }
-
 .cell-input {
   border: 1px solid transparent;
   background: transparent;
@@ -687,21 +632,17 @@ tr.quick-add-row td { background: var(--slate-100) !important; padding: 0; borde
   font-weight: 600;
 }
 .cell-input.small { text-align: center; width: 40px; }
-
 td.trip-block-start {
   border-left: 3px solid var(--slate-700);
   padding-left: 10px;
 }
-
 /* Alternating trip-block tint in the body — box-shadow instead of background-color
    so it layers cleanly on top of zebra striping, row hover, TONU, and the
    30-min highlight instead of fighting them for specificity. */
 td.trip-tint-b {
   box-shadow: inset 0 0 0 1000px rgba(51, 65, 92, 0.045);
 }
-
 .chk { width: 16px; height: 16px; cursor: pointer; }
-
 /* driver name cell + autocomplete */
 .driver-name-wrap { position: relative; }
 .autocomplete-list {
@@ -725,7 +666,6 @@ td.trip-tint-b {
 .driver-ac-floating { z-index: 500; }
 .autocomplete-item:hover { background: var(--blue-bg); }
 .autocomplete-item .ac-sub { color: var(--slate-500); font-size: 11px; }
-
 /* TONU button */
 .tonu-btn {
   border: 1px solid var(--red-600);
@@ -743,20 +683,16 @@ td.trip-tint-b {
   background: var(--red-600);
   color: #fff;
 }
-
 /* Highlight is now a context-menu action rather than a dedicated button —
    the amber tint itself is defined above (tr.is-row-pinned). */
-
 tr.is-tonu td:not(.pin-select):not(.pin-text) .cell-input,
 tr.is-tonu td:not(.pin-select):not(.pin-text) span.static-text {
   text-decoration: line-through;
   color: var(--slate-500);
 }
-
 /* status swatches for salvage / backhaul flags */
 .flag-yes { background: var(--amber-bg) !important; }
 .flag-backhaul { background: var(--blue-bg) !important; }
-
 /* highlight-new-entry animation: 30 min soft red tint */
 @keyframes pulseIn {
   0% { background-color: rgba(192,54,44,0.55); }
@@ -764,7 +700,6 @@ tr.is-tonu td:not(.pin-select):not(.pin-text) span.static-text {
 }
 tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-color: rgba(192,54,44,0.16) !important; }
 tr.is-new td.pin { background-color: rgba(192,54,44,0.22) !important; }
-
 .add-trip-cell { text-align: center; }
 .add-trip-btn {
   border: 1px dashed var(--slate-500);
@@ -776,7 +711,6 @@ tr.is-new td.pin { background-color: rgba(192,54,44,0.22) !important; }
   border-radius: var(--radius-sm);
 }
 .add-trip-btn:hover { background: var(--slate-100); }
-
 .calc-note {
   padding: 5px 20px;
   background: var(--amber-bg);
@@ -784,7 +718,6 @@ tr.is-new td.pin { background-color: rgba(192,54,44,0.22) !important; }
   font-size: 11px;
   color: #6b5510;
 }
-
 #driver-sync-status {
   padding: 4px 20px;
   font-size: 11.5px;
@@ -798,7 +731,6 @@ tr.is-new td.pin { background-color: rgba(192,54,44,0.22) !important; }
   color: var(--red-600);
   font-weight: 600;
 }
-
 /* ---------------- Column visibility ----------------
    Each rule hides every cell for that column — header cells in both
    header rows, and body cells in all 5 trip blocks where relevant —
@@ -836,11 +768,11 @@ table.board.hide-col-tripCallTime .col-tripCallTime,
 table.board.hide-col-routeImage .col-routeImage {
   display: none;
 }
-
 /* ---------------- Driver list tab ---------------- */
-
 .panel { padding: 20px; }
-
+#driverlist-view {
+  margin-top: 52px; /* topbar is now position:fixed and out of flow — this replaces the space it used to occupy */
+}
 /* Driver List toolbar stays on screen while the list scrolls — unlike the
    board pages, this page has no internal scroll container of its own, so
    the whole page scrolls and the toolbar needs position:sticky to stay put. */
@@ -852,7 +784,6 @@ table.board.hide-col-routeImage .col-routeImage {
   padding-left: 20px !important;
   padding-right: 20px !important;
 }
-
 .edit-driver-btn {
   border: 1px solid var(--line);
   background: #fff;
@@ -863,7 +794,6 @@ table.board.hide-col-routeImage .col-routeImage {
   border-radius: var(--radius-sm);
 }
 .edit-driver-btn:hover { background: var(--slate-100); border-color: var(--slate-500); }
-
 .driverlist-scroll { overflow-x: auto; }
 table.driverlist { width: 100%; border-collapse: collapse; background: #fff; }
 table.driverlist th {
@@ -903,7 +833,6 @@ table.driverlist td {
   font-size: 12.5px;
 }
 table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-color: rgba(192,54,44,0.16) !important; }
-
 .badge {
   display: inline-block;
   font-size: 10.5px;
@@ -913,9 +842,7 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
 }
 .badge-yes { background: var(--green-bg); color: #1b6b3d; }
 .badge-no { background: var(--slate-100); color: var(--slate-500); }
-
 /* ---------------- Placeholder tabs ---------------- */
-
 .placeholder {
   margin: 60px auto;
   max-width: 480px;
@@ -923,9 +850,7 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
   color: var(--slate-500);
 }
 .placeholder h2 { color: var(--navy-950); margin-bottom: 6px; }
-
 /* ---------------- Modals ---------------- */
-
 .overlay {
   position: fixed; inset: 0;
   background: rgba(11,18,32,0.55);
@@ -946,7 +871,6 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
    normal (non-nested) open of Load Details is unaffected. */
 #modal-load-details.ld-in-front { z-index: 200; }
 .hidden { display: none !important; }
-
 .modal {
   background: #fff;
   border-radius: var(--radius-md);
@@ -961,7 +885,6 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
   border-bottom: 1px solid var(--line);
   display: flex; align-items: center; justify-content: space-between;
 }
-
 /* Route image thumbnail (Mondelez) — small, clickable, opens the lightbox */
 .mdz-image-dropzone {
   display: inline-flex; align-items: center; justify-content: center;
@@ -1001,7 +924,6 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
   display: flex; align-items: center; justify-content: center;
 }
 .mdz-thumb-delete:hover { background: #991b1b; }
-
 /* Image lightbox — grows in from the center rather than just appearing,
    and sized to fill most of the screen so it's actually readable
    (a trip sheet photo needs to be legible, not thumbnail-sized). */
@@ -1025,7 +947,6 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
   object-fit: contain;
   border-radius: 6px;
 }
-
 .modal-header h3 { margin: 0; font-size: 15px; }
 .modal-close { border: none; background: transparent; font-size: 18px; color: var(--slate-500); line-height: 1; }
 .modal-body { padding: 18px 20px; }
@@ -1034,7 +955,6 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
   border-top: 1px solid var(--line);
   display: flex; justify-content: flex-end; gap: 8px;
 }
-
 .modal-large { width: 1040px; }
 .modal-tabs {
   display: flex;
@@ -1055,10 +975,8 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
 }
 .ld-tab:hover { color: var(--navy-950); }
 .ld-tab.is-active { color: var(--navy-950); border-bottom-color: var(--navy-950); }
-
 .col-routes { min-width: 150px; max-width: 220px; white-space: normal; }
 .col-trip-actions { min-width: 130px; }
-
 .trip-chip {
   display: inline-block;
   border: 1px solid var(--slate-500);
@@ -1073,7 +991,6 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
 .trip-chip:hover { background: #fff; }
 .trip-chip.trip-segment-done { background: rgba(34, 197, 94, 0.22); border-color: #15803d; color: #15803d; }
 .trip-chip.trip-chip-undocumented { background: rgba(239, 68, 68, 0.18); border-color: #b91c1c; color: #b91c1c; font-weight: 700; }
-
 .cell-with-link { display: flex; align-items: center; gap: 3px; }
 .cell-with-link .cell-input { flex: 1; min-width: 0; }
 .cell-link-btn {
@@ -1088,13 +1005,11 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
   line-height: 1;
 }
 .cell-link-btn:hover { background: var(--slate-100); }
-
 .ld-history-row { display: grid; grid-template-columns: 130px 140px 1fr 1fr; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
 .ld-history-row-5col { grid-template-columns: 120px 90px 110px 1fr 1fr; }
 .ld-history-row:first-child { font-weight: 700; color: var(--slate-500); font-size: 10.5px; text-transform: uppercase; }
 .ld-history-old { color: var(--slate-500); text-decoration: line-through; }
 .ld-history-new { color: var(--navy-950); font-weight: 600; }
-
 .ld-image-gallery { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
 .ld-image-thumb { width: 120px; height: 120px; border-radius: var(--radius-sm); border: 1px solid var(--line); object-fit: cover; }
 .ld-image-item { position: relative; }
@@ -1103,7 +1018,6 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
   background: rgba(0,0,0,0.65); color: #fff; border: none;
   width: 20px; height: 20px; border-radius: 50%; font-size: 12px; line-height: 1;
 }
-
 .field label {
   display: block;
   font-size: 11.5px;
@@ -1128,10 +1042,8 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
   outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px rgba(47,111,237,0.15);
 }
 .field textarea { resize: vertical; min-height: 54px; }
-
 .radio-row { display: flex; gap: 16px; }
 .radio-row label { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; color: var(--navy-950); }
-
 .inline-add-driver {
   margin-top: 8px;
   font-size: 11.5px;
@@ -1142,11 +1054,9 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
   padding: 0;
 }
 .inline-add-driver:hover { text-decoration: underline; }
-
 .field-error { color: var(--red-600); font-size: 11px; margin-top: 3px; display: none; }
 .field.has-error input, .field.has-error select { border-color: var(--red-600); }
 .field.has-error .field-error { display: block; }
-
 #available-section { margin-top: 100px; padding-bottom: 40px; }
 .available-title { font-size: 16px; margin: 0 0 4px 0; }
 table.available-table {
@@ -1184,8 +1094,6 @@ table.available-table tbody tr:nth-child(even) { background: #fbfcfe; }
   border-radius: var(--radius-sm);
 }
 .available-remove-btn:hover { background: rgba(220, 38, 38, 0.1); color: var(--red-600, #dc2626); }
-
-
 .tc-actions { display: flex; flex-direction: column; gap: 3px; flex-shrink: 0; }
 .tc-btn {
   border: 1px solid var(--slate-500);
@@ -1201,12 +1109,10 @@ table.available-table tbody tr:nth-child(even) { background: #fbfcfe; }
 .tc-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .tc-btn-primary { background: var(--navy-900); border-color: var(--navy-700); color: #fff; }
 .tc-btn-primary:hover:not(:disabled) { background: var(--navy-800); }
-
 .ld-edit-bar { display: flex; justify-content: flex-end; gap: 8px; margin: 4px 0 14px 0; }
 .ld-stop-row { display: flex; gap: 14px; font-size: 12px; padding: 4px 0; border-bottom: 1px solid var(--line); }
 .ld-stop-edit-row { display: flex; gap: 8px; align-items: center; padding: 3px 0; }
 .ld-stop-edit-row span { font-size: 11px; font-weight: 700; color: var(--slate-500); width: 48px; flex-shrink: 0; }
-
 .trip-add-btn {
   border: 1px dashed var(--slate-500);
   background: none;
@@ -1219,21 +1125,17 @@ table.available-table tbody tr:nth-child(even) { background: #fbfcfe; }
 }
 .trip-add-btn:hover { background: var(--slate-100); border-style: solid; }
 .col-rate { width: 62px; min-width: 62px; }
-
 /* ============================================================
    Rate engine additions
    ============================================================ */
-
 /* BIRM checkbox column on the board grid (Building C only in practice) */
 .col-birm { width: 92px; min-width: 92px; }
 .col-birm select.cell-input { font-size: 10.5px; padding: 3px 2px; }
-
 /* Route ID / Trip ID need more room than the rest — widened by hand */
 table.board td.col-routeId, table.board th.col-routeId,
 table.board td.col-tripId, table.board th.col-tripId {
   width: 95px;
 }
-
 /* Narrower columns, per request — roughly half their previous auto width */
 table.board td.col-trailerOut, table.board th.col-trailerOut,
 table.board td.col-dispatchTime, table.board th.col-dispatchTime,
@@ -1244,13 +1146,11 @@ table.board td.col-backhaulTrailerNumber, table.board th.col-backhaulTrailerNumb
 table.board td.col-returnEtaToDc, table.board th.col-returnEtaToDc {
   width: 55px;
 }
-
 /* Wider than the other short time-ish columns — this one sometimes shows
    "At DC since: HH:MM" instead of just a bare clock time. */
 table.board td.col-nextCallTimeCalc, table.board th.col-nextCallTimeCalc {
   width: 128px;
 }
-
 /* Overview tab: existing fields on the left, Rate panel as a narrow
    column on the right, top-aligned so it starts level with PRO#. */
 .ld-overview-grid {
@@ -1261,7 +1161,6 @@ table.board td.col-nextCallTimeCalc, table.board th.col-nextCallTimeCalc {
 }
 .ld-overview-main { min-width: 0; }
 .ld-overview-side { min-width: 0; }
-
 /* Left-side fields, boxed the same way as the Rate section */
 .field-box-grid {
   display: grid;
@@ -1282,14 +1181,12 @@ fieldset.field-box legend {
   color: var(--navy-950);
 }
 fieldset.field-box .static-text { font-size: 13.5px; }
-
 /* Missing-field highlighting inside Load Details tabs */
 fieldset.field-box.field-box-missing {
   border-color: #b91c1c;
   background: rgba(239, 68, 68, 0.06);
 }
 fieldset.field-box.field-box-missing legend { color: #b91c1c; }
-
 /* Status banner at the top of a Load Details tab */
 .ld-status-banner {
   padding: 8px 14px;
@@ -1319,7 +1216,6 @@ fieldset.field-box input.cell-input {
   color: var(--slate-500);
   margin-bottom: 2px;
 }
-
 /* The big outer "Rate" box — a real <fieldset> so the title notches into
    the border on its own, matching the hand-drawn example */
 fieldset.rate-section {
@@ -1343,7 +1239,6 @@ fieldset.rate-section {
   color: var(--slate-500);
   margin-bottom: 6px;
 }
-
 /* Each individual tier/rate figure — its own small titled box, matching
    the "61-140MI / $400" boxes in the sketch. */
 .rate-tier-grid {
@@ -1383,7 +1278,6 @@ fieldset.rate-tier-box input:focus {
   background: var(--slate-100);
   border-radius: 6px;
 }
-
 /* Per-load override indicator — this figure differs from the location's
    normal default, scoped to just this one load */
 fieldset.rate-tier-box.is-overridden {
@@ -1395,7 +1289,6 @@ fieldset.rate-tier-box.is-overridden {
   font-size: 8px;
   vertical-align: middle;
 }
-
 .rate-total-box {
   margin-top: 14px;
   padding: 12px;
@@ -1423,7 +1316,6 @@ fieldset.rate-tier-box.is-overridden {
   margin-top: 6px;
   font-size: 11.5px;
 }
-
 .rate-breakdown { margin-top: 14px; }
 .rate-breakdown-row {
   display: flex;
@@ -1443,12 +1335,10 @@ fieldset.rate-tier-box.is-overridden {
   margin-top: 4px;
   padding-top: 8px;
 }
-
 /* Stack to one column on narrower viewports so the sidebar never gets crushed */
 @media (max-width: 720px) {
   .ld-overview-grid { grid-template-columns: 1fr; }
 }
-
 /* ============================================================
    Mondelez board
    ============================================================ */
@@ -1466,7 +1356,6 @@ fieldset.rate-tier-box.is-overridden {
 .col-mdz-notes { min-width: 150px; }
 .col-mdz-image { width: 90px; min-width: 90px; text-align: center; }
 .col-routeImage { width: 90px; min-width: 90px; text-align: center; }
-
 /* Mondelez needs a wider Text/Email button cell than the other boards —
    scoped to #mondelez-table specifically so this doesn't affect the
    shared .pin-text/.pin-pro/.pin-driver sizing used elsewhere. */
@@ -1478,7 +1367,6 @@ fieldset.rate-tier-box.is-overridden {
 }
 #mondelez-table .pin-pro { left: 182px; }
 #mondelez-table .pin-driver { left: 274px; }
-
 /* Add Time Slots modal */
 .ats-slot-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .ats-slot-row input[data-ats-time] { width: 80px; flex: none; }

@@ -494,14 +494,12 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
     navDropdownCssInjected = true;
     const style = document.createElement("style");
     style.textContent = `
-      .nav-dropdown-wrap { position: relative; display: inline-block; }
-      .nav-dropdown-menu {
-        display: none; position: absolute; top: 100%; left: 0;
+      #nav-dropdown-portal {
+        display: none; position: fixed;
         background: #fff; border: 1px solid #d1d9e0; border-radius: 6px;
         box-shadow: 0 4px 12px rgba(0,0,0,0.15); min-width: 180px;
-        z-index: 1000; padding: 4px 0; margin-top: 2px;
+        z-index: 1000; padding: 4px 0;
       }
-      .nav-dropdown-wrap:hover .nav-dropdown-menu { display: block; }
       .nav-dropdown-item {
         display: block; padding: 8px 14px; color: #172542;
         text-decoration: none; font-size: 13px; white-space: nowrap;
@@ -526,6 +524,45 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
     return childParams.get("loc") === curLocParam;
   }
 
+  // The dropdown menu is appended directly to <body>, deliberately NOT
+  // nested inside #tabs/.topbar. #tabs has overflow-x:auto for its own
+  // legitimate reason (horizontal scroll when there are many top-level
+  // items) — but per the CSS spec, setting overflow on just one axis
+  // forces the other axis to also compute as "auto" rather than
+  // "visible," even though overflow-y was never explicitly set. That
+  // silently clipped a nested dropdown to the topbar's own 52px height,
+  // which is exactly what "makes me scroll down to see the options" was.
+  // A portal element outside that container entirely sidesteps the
+  // problem rather than fighting a CSS rule that can't be overridden
+  // from the child's side.
+  let navHideTimer = null;
+  function getOrCreateNavPortal() {
+    let portal = document.getElementById("nav-dropdown-portal");
+    if (portal) return portal;
+    portal = document.createElement("div");
+    portal.id = "nav-dropdown-portal";
+    document.body.appendChild(portal);
+    portal.addEventListener("mouseenter", () => { if (navHideTimer) clearTimeout(navHideTimer); });
+    portal.addEventListener("mouseleave", scheduleNavPortalHide);
+    return portal;
+  }
+  function scheduleNavPortalHide() {
+    if (navHideTimer) clearTimeout(navHideTimer);
+    navHideTimer = setTimeout(() => {
+      const portal = document.getElementById("nav-dropdown-portal");
+      if (portal) portal.style.display = "none";
+    }, 150); // short grace period so moving the mouse from the trigger down into the menu doesn't flicker-close it
+  }
+  function showNavPortalFor(triggerEl, children, cur, curLocParam) {
+    if (navHideTimer) clearTimeout(navHideTimer);
+    const portal = getOrCreateNavPortal();
+    portal.innerHTML = children.map((c) => `<a class="nav-dropdown-item${isNavChildActive(c, cur, curLocParam) ? " active" : ""}" href="${escapeHtml(c.href)}">${escapeHtml(c.label)}</a>`).join("");
+    const rect = triggerEl.getBoundingClientRect();
+    portal.style.left = `${rect.left}px`;
+    portal.style.top = `${rect.bottom}px`;
+    portal.style.display = "block";
+  }
+
   export function renderNav() {
     const tabsEl = $("#tabs");
     if (!tabsEl) return;
@@ -533,7 +570,7 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
     const cur = currentFile();
     const curLocParam = new URLSearchParams(window.location.search).get("loc");
 
-    tabsEl.innerHTML = NAV_STRUCTURE.map((item) => {
+    tabsEl.innerHTML = NAV_STRUCTURE.map((item, idx) => {
       if (item.visible && !item.visible()) return "";
 
       if (item.comingSoon) {
@@ -545,17 +582,19 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
         if (!visibleChildren.length) return "";
         const first = visibleChildren[0];
         const isActiveParent = visibleChildren.some((c) => isNavChildActive(c, cur, curLocParam));
-        return `
-          <div class="nav-dropdown-wrap">
-            <a class="tab-btn${isActiveParent ? " active" : ""}" href="${escapeHtml(first.href)}">${escapeHtml(item.label)}</a>
-            <div class="nav-dropdown-menu">
-              ${visibleChildren.map((c) => `<a class="nav-dropdown-item${isNavChildActive(c, cur, curLocParam) ? " active" : ""}" href="${escapeHtml(c.href)}">${escapeHtml(c.label)}</a>`).join("")}
-            </div>
-          </div>`;
+        return `<a class="tab-btn${isActiveParent ? " active" : ""}" href="${escapeHtml(first.href)}" data-nav-dropdown-idx="${idx}">${escapeHtml(item.label)}</a>`;
       }
 
       return `<a class="tab-btn${item.href === cur ? " active" : ""}" href="${escapeHtml(item.href)}">${escapeHtml(item.label)}</a>`;
     }).join("") + `<button type="button" class="tab-btn" id="nav-logout" style="margin-left:auto;">Log Out</button>`;
+
+    tabsEl.querySelectorAll("[data-nav-dropdown-idx]").forEach((el) => {
+      const item = NAV_STRUCTURE[Number(el.dataset.navDropdownIdx)];
+      const visibleChildren = (item.children || []).filter((c) => !c.visible || c.visible());
+      el.addEventListener("mouseenter", () => showNavPortalFor(el, visibleChildren, cur, curLocParam));
+      el.addEventListener("mouseleave", scheduleNavPortalHide);
+    });
+
     const logoutBtn = $("#nav-logout");
     if (logoutBtn) logoutBtn.addEventListener("click", signOut);
   }
