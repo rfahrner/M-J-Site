@@ -352,7 +352,7 @@ function renderTable() {
     // boundaries at a glance. Followed by two blank rows for breathing
     // room before the next section starts.
     const isPeriod = row.rowType === 'periodRecap';
-    const cellStyle = isPeriod ? 'background:#006495; color:#fff; font-weight:700;' : 'background:#e6f0f6; color:#006495; font-weight:700;';
+    const cellStyle = isPeriod ? 'background:#006495; color:#fff; font-weight:700;' : 'background:#54b2e5; color:#006495; font-weight:700;';
     const metricCells = FIELD_DEFS.map((f) => rowTd(fmtValue(f, row[f.key]), cellStyle)).join('');
     const reportBtn = `<button type="button" class="btn btn-ghost" style="padding:2px 10px; font-size:11px;" data-report-start="${row.rangeStart}" data-report-end="${row.rangeEnd}" data-report-weekly="${row.rowType === 'weekRecap' ? '1' : '0'}">Generate Report</button>`;
     const rowHtml = `<tr>
