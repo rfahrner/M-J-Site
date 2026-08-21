@@ -7,21 +7,121 @@
   <link rel="stylesheet" href="loadboard.css">
 </head>
 <body>
-  <div class="topbar"><div class="brand"><div class="brand-mark"></div><span>Dispatch</span></div><div class="tabs" id="tabs"></div></div>
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <span>Dispatch</span>
+    </div>
+    <div class="tabs" id="tabs"></div>
+  </div>
 
   <div id="board-view">
-    <div class="toolbar"><div class="toolbar-left"><h1 id="sheet-title" style="margin:0;">Location Analytics</h1><div class="subtext">Admin only. Every number below is computed live from real shift/trip/accounting data for the selected range.</div></div><div class="toolbar-actions"><button class="btn" id="btn-send-recap">Generate Report</button></div></div>
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <h1 id="sheet-title" style="margin:0;">Location Analytics</h1>
+        <div class="subtext">Admin only. Every number below is computed live from real shift/trip/accounting data for the selected range.</div>
+      </div>
+      <div class="toolbar-actions">
+        <button class="btn" id="btn-send-recap">Generate Report</button>
+      </div>
+    </div>
+
     <div id="driver-sync-status" class="hidden"></div>
+
     <div class="location-tabs" id="la-location-tabs" style="padding: 12px 20px 0;"></div>
-    <div class="toolbar" style="padding: 10px 20px; border-bottom:none;"><div class="toolbar-left" style="gap:8px;"><button type="button" class="btn btn-ghost la-range-btn" data-la-range="annual">Annual</button><button type="button" class="btn btn-ghost la-range-btn" data-la-range="period">Period</button><button type="button" class="btn btn-ghost la-range-btn" data-la-range="month">Month</button><button type="button" class="btn btn-ghost la-range-btn" data-la-range="custom">Custom…</button><span id="la-custom-range-inputs" class="hidden" style="display:inline-flex; gap:6px; align-items:center;"><input type="date" class="cell-input" id="la-custom-start" style="width:auto;"><span class="subtext">to</span><input type="date" class="cell-input" id="la-custom-end" style="width:auto;"><button type="button" class="btn btn-ghost" id="la-custom-apply">Apply</button></span></div><div class="subtext" id="la-range-display" style="margin-left:auto;"></div></div>
-    <div class="calc-note" style="margin: 6px 20px;" id="la-scope-note">Financial figures (Revenue, Cost, Margin, and everything derived from them) are pulled from Accounting records, which today are populated for Atlanta. Houston and Mondelez track their own revenue separately and aren't unified into these figures yet.</div>
-    <div class="grid-scroll"><table class="board" id="la-table"></table></div>
+
+    <div class="toolbar" style="padding: 10px 20px; border-bottom:none;">
+      <div class="toolbar-left" style="gap:8px;">
+        <button type="button" class="btn btn-ghost la-range-btn" data-la-range="annual">Annual</button>
+        <button type="button" class="btn btn-ghost la-range-btn" data-la-range="period">Period</button>
+        <button type="button" class="btn btn-ghost la-range-btn" data-la-range="month">Month</button>
+        <button type="button" class="btn btn-ghost la-range-btn" data-la-range="custom">Custom…</button>
+        <span id="la-custom-range-inputs" class="hidden" style="display:inline-flex; gap:6px; align-items:center;">
+          <input type="date" class="cell-input" id="la-custom-start" style="width:auto;">
+          <span class="subtext">to</span>
+          <input type="date" class="cell-input" id="la-custom-end" style="width:auto;">
+          <button type="button" class="btn btn-ghost" id="la-custom-apply">Apply</button>
+        </span>
+      </div>
+      <div class="subtext" id="la-range-display" style="margin-left:auto;"></div>
+    </div>
+
+    <div class="calc-note" style="margin: 6px 20px;" id="la-scope-note">
+      Financial figures (Revenue, Cost, Margin, and everything derived from them) are pulled from Accounting records, which today are populated for Atlanta. Houston and Mondelez track their own revenue separately and aren't unified into these figures yet.
+    </div>
+
+    <div class="grid-scroll">
+      <table class="board" id="la-table"></table>
+    </div>
     <div id="la-empty-state" class="board-empty hidden">No data in this range yet.</div>
   </div>
 
-  <div class="overlay hidden" id="modal-range-picker"><div class="modal"><div class="modal-header"><h3 id="rp-title">Select</h3><button class="modal-close" id="rp-close">&times;</button></div><div class="modal-body" id="rp-body"></div><div class="modal-footer"><button class="btn btn-ghost" id="rp-cancel">Cancel</button><button class="btn" id="rp-apply">Apply</button></div></div></div>
+  <!-- ================= Range picker modal (Annual / Period / Month) ================= -->
+  <div class="overlay hidden" id="modal-range-picker">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="rp-title">Select</h3>
+        <button class="modal-close" id="rp-close">&times;</button>
+      </div>
+      <div class="modal-body" id="rp-body"></div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="rp-cancel">Cancel</button>
+        <button class="btn" id="rp-apply">Apply</button>
+      </div>
+    </div>
+  </div>
 
-  <div class="overlay hidden" id="modal-send-recap"><div class="modal modal-large"><div class="modal-header"><h3>Generate Report</h3><button class="modal-close" id="sr-close">&times;</button></div><div class="modal-body"><div class="field"><label>Timeframe</label><div class="radio-row"><label><input type="radio" name="sr-timeframe" value="period" checked> Period (this quarter)</label><label><input type="radio" name="sr-timeframe" value="weekly"> Weekly</label><label><input type="radio" name="sr-timeframe" value="custom"> Custom timeframe</label></div></div><div class="field hidden" id="sr-week-field"><label for="sr-week-pick">Pick any day in the week (Sun–Sat)</label><input type="date" class="cell-input" id="sr-week-pick" style="width:auto;"></div><div class="field hidden" id="sr-custom-range-field"><label>Date range</label><div style="display:flex; gap:6px; align-items:center;"><input type="date" class="cell-input" id="sr-custom-start" style="width:auto;"><span class="subtext">to</span><input type="date" class="cell-input" id="sr-custom-end" style="width:auto;"></div></div><div class="field"><label for="sr-subject">Subject</label><input type="text" class="cell-input" id="sr-subject" style="width:100%;"></div><div class="field"><label for="sr-to">To (paste recipient emails, comma-separated)</label><input type="text" class="cell-input" id="sr-to" style="width:100%;" placeholder="name@company.com, name2@company.com"></div><div class="field"><label>Fields to include</label><div id="sr-field-checkboxes" style="display:grid; grid-template-columns: repeat(3, 1fr); gap:6px 16px;"></div></div><div class="field"><label>Preview</label><div id="sr-preview" style="border:1px solid var(--line); border-radius:6px; padding:10px; max-height:260px; overflow:auto;"></div></div></div><div class="modal-footer"><button class="btn btn-ghost" id="sr-cancel">Cancel</button><button class="btn" id="sr-open-email">Open in Email</button></div></div></div>
+  <!-- ================= Send Recap modal ================= -->
+  <div class="overlay hidden" id="modal-send-recap">
+    <div class="modal modal-large">
+      <div class="modal-header">
+        <h3>Generate Report</h3>
+        <button class="modal-close" id="sr-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <label>Timeframe</label>
+          <div class="radio-row">
+            <label><input type="radio" name="sr-timeframe" value="period" checked> Period (this quarter)</label>
+            <label><input type="radio" name="sr-timeframe" value="weekly"> Weekly</label>
+            <label><input type="radio" name="sr-timeframe" value="custom"> Custom timeframe</label>
+          </div>
+        </div>
+        <div class="field hidden" id="sr-week-field">
+          <label for="sr-week-pick">Pick any day in the week (Sun–Sat)</label>
+          <input type="date" class="cell-input" id="sr-week-pick" style="width:auto;">
+        </div>
+        <div class="field hidden" id="sr-custom-range-field">
+          <label>Date range</label>
+          <div style="display:flex; gap:6px; align-items:center;">
+            <input type="date" class="cell-input" id="sr-custom-start" style="width:auto;">
+            <span class="subtext">to</span>
+            <input type="date" class="cell-input" id="sr-custom-end" style="width:auto;">
+          </div>
+        </div>
+        <div class="field">
+          <label for="sr-subject">Subject</label>
+          <input type="text" class="cell-input" id="sr-subject" style="width:100%;">
+        </div>
+        <div class="field">
+          <label for="sr-to">To (paste recipient emails, comma-separated)</label>
+          <input type="text" class="cell-input" id="sr-to" style="width:100%;" placeholder="name@company.com, name2@company.com">
+        </div>
+        <div class="field">
+          <label>Fields to include</label>
+          <div id="sr-field-checkboxes" style="display:grid; grid-template-columns: repeat(3, 1fr); gap:6px 16px;"></div>
+        </div>
+        <div class="field">
+          <label>Preview</label>
+          <div id="sr-preview" style="border:1px solid var(--line); border-radius:6px; padding:10px; max-height:260px; overflow:auto;"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="sr-cancel">Cancel</button>
+        <button class="btn" id="sr-open-email">Open in Email</button>
+      </div>
+    </div>
+  </div>
 
 <script src="supabase.min.js"></script>
   <script src="analytics-data-compat.js"></script>
