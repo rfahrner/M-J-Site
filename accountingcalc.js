@@ -5,6 +5,7 @@
      and settings are fetched live from Supabase so they stay editable
      without a code change.
      ================================================================ */
+import './storage-compat.js';
 import { supabaseClient, SHIFTS_TABLE, findDriver, setDriverSyncStatus } from './loadboard.js';
 
   export const ACCOUNTING_TABLE = "loads_accounting";
