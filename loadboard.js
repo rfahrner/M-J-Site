@@ -2251,6 +2251,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   let driverAcMatches = [];
   let driverAcHighlight = -1;
   let driverAcInput = null;
+  let driverAcQuery = ""; // current typed text — needed so the Add Driver option can pre-fill it
+  let driverAcShowAddOption = false; // true when no matches exist and there's something typed to offer adding
 
   function ensureDriverAcBox() {
     if (driverAcBox) return driverAcBox;
@@ -2261,6 +2263,14 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     // mousedown fires before the input's blur/focusout, so a pick registers
     // before closeDriverAutocomplete() would otherwise hide the box first
     box.addEventListener("mousedown", (e) => {
+      const addItem = e.target.closest("[data-add-driver]");
+      if (addItem) {
+        e.preventDefault();
+        const nameToAdd = driverAcQuery;
+        closeDriverAutocomplete();
+        openAddDriverModal(false, nameToAdd);
+        return;
+      }
       const item = e.target.closest("[data-pick-driver]");
       if (!item) return;
       e.preventDefault();
@@ -2284,15 +2294,21 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   function renderDriverAcOptions(query, locationKey) {
     const box = ensureDriverAcBox();
     const q = (query || "").trim().toLowerCase();
+    driverAcQuery = (query || "").trim();
     const pool = driversForLocation(locationKey || "atlanta");
     driverAcMatches = (q ? pool.filter((d) => d.name.toLowerCase().includes(q)) : pool).slice(0, 8);
     driverAcHighlight = -1;
-    box.innerHTML = driverAcMatches.length
-      ? driverAcMatches.map((d, i) => `
+    driverAcShowAddOption = driverAcMatches.length === 0 && !!driverAcQuery;
+    if (driverAcMatches.length) {
+      box.innerHTML = driverAcMatches.map((d, i) => `
           <div class="autocomplete-item" data-pick-driver="${d.id}" data-ac-index="${i}">
             ${escapeHtml(d.name)}<div class="ac-sub">${escapeHtml(d.mc)} · ${escapeHtml(d.phone)}</div>
-          </div>`).join("")
-      : `<div class="autocomplete-item" style="color:var(--slate-500);">No matching driver.</div>`;
+          </div>`).join("");
+    } else if (driverAcShowAddOption) {
+      box.innerHTML = `<div class="autocomplete-item" data-add-driver="1" data-ac-index="0">+ Add driver: "${escapeHtml(driverAcQuery)}"</div>`;
+    } else {
+      box.innerHTML = `<div class="autocomplete-item" style="color:var(--slate-500);">No matching driver.</div>`;
+    }
   }
 
   function setDriverAcHighlight(index) {
@@ -2307,18 +2323,24 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
   function handleDriverAcKeydown(e) {
     if (!driverAcBox || driverAcBox.classList.contains("hidden")) return;
+    const selectableCount = driverAcMatches.length || (driverAcShowAddOption ? 1 : 0);
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      if (driverAcMatches.length) setDriverAcHighlight(Math.min(driverAcHighlight + 1, driverAcMatches.length - 1));
+      if (selectableCount) setDriverAcHighlight(Math.min(driverAcHighlight + 1, selectableCount - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      if (driverAcMatches.length) setDriverAcHighlight(Math.max(driverAcHighlight - 1, 0));
+      if (selectableCount) setDriverAcHighlight(Math.max(driverAcHighlight - 1, 0));
     } else if (e.key === "Enter") {
       if (driverAcHighlight >= 0 && driverAcMatches[driverAcHighlight]) {
         e.preventDefault();
         const drv = driverAcMatches[driverAcHighlight];
         if (driverAcOnPick) driverAcOnPick(drv);
         closeDriverAutocomplete();
+      } else if (driverAcHighlight === 0 && driverAcShowAddOption && !driverAcMatches.length) {
+        e.preventDefault();
+        const nameToAdd = driverAcQuery;
+        closeDriverAutocomplete();
+        openAddDriverModal(false, nameToAdd);
       }
     } else if (e.key === "Escape") {
       closeDriverAutocomplete();
@@ -4294,7 +4316,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   }
 
 
-  export function openAddDriverModal(nestedFromLoad) {
+  export function openAddDriverModal(nestedFromLoad, prefillName) {
     const modalEl = $("#modal-add-driver");
     if (!modalEl) { console.error('openAddDriverModal: #modal-add-driver not found on this page.'); return; }
     state.addDriverNestedFromLoad = !!nestedFromLoad;
@@ -4308,6 +4330,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const notesEl = $("#ad-tab-notes"); if (notesEl) notesEl.classList.add("hidden");
     ["ad-name", "ad-phone", "ad-mc", "ad-dispatcher-phone", "ad-email", "ad-email2", "ad-rating", "ad-preference", "ad-carrier", "ad-rate-booking", "ad-notes", "ad-tii-amount", "ad-rate"]
       .forEach((id) => setVal(id, ""));
+    if (prefillName) setVal("ad-name", prefillName);
     const mcFieldAdd = $("#ad-mc"); if (mcFieldAdd) mcFieldAdd.dataset.lastCheckedMc = "";
     $all('input[name="ad-tia"]', $("#modal-add-driver")).forEach((r) => (r.checked = r.value === "no"));
     const addingFromMondelez = (state.activeLocation || state.driverListTab) === "mondelez";
@@ -4320,7 +4343,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     setText("ad-submit", "Add");
     const deleteBtn = $("#ad-delete"); if (deleteBtn) deleteBtn.classList.add("hidden");
     const nameEl = $("#ad-name");
-    if (nameEl) nameEl.focus();
+    if (nameEl) { nameEl.focus(); if (prefillName) nameEl.select(); } // select-all so typing immediately replaces it if the name needs a tweak
   }
 
   export function openEditDriverModal(driverId) {
@@ -4549,6 +4572,27 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       }
     } else {
       state.drivers.push(driver);
+      // If this MC already has other drivers on file, and this new
+      // driver's dispatcher number isn't already on file for some of
+      // them, push it out to those too -- same carrier, so the same
+      // dispatcher number almost certainly applies to all their drivers.
+      if (driver.mc && driver.dispatcherPhone) {
+        const siblingsToUpdate = state.drivers.filter((d) =>
+          d.id !== driver.id && d.mc === driver.mc && d.dispatcherPhone !== driver.dispatcherPhone
+        );
+        if (siblingsToUpdate.length) {
+          const { error: propagateError } = await supabaseClient
+            .from(DRIVERS_TABLE)
+            .update({ "Dispatcher phone number": driver.dispatcherPhone })
+            .in("id", siblingsToUpdate.map((d) => d.id));
+          if (propagateError) {
+            console.error("Failed to propagate dispatcher number to other drivers under this MC:", propagateError);
+          } else {
+            siblingsToUpdate.forEach((d) => { d.dispatcherPhone = driver.dispatcherPhone; });
+            setDriverSyncStatus(`Also updated the dispatcher number for ${siblingsToUpdate.length} other driver(s) under MC ${driver.mc}.`, "info");
+          }
+        }
+      }
     }
     closeAddDriverModal();
     renderDriverList(); // no-op (guarded) unless this is the Driver List page
