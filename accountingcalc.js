@@ -5,8 +5,9 @@
      and settings are fetched live from Supabase so they stay editable
      without a code change.
      ================================================================ */
+import './role-auth-compat.js';
 import './storage-compat.js';
-import { supabaseClient, SHIFTS_TABLE, findDriver, setDriverSyncStatus } from './loadboard.js';
+import { supabaseClient, SHIFTS_TABLE } from './loadboard.js';
 
   export const ACCOUNTING_TABLE = "loads_accounting";
   export const ACCOUNTING_ROUTES_TABLE = "loads_accounting_routes";
@@ -79,86 +80,32 @@ import { supabaseClient, SHIFTS_TABLE, findDriver, setDriverSyncStatus } from '.
     return Math.round(fscRate * mult * totalMiles * 100) / 100;
   }
 
-  export async function sendShiftToAccounting(row, locationKey, dKey) {
-    if (!supabaseClient || !row.dbId) return;
-    if (!pricingTiers || !pricingSettings) await loadPricingData();
-    if (!pricingTiers || !pricingSettings) return; // pricing data unavailable — don't guess, skip silently (logged below)
+  /*
+   * Accounting submission is server-owned now.
+   *
+   * Dispatchers used to write loads_accounting / loads_accounting_routes
+   * directly from the browser. That made a clean accounting role boundary
+   * impossible because the dispatcher browser itself needed Accounting CRUD.
+   * Supabase now processes qualifying shifts with database triggers plus the
+   * existing five-minute cron safety net. The browser only confirms whether
+   * that server-side process has marked the shift sent.
+   *
+   * loadboard.js already calls this after a qualifying completion event and
+   * only sets its local sentToAccounting flag when this resolves. If the
+   * server has not processed the shift yet (most relevant to the 12-hour cron
+   * path), throw so the board leaves the local flag false and retries later.
+   */
+  export async function sendShiftToAccounting(row) {
+    if (!supabaseClient || !row || !row.dbId) return;
 
-    const drv = row.driverId ? findDriver(row.driverId) : null;
-    const routes = row.trips
-      .map((t, i) => ({ trip: t, num: i + 1 }))
-      .filter(({ trip }) => trip.routeId && String(trip.routeId).trim());
+    const { data, error } = await supabaseClient
+      .from(SHIFTS_TABLE)
+      .select("sent_to_accounting")
+      .eq("id", row.dbId)
+      .limit(1);
 
-    const costLevel = 1, revenueLevel = 1; // sensible default — editable afterward on the Accounting page
-    let totalCost = 0, totalRevenue = 0, totalMiles = 0, totalStops = 0;
-    const routeRecords = routes.map(({ trip, num }) => {
-      const miles = Number(trip.routeMiles) || 0;
-      const stops = Number(trip.stopCount) || 0;
-      const calc = calcRoute({ costLevel, revenueLevel, miles, stops, contractRate: null }, pricingTiers, pricingSettings);
-      totalCost += calc.totalCost; totalRevenue += calc.totalRevenue; totalMiles += miles; totalStops += stops;
-      return {
-        route_number: num, route_id: trip.routeId || null, trip_id: trip.tripId || null, trailer: trip.trailerOut || null,
-        miles, stops, linehaul_cost: calc.linehaulCost, stop_charge: calc.stopCharge, total_cost: calc.totalCost,
-        revenue: calc.revenue, stop_charge_revenue: calc.stopChargeRevenue, total_revenue: calc.totalRevenue,
-      };
-    });
-    const fscRate = pricingSettings.fsc_rate || 0;
-    const fscPayment = calcFscPayment(fscRate, totalMiles, pricingSettings);
-
-    // Delaware and Building C's driver pay is now owned by the board's own
-    // rate engine (boardrates.js), computed live per-route right on the
-    // board and already reflected in row.rate — including any manual
-    // override the dispatcher typed in. Delaware needs this because that
-    // engine prices each route separately ($1000-or-$4/mi per route),
-    // while summing this shift's total miles first (the old approach here)
-    // gives a different number once a load has more than one route.
-    // Building C needs this because it doesn't fit a mileage-tier shape at
-    // all (BIRM flat / Hostler hourly) — there's no sensible cost-tier
-    // fallback to compute here in the first place. Rather than re-deriving
-    // either and risking the two numbers drifting apart, this just takes
-    // what the board already worked out. total_cost / total_revenue /
-    // fsc_payment are untouched — those aren't driver pay, and weren't
-    // part of what changed.
-    let carrierPay = totalCost;
-    if (locationKey === "delaware" || locationKey === "buildingc") {
-      const boardRate = Number(row.rate);
-      if (!isNaN(boardRate) && boardRate > 0) carrierPay = boardRate;
-    }
-
-    const accountingRow = {
-      source_shift_id: row.dbId, location: locationKey, shift_date: dKey,
-      aljex_load_number: row.proNumber || null,
-      mc_dot: drv ? (drv.mc || null) : null,
-      driver_id: row.driverId ? Number(row.driverId) : null,
-      driver_name_text: drv ? drv.name : (row.driverNameText || null),
-      driver_cell: drv ? (drv.phone || null) : null,
-      carrier_email: drv ? (drv.email || null) : null,
-      cost_level: costLevel, revenue_level: revenueLevel,
-      total_carrier_pay: carrierPay, // starting suggestion — editable afterward
-      fsc_rate_snapshot: fscRate, fsc_payment: fscPayment,
-      total_cost: Math.round(totalCost * 100) / 100, total_revenue: Math.round(totalRevenue * 100) / 100,
-      total_miles: totalMiles, total_stops: totalStops,
-    };
-
-    try {
-      const { data: existing } = await supabaseClient.from(ACCOUNTING_TABLE).select("id").eq("source_shift_id", row.dbId);
-      let accountingId;
-      if (existing && existing.length) {
-        accountingId = existing[0].id;
-        await supabaseClient.from(ACCOUNTING_TABLE).update(accountingRow).eq("id", accountingId);
-        await supabaseClient.from(ACCOUNTING_ROUTES_TABLE).delete().eq("accounting_id", accountingId);
-      } else {
-        const { data: inserted, error } = await supabaseClient.from(ACCOUNTING_TABLE).insert(accountingRow).select();
-        if (error) throw error;
-        accountingId = inserted[0].id;
-      }
-      if (routeRecords.length) {
-        await supabaseClient.from(ACCOUNTING_ROUTES_TABLE).insert(routeRecords.map((r) => ({ ...r, accounting_id: accountingId })));
-      }
-      await supabaseClient.from(SHIFTS_TABLE).update({ sent_to_accounting: true }).eq("id", row.dbId);
-    } catch (e) {
-      console.error("sendShiftToAccounting failed:", e);
-
-      setDriverSyncStatus(`Marked complete, but couldn't send to Accounting (${e.message || e}).`, "error");
+    if (error) throw error;
+    if (!data || !data[0] || !data[0].sent_to_accounting) {
+      throw new Error("Accounting sync is pending server processing.");
     }
   }
