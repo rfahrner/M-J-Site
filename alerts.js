@@ -483,6 +483,7 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
       label: "Analytics",
       children: [
         { label: "Driver Analytics", href: "analytics-drivers.html" },
+        { label: "Volume", href: "analytics-volume.html" },
         { label: "Location Analytics", href: "location-analytics.html", visible: () => isAdminUser() },
       ],
     },

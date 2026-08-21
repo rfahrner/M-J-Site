@@ -18,6 +18,7 @@ import { sendShiftToAccounting } from './accountingcalc.js';
 import { initHoustonBoardPage } from './houston.js';
 import { initMondelezPage } from './mondelez.js';
 import { initDriverAnalyticsPage } from './analytics-drivers.js';
+import { initVolumePage } from './analytics-volume.js';
 import { initLocationAnalyticsPage } from './location-analytics.js';
 import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_MIN, PRE_SHIFT_CALL_FOLLOWUP_MIN, PRE_SHIFT_ESCALATION_MIN, LAST_STOP_RETURN_FOLLOWUP_MIN } from './alerts.js';
 import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRateBreakdown, effectiveTierRate, effectiveSetting, isTierOverridden, isSettingOverridden, isDriverTierOverridden, isDriverSettingOverridden, saveTierRate, saveSetting } from './boardrates.js';
@@ -33,10 +34,11 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     "accounting.html": { type: "accounting",  label: "Accounting" },
     "driverlist.html": { type: "driverlist",  label: "Driver List" },
     "analytics-drivers.html": { type: "driver-analytics", label: "Driver Analytics" },
+    "analytics-volume.html": { type: "volume", label: "Volume" },
     "location-analytics.html": { type: "location-analytics", label: "Location Analytics" },
     "historics.html":  { type: "historics",   label: "Historics" },
   };
-  export const NAV_ORDER = ["index.html", "dalaware.html", "buildingc.html", "houston.html", "mondelez.html", "accounting.html", "driverlist.html", "analytics-drivers.html", "location-analytics.html"];
+  export const NAV_ORDER = ["index.html", "dalaware.html", "buildingc.html", "houston.html", "mondelez.html", "accounting.html", "driverlist.html", "analytics-drivers.html", "location-analytics.html", "analytics-volume.html"];
   const LOCATIONS = NAV_ORDER
     .filter((f) => PAGE_MAP[f].type === "board" || PAGE_MAP[f].type === "houston-board")
     .map((f) => ({ file: f, ...PAGE_MAP[f] }));
@@ -5849,6 +5851,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       else if (info.type === "mondelez") initMondelezPage();
       else if (info.type === "driverlist") initDriverListPage();
       else if (info.type === "driver-analytics") initDriverAnalyticsPage();
+      else if (info.type === "volume") initVolumePage();
       else if (info.type === "location-analytics") initLocationAnalyticsPage();
       else if (info.type === "accounting") initAccountingPage();
     } catch (e) { console.error("page-specific init failed:", e); }
