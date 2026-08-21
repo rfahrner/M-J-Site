@@ -6,10 +6,22 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if (-not $env:SUPABASE_URL) {
-    throw 'SUPABASE_URL is not set in this Windows session.'
+    $env:SUPABASE_URL = 'https://ygsapysqzwrpcimgvaqx.supabase.co'
 }
+
+$promptedForKey = $false
 if (-not $env:SUPABASE_SERVICE_ROLE_KEY) {
-    throw 'SUPABASE_SERVICE_ROLE_KEY is not set in this Windows session. Do not put this key in GitHub.'
+    Write-Host 'Enter the Supabase server/service-role key for this run.'
+    Write-Host 'The key is used only in this PowerShell process and is not written to disk.'
+    $secureKey = Read-Host 'Supabase server key' -AsSecureString
+    $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureKey)
+    try {
+        $env:SUPABASE_SERVICE_ROLE_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
+        $promptedForKey = $true
+    }
+    finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
+    }
 }
 
 $archiveScript = Join-Path $PSScriptRoot 'archive-old-loads.mjs'
@@ -28,12 +40,13 @@ Write-Host "Output folder: $resolvedOutput"
 Write-Host "Mode: ARCHIVE ONLY (no Supabase deletion)"
 if ($Cutoff) { Write-Host "Cutoff: $Cutoff" }
 
-& node @args
-if ($LASTEXITCODE -ne 0) {
-    throw "Archive process exited with code $LASTEXITCODE"
-}
+try {
+    & node @args
+    if ($LASTEXITCODE -ne 0) {
+        throw "Archive process exited with code $LASTEXITCODE"
+    }
 
-$instructions = @"
+    $instructions = @"
 M-J SITE ARCHIVE - READY FOR BROWSER UPLOAD
 
 1. Open the online OneDrive folder: M-J Site Backups.
@@ -43,8 +56,14 @@ M-J SITE ARCHIVE - READY FOR BROWSER UPLOAD
 
 This browser-upload runner never deletes Supabase records.
 "@
-Set-Content -LiteralPath (Join-Path $resolvedOutput 'UPLOAD INSTRUCTIONS.txt') -Value $instructions -Encoding UTF8
+    Set-Content -LiteralPath (Join-Path $resolvedOutput 'UPLOAD INSTRUCTIONS.txt') -Value $instructions -Encoding UTF8
 
-Write-Host ''
-Write-Host 'Archive created successfully. Opening the upload folder...'
-Start-Process explorer.exe $resolvedOutput
+    Write-Host ''
+    Write-Host 'Archive created successfully. Opening the upload folder...'
+    Start-Process explorer.exe $resolvedOutput
+}
+finally {
+    if ($promptedForKey) {
+        Remove-Item Env:SUPABASE_SERVICE_ROLE_KEY -ErrorAction SilentlyContinue
+    }
+}
