@@ -32,9 +32,9 @@
 
     <div class="toolbar" style="padding: 10px 20px; border-bottom:none;">
       <div class="toolbar-left" style="gap:8px;">
-        <button type="button" class="btn btn-ghost la-range-btn" data-la-range="period">Period (this quarter)</button>
-        <button type="button" class="btn btn-ghost la-range-btn" data-la-range="past5quarters">Past 5 Quarters</button>
-        <button type="button" class="btn btn-ghost la-range-btn" data-la-range="alltime">All Time</button>
+        <button type="button" class="btn btn-ghost la-range-btn" data-la-range="annual">Annual</button>
+        <button type="button" class="btn btn-ghost la-range-btn" data-la-range="period">Period</button>
+        <button type="button" class="btn btn-ghost la-range-btn" data-la-range="month">Month</button>
         <button type="button" class="btn btn-ghost la-range-btn" data-la-range="custom">Custom…</button>
         <span id="la-custom-range-inputs" class="hidden" style="display:inline-flex; gap:6px; align-items:center;">
           <input type="date" class="cell-input" id="la-custom-start" style="width:auto;">
@@ -56,6 +56,21 @@
     <div id="la-empty-state" class="board-empty hidden">No data in this range yet.</div>
   </div>
 
+  <!-- ================= Range picker modal (Annual / Period / Month) ================= -->
+  <div class="overlay hidden" id="modal-range-picker">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="rp-title">Select</h3>
+        <button class="modal-close" id="rp-close">&times;</button>
+      </div>
+      <div class="modal-body" id="rp-body"></div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="rp-cancel">Cancel</button>
+        <button class="btn" id="rp-apply">Apply</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ================= Send Recap modal ================= -->
   <div class="overlay hidden" id="modal-send-recap">
     <div class="modal modal-large">
@@ -69,8 +84,6 @@
           <div class="radio-row">
             <label><input type="radio" name="sr-timeframe" value="period" checked> Period (this quarter)</label>
             <label><input type="radio" name="sr-timeframe" value="weekly"> Weekly</label>
-            <label><input type="radio" name="sr-timeframe" value="past5quarters"> Past 5 Quarters</label>
-            <label><input type="radio" name="sr-timeframe" value="alltime"> All Time</label>
             <label><input type="radio" name="sr-timeframe" value="custom"> Custom timeframe</label>
           </div>
         </div>

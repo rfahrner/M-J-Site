@@ -1,28 +1,30 @@
 /* ================================================================
    Location Analytics — its own entity, admin-only. Everything is
-   computed live from loads_shifts/loads_trips/loads_accounting for a
-   selected date range, rather than a separately-maintained recap
-   table that could drift from the real data.
+   computed live from loads_shifts/loads_trips/loads_accounting for
+   whatever date range(s) are currently selected, rather than a
+   separately-maintained recap table that could drift from real data.
 
-   Page starts on "Period" (current quarter) by default. Within any
-   range, days are grouped into weeks with a "Weekly Recap" summary row
-   after each week, and (when the range spans more than one quarter)
-   a "Period Recap" row after each quarter. Metrics run across the top
-   as columns, one row per day/week/period — matches the original
-   workbook's own Daily Recap layout.
+   Range selection: Annual / Period / Month / Custom. Annual, Period,
+   and Month each open a picker where you can multi-select years and
+   (for Period/Month) multi-select quarters or months — e.g. Q1 2025 +
+   Q3 2025 + Q1 2026 all at once. Each selected chunk is fetched and
+   built independently (so week/period grouping never spans across a
+   gap between two non-adjacent selections), then concatenated with a
+   visual separator between non-contiguous chunks.
 
-   Week boundary is Sunday-Saturday (WEEK_START_DAY below) — flagged
-   assumption, since the one concrete example given (March 30 - April 3,
-   2026) is actually a Mon-Fri span. One-line change if that's meant
-   literally rather than as a partial illustration.
+   Within any single selected chunk, days are grouped into weeks with a
+   "Weekly Recap" row after each week, and a "Period Recap" row after
+   each quarter — metrics run across the top as columns, one row per
+   day/week/period, matching the original workbook's own layout.
+
+   Week boundary is Sunday-Saturday (WEEK_START_DAY below).
 
    Boundary-straddling weeks: the on-screen Weekly Recap row for a week
    that crosses a quarter boundary may reflect only the portion of that
-   week within the currently-loaded range (e.g., viewing "Period" alone
-   near a quarter's edge). Clicking "Generate Report" on that row always
-   re-fetches the true, complete 7-day week fresh, independent of what's
-   currently loaded — so the generated report itself is always accurate
-   for the full week, even in that edge case.
+   week within the currently-loaded chunk. Clicking "Generate Report" on
+   that row always re-fetches the true, complete 7-day week fresh,
+   independent of what's currently loaded — so the generated report
+   itself is always accurate for the full week, even in that edge case.
 
    Financial figures come from loads_accounting, which today is
    populated for Atlanta. Houston/Mondelez track their own revenue on
@@ -42,6 +44,7 @@ const LA_LOCATIONS = [
 
 const WEEK_START_DAY = 0; // 0 = Sunday. See header note.
 const NOTES_TABLE = 'location_analytics_daily_notes';
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
 function fmtNum(v, decimals) {
   return Number(v).toLocaleString('en-US', { minimumFractionDigits: decimals || 0, maximumFractionDigits: decimals || 0 });
@@ -75,13 +78,14 @@ const FIELD_DEFS = [
 
 const laState = {
   activeTab: 'atlanta',
-  rangeMode: 'period',
-  rangeStart: '',
-  rangeEnd: '',
-  displayRows: [], // mixed: {rowType:'day'|'weekRecap'|'periodRecap', ...}
-  recap: null,
+  rangeMode: 'period', // 'annual' | 'period' | 'month' | 'custom'
+  selectedRanges: [], // [{start, end, label}, ...] — possibly multiple, non-contiguous
+  earliestYear: null, // populated on load, from the actual earliest shift on file
+  displayRows: [], // mixed: {rowType:'day'|'weekRecap'|'periodRecap'|'gap', ...}
+  recap: null, // combined aggregate across every selected range
   notesByDate: {},
   includedFields: new Set(FIELD_DEFS.filter((f) => f.category === 'default').map((f) => f.key)),
+  reportRange: { start: '', end: '' }, // Generate Report's own single range — separate from selectedRanges, since a report is for one coherent period, not a multi-select combination
 };
 
 function chunk(arr, size) {
@@ -106,7 +110,7 @@ async function fetchAllRows(table, columns, applyFilters) {
   return all;
 }
 
-/* ---------------- Week / quarter helpers ---------------- */
+/* ---------------- Week / quarter / month helpers ---------------- */
 
 function quarterIndex(d) { return Math.floor(d.getMonth() / 3); }
 function startOfWeek(d) {
@@ -122,37 +126,57 @@ function quarterRange(year, qIdx) {
   return { start, end };
 }
 function quarterLabel(year, qIdx) { return `Q${qIdx + 1} ${year}`; }
-function shiftQuarter(year, qIdx, delta) {
-  let y = year, q = qIdx + delta;
-  while (q < 0) { q += 4; y -= 1; }
-  while (q > 3) { q -= 4; y += 1; }
-  return { year: y, qIdx: q };
+function monthRange(year, monthIdx) {
+  const start = new Date(year, monthIdx, 1);
+  const end = new Date(year, monthIdx + 1, 0); // last day of the month
+  return { start, end };
+}
+function monthLabel(year, monthIdx) { return `${MONTH_NAMES[monthIdx]} ${year}`; }
+function yearRange(year) {
+  const start = new Date(year, 0, 1);
+  const end = new Date(year, 11, 31);
+  return { start, end };
 }
 
-async function fetchEarliestDate(location) {
+async function fetchEarliestYear(location) {
   const { data, error } = await supabaseClient
     .from(SHIFTS_TABLE).select('shift_date').eq('location', location)
     .order('shift_date', { ascending: true }).limit(1);
-  if (error || !data || !data.length) return dateKey(addDays(todayDate(), -365));
-  return data[0].shift_date;
+  if (error || !data || !data.length) return todayDate().getFullYear();
+  return new Date(data[0].shift_date + 'T00:00:00').getFullYear();
 }
 
-async function computeRangeDates(mode) {
+// Clamps a range's end date to today, so a selection covering the
+// current, in-progress year/quarter/month doesn't reach into the future.
+function clampToToday(end) {
   const today = todayDate();
-  if (mode === 'period') {
-    const { start } = quarterRange(today.getFullYear(), quarterIndex(today));
-    return { start: dateKey(start), end: dateKey(today) };
-  }
-  if (mode === 'past5quarters') {
-    const { year, qIdx } = shiftQuarter(today.getFullYear(), quarterIndex(today), -4);
-    const { start } = quarterRange(year, qIdx);
-    return { start: dateKey(start), end: dateKey(today) };
-  }
-  if (mode === 'alltime') {
-    const earliest = await fetchEarliestDate(laState.activeTab);
-    return { start: earliest, end: dateKey(today) };
-  }
-  return { start: laState.rangeStart || dateKey(today), end: laState.rangeEnd || dateKey(today) };
+  return end > today ? today : end;
+}
+
+// Builds the actual [{start, end, label}, ...] chunks for whatever was
+// picked in the Annual/Period/Month modal. years/subUnits are arrays of
+// selected values (subUnits is quarter indices 0-3 for Period, month
+// indices 0-11 for Month, unused for Annual). Sorted chronologically.
+function buildSelectedRanges(mode, years, subUnits) {
+  const ranges = [];
+  years.forEach((year) => {
+    if (mode === 'annual') {
+      const { start, end } = yearRange(year);
+      ranges.push({ start: dateKey(start), end: dateKey(clampToToday(end)), label: `${year}` });
+    } else if (mode === 'period') {
+      subUnits.forEach((qIdx) => {
+        const { start, end } = quarterRange(year, qIdx);
+        ranges.push({ start: dateKey(start), end: dateKey(clampToToday(end)), label: quarterLabel(year, qIdx) });
+      });
+    } else if (mode === 'month') {
+      subUnits.forEach((mIdx) => {
+        const { start, end } = monthRange(year, mIdx);
+        ranges.push({ start: dateKey(start), end: dateKey(clampToToday(end)), label: monthLabel(year, mIdx) });
+      });
+    }
+  });
+  ranges.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+  return ranges;
 }
 
 /* ---------------- Fetch + compute ---------------- */
@@ -210,12 +234,17 @@ function computeMetricsFromRows(shiftsInScope, tripsInScope, accountingInScope) 
   };
 }
 
-function computeMetricsForDateRange(rangeData, startKey, endKey) {
+function filterRangeDataToSpan(rangeData, startKey, endKey) {
   const shiftsInScope = rangeData.shifts.filter((s) => s.shift_date >= startKey && s.shift_date <= endKey);
   const shiftIdsInScope = new Set(shiftsInScope.map((s) => s.id));
   const tripsInScope = rangeData.trips.filter((t) => shiftIdsInScope.has(t.shift_id));
   const accountingInScope = rangeData.accountingRows.filter((r) => r.shift_date >= startKey && r.shift_date <= endKey);
-  return computeMetricsFromRows(shiftsInScope, tripsInScope, accountingInScope);
+  return { shifts: shiftsInScope, trips: tripsInScope, accountingRows: accountingInScope };
+}
+
+function computeMetricsForDateRange(rangeData, startKey, endKey) {
+  const scoped = filterRangeDataToSpan(rangeData, startKey, endKey);
+  return computeMetricsFromRows(scoped.shifts, scoped.trips, scoped.accountingRows);
 }
 
 function computeAggregate(rangeData) {
@@ -331,6 +360,11 @@ function renderTable() {
 
   let dayIndex = 0; // for zebra striping across DAY rows only
   const bodyRows = laState.displayRows.map((row) => {
+    if (row.rowType === 'gap') {
+      // Visual separator between two non-contiguous selected ranges
+      // (e.g. Q1 2025 selected alongside Q3 2025, with Q2 skipped).
+      return `<tr><td colspan="${totalCols}" style="background:#f1f1f1; color:#888; text-align:center; font-size:11px; padding:6px 0;">— gap in selection —</td></tr>`;
+    }
     if (row.rowType === 'day') {
       const zebra = dayIndex % 2 === 1;
       dayIndex += 1;
@@ -363,21 +397,25 @@ function renderTable() {
     return isPeriod ? rowHtml + blankSpacerRows : rowHtml;
   }).join('');
 
-  // Running total row — the full displayed range's own aggregate.
-  // Skipped when the last row above is already a Period Recap covering
-  // this exact same range (e.g. viewing "Period" mode, a single
-  // quarter) — that row already IS the running total in that case, so
-  // showing both would just repeat the same numbers twice.
+  // Running total row — the combined aggregate across every selected
+  // range. Skipped only when there's exactly ONE selected range and the
+  // last row above is already a Period Recap covering it exactly (e.g.
+  // "Period" mode with a single quarter picked) — that row already IS
+  // the running total in that case. With multiple ranges selected, the
+  // running total always shows, since it means something no single
+  // period's own recap does (the combined total across the selection).
   const lastRow = laState.displayRows[laState.displayRows.length - 1];
-  const lastRowIsRedundant = lastRow && lastRow.rowType === 'periodRecap'
-    && lastRow.rangeStart === laState.rangeStart && lastRow.rangeEnd === laState.rangeEnd;
+  const onlyRange = laState.selectedRanges.length === 1 ? laState.selectedRanges[0] : null;
+  const lastRowIsRedundant = onlyRange && lastRow && lastRow.rowType === 'periodRecap'
+    && lastRow.rangeStart === onlyRange.start && lastRow.rangeEnd === onlyRange.end;
 
   let totalRow = '';
-  if (!lastRowIsRedundant) {
+  if (!lastRowIsRedundant && laState.selectedRanges.length) {
     const totalStyle = 'background:#006495; color:#fff; font-weight:700;';
     const totalCells = FIELD_DEFS.map((f) => rowTd(fmtValue(f, laState.recap ? laState.recap[f.key] : null), totalStyle)).join('');
+    const rangeLabel = laState.selectedRanges.map((r) => r.label).join(', ');
     totalRow = `<tr>
-      ${rowTd(`Running Total (${escapeHtml(laState.rangeStart)} to ${escapeHtml(laState.rangeEnd)})`, totalStyle, ' colspan="3"')}
+      ${rowTd(`Running Total (${escapeHtml(rangeLabel)})`, totalStyle, ' colspan="3"')}
       ${totalCells}
       ${rowTd('', totalStyle)}
     </tr>`;
@@ -392,9 +430,9 @@ function renderTable() {
 function renderRangeDisplay() {
   const el = $('#la-range-display');
   if (!el) return;
-  el.textContent = laState.rangeStart === laState.rangeEnd
-    ? `Showing ${laState.rangeStart}`
-    : `Showing ${laState.rangeStart} through ${laState.rangeEnd}`;
+  el.textContent = laState.selectedRanges.length
+    ? `Showing ${laState.selectedRanges.map((r) => r.label).join(', ')}`
+    : 'Nothing selected yet';
   document.querySelectorAll('.la-range-btn').forEach((b) => b.classList.toggle('is-active', b.dataset.laRange === laState.rangeMode));
   const customInputs = $('#la-custom-range-inputs');
   if (customInputs) customInputs.classList.toggle('hidden', laState.rangeMode !== 'custom');
@@ -406,28 +444,121 @@ function renderTabs() {
   wrap.innerHTML = LA_LOCATIONS.map((l) => `<button type="button" class="location-tab ${laState.activeTab === l.key ? 'is-active' : ''}" data-la-tab="${l.key}">${escapeHtml(l.label)}</button>`).join('');
 }
 
+/* ---------------- Multi-select range picker (Annual / Period / Month) ---------------- */
+
+let pickerModalMode = null; // 'annual' | 'period' | 'month' — which button opened it
+
+function renderPickerModalContent(mode) {
+  const wrap = $('#rp-body');
+  if (!wrap) return;
+  const currentYear = todayDate().getFullYear();
+  const earliestYear = laState.earliestYear != null ? laState.earliestYear : currentYear;
+  const years = [];
+  for (let y = currentYear; y >= earliestYear; y--) years.push(y); // most recent first
+
+  const yearCheckboxes = years.map((y) => `<label><input type="checkbox" class="rp-year-cb" value="${y}"> ${y}</label>`).join('');
+
+  let subUnitHtml = '';
+  if (mode === 'period') {
+    subUnitHtml = `<div class="field"><label>Quarter(s)</label><div class="checkbox-row" style="flex-wrap:wrap;">
+      ${[0, 1, 2, 3].map((q) => `<label><input type="checkbox" class="rp-sub-cb" value="${q}"> Q${q + 1}</label>`).join('')}
+    </div></div>`;
+  } else if (mode === 'month') {
+    subUnitHtml = `<div class="field"><label>Month(s)</label><div class="checkbox-row" style="flex-wrap:wrap;">
+      ${MONTH_NAMES.map((name, idx) => `<label><input type="checkbox" class="rp-sub-cb" value="${idx}"> ${name}</label>`).join('')}
+    </div></div>`;
+  }
+
+  wrap.innerHTML = `
+    <div class="field"><label>Year(s)</label><div class="checkbox-row" style="flex-wrap:wrap;">${yearCheckboxes}</div></div>
+    ${subUnitHtml}
+    <div class="subtext" id="rp-error" style="color:#b91c1c;"></div>
+  `;
+}
+
+async function openRangePickerModal(mode) {
+  pickerModalMode = mode;
+  if (laState.earliestYear == null) {
+    laState.earliestYear = await fetchEarliestYear(laState.activeTab);
+  }
+  const overlay = $('#modal-range-picker');
+  if (!overlay) return;
+  const titleEl = $('#rp-title');
+  if (titleEl) titleEl.textContent = mode === 'annual' ? 'Select Year(s)' : mode === 'period' ? 'Select Period(s)' : 'Select Month(s)';
+  renderPickerModalContent(mode);
+  overlay.classList.remove('hidden');
+}
+
+function closeRangePickerModal() {
+  const overlay = $('#modal-range-picker');
+  if (overlay) overlay.classList.add('hidden');
+}
+
+async function applyRangePickerSelection() {
+  const years = Array.from(document.querySelectorAll('.rp-year-cb:checked')).map((el) => Number(el.value));
+  const subUnits = Array.from(document.querySelectorAll('.rp-sub-cb:checked')).map((el) => Number(el.value));
+  const errEl = $('#rp-error');
+  if (!years.length) { if (errEl) errEl.textContent = 'Pick at least one year.'; return; }
+  if ((pickerModalMode === 'period' || pickerModalMode === 'month') && !subUnits.length) {
+    if (errEl) errEl.textContent = pickerModalMode === 'period' ? 'Pick at least one quarter.' : 'Pick at least one month.';
+    return;
+  }
+  laState.rangeMode = pickerModalMode;
+  laState.selectedRanges = buildSelectedRanges(pickerModalMode, years, subUnits);
+  closeRangePickerModal();
+  await reload();
+  renderRangeDisplay();
+}
+
 async function reload() {
   setDriverSyncStatus('Loading location analytics…', 'loading');
-  const { start, end } = await computeRangeDates(laState.rangeMode);
-  laState.rangeStart = start;
-  laState.rangeEnd = end;
-  // Fetch wider than what's actually displayed — padded out to the full
-  // containing week at each end — so the first/last Weekly Recap rows
-  // can be computed from the TRUE 7-day week even when the displayed
-  // period boundary cuts a week short (e.g. "Period" starting mid-week).
-  // The padding days themselves are never rendered as their own day rows.
-  const fetchStart = dateKey(startOfWeek(new Date(start + 'T00:00:00')));
-  const fetchEnd = dateKey(addDays(startOfWeek(new Date(end + 'T00:00:00')), 6));
-  const [rangeData, notes] = await Promise.all([
-    fetchRangeData(fetchStart, fetchEnd, laState.activeTab),
-    loadNotesForRange(start, end, laState.activeTab),
-  ]);
-  laState.notesByDate = notes;
-  laState.displayRows = buildDisplayRows(rangeData, start, end);
-  // Running total stays scoped to exactly the displayed range, not the
-  // padded fetch — otherwise borrowed days from the adjacent period
-  // would silently inflate it.
-  laState.recap = computeMetricsForDateRange(rangeData, start, end);
+  const ranges = laState.selectedRanges;
+  if (!ranges.length) {
+    laState.displayRows = [];
+    laState.recap = null;
+    laState.notesByDate = {};
+    setDriverSyncStatus('');
+    renderRangeDisplay();
+    renderTable();
+    return;
+  }
+
+  const allDisplayRows = [];
+  const combinedShifts = [];
+  const combinedTrips = [];
+  const combinedAccounting = [];
+  const combinedNotes = {};
+
+  for (let i = 0; i < ranges.length; i++) {
+    const { start, end } = ranges[i];
+    // Fetch wider than what's actually displayed — padded out to the
+    // full containing week at each end — so the first/last Weekly Recap
+    // rows can be computed from the TRUE 7-day week even when this
+    // chunk's own boundary cuts a week short.
+    const fetchStart = dateKey(startOfWeek(new Date(start + 'T00:00:00')));
+    const fetchEnd = dateKey(addDays(startOfWeek(new Date(end + 'T00:00:00')), 6));
+    const [rangeData, notes] = await Promise.all([
+      fetchRangeData(fetchStart, fetchEnd, laState.activeTab),
+      loadNotesForRange(start, end, laState.activeTab),
+    ]);
+    Object.assign(combinedNotes, notes);
+
+    if (i > 0) allDisplayRows.push({ rowType: 'gap' });
+    allDisplayRows.push(...buildDisplayRows(rangeData, start, end));
+
+    // Accumulate the UNPADDED (exactly this chunk's own span) raw rows
+    // for the combined running total — using the padded rangeData
+    // directly here would double-count borrowed days from outside each
+    // chunk's own boundary.
+    const scoped = filterRangeDataToSpan(rangeData, start, end);
+    combinedShifts.push(...scoped.shifts);
+    combinedTrips.push(...scoped.trips);
+    combinedAccounting.push(...scoped.accountingRows);
+  }
+
+  laState.notesByDate = combinedNotes;
+  laState.displayRows = allDisplayRows;
+  laState.recap = computeMetricsFromRows(combinedShifts, combinedTrips, combinedAccounting);
   setDriverSyncStatus('');
   renderRangeDisplay();
   renderTable();
@@ -445,7 +576,8 @@ function renderFieldCheckboxes() {
 
 function buildRecapText() {
   const locLabel = (LA_LOCATIONS.find((l) => l.key === laState.activeTab) || {}).label || laState.activeTab;
-  const rangeLabel = laState.rangeStart === laState.rangeEnd ? laState.rangeStart : `${laState.rangeStart} to ${laState.rangeEnd}`;
+  const { start, end } = laState.reportRange;
+  const rangeLabel = start === end ? start : `${start} to ${end}`;
   const lines = [`${locLabel} Report — ${rangeLabel}`, ''];
   FIELD_DEFS.filter((d) => laState.includedFields.has(d.key)).forEach((def) => {
     lines.push(`${def.label}: ${fmtValue(def, laState.recap ? laState.recap[def.key] : null)}`);
@@ -464,9 +596,7 @@ function renderRecapPreview() {
 // week that straddles a quarter boundary still generates a complete,
 // accurate report regardless of what's currently loaded on screen.
 async function openReportForRange(startKey, endKey, isWeekly) {
-  laState.rangeMode = 'custom';
-  laState.rangeStart = startKey;
-  laState.rangeEnd = endKey;
+  laState.reportRange = { start: startKey, end: endKey };
   const rangeData = await fetchRangeData(startKey, endKey, laState.activeTab);
   laState.recap = computeAggregate(rangeData);
   await openGenerateReportModal(isWeekly ? 'Weekly Report' : 'Period Report');
@@ -487,7 +617,8 @@ async function openGenerateReportModal(labelOverride) {
   const subjectInput = $('#sr-subject');
   const locLabel = (LA_LOCATIONS.find((l) => l.key === laState.activeTab) || {}).label || laState.activeTab;
   const kind = labelOverride || 'Report';
-  if (subjectInput) subjectInput.value = `${locLabel} ${kind} — ${laState.rangeStart === laState.rangeEnd ? laState.rangeStart : `${laState.rangeStart} to ${laState.rangeEnd}`}`;
+  const { start, end } = laState.reportRange;
+  if (subjectInput) subjectInput.value = `${locLabel} ${kind} — ${start === end ? start : `${start} to ${end}`}`;
   renderFieldCheckboxes();
   renderRecapPreview();
 }
@@ -498,24 +629,22 @@ function closeGenerateReportModal() {
 }
 
 async function applyReportTimeframe(mode) {
-  laState.rangeMode = mode;
   if (mode === 'weekly') {
     const pickInput = $('#sr-week-pick');
     const picked = (pickInput && pickInput.value) || dateKey(todayDate());
     const weekStart = startOfWeek(new Date(picked + 'T00:00:00'));
-    laState.rangeStart = dateKey(weekStart);
-    laState.rangeEnd = dateKey(addDays(weekStart, 6));
-  } else if (mode !== 'custom') {
-    const { start, end } = await computeRangeDates(mode);
-    laState.rangeStart = start;
-    laState.rangeEnd = end;
+    laState.reportRange = { start: dateKey(weekStart), end: dateKey(addDays(weekStart, 6)) };
+  } else if (mode === 'period') {
+    const now = todayDate();
+    const { start, end } = quarterRange(now.getFullYear(), quarterIndex(now));
+    laState.reportRange = { start: dateKey(start), end: dateKey(clampToToday(end)) };
   } else {
     const startInput = $('#sr-custom-start');
     const endInput = $('#sr-custom-end');
-    if (startInput && startInput.value) laState.rangeStart = startInput.value;
-    if (endInput && endInput.value) laState.rangeEnd = endInput.value;
+    if (startInput && startInput.value) laState.reportRange.start = startInput.value;
+    if (endInput && endInput.value) laState.reportRange.end = endInput.value;
   }
-  const rangeData = await fetchRangeData(laState.rangeStart, laState.rangeEnd, laState.activeTab);
+  const rangeData = await fetchRangeData(laState.reportRange.start, laState.reportRange.end, laState.activeTab);
   laState.recap = computeAggregate(rangeData);
   renderRecapPreview();
 }
@@ -545,13 +674,20 @@ export async function initLocationAnalyticsPage() {
   const srWeekInput = $('#sr-week-pick');
   if (srWeekInput) srWeekInput.value = today;
 
+  // Default view on page load: current quarter, same starting point as
+  // before this became a multi-select picker.
+  const now = todayDate();
+  laState.rangeMode = 'period';
+  laState.selectedRanges = buildSelectedRanges('period', [now.getFullYear()], [quarterIndex(now)]);
   await reload();
+  renderRangeDisplay();
 
   const tabsWrap = $('#la-location-tabs');
   if (tabsWrap) tabsWrap.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-la-tab]');
     if (!btn) return;
     laState.activeTab = btn.dataset.laTab;
+    laState.earliestYear = null; // different location, may have a different earliest date on file
     renderTabs();
     reload();
   });
@@ -570,24 +706,32 @@ export async function initLocationAnalyticsPage() {
 
   document.querySelectorAll('.la-range-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
-      laState.rangeMode = btn.dataset.laRange;
-      if (laState.rangeMode !== 'custom') reload();
-      else renderRangeDisplay();
+      const mode = btn.dataset.laRange;
+      if (mode === 'custom') {
+        laState.rangeMode = 'custom';
+        renderRangeDisplay();
+      } else {
+        openRangePickerModal(mode);
+      }
     });
   });
   on('la-custom-apply', 'click', () => {
-    laState.rangeStart = $('#la-custom-start').value || laState.rangeStart;
-    laState.rangeEnd = $('#la-custom-end').value || laState.rangeEnd;
+    const start = $('#la-custom-start').value;
+    const end = $('#la-custom-end').value;
+    if (!start || !end) return;
+    laState.selectedRanges = [{ start, end, label: start === end ? start : `${start} to ${end}` }];
     reload();
   });
+  on('rp-close', 'click', closeRangePickerModal);
+  on('rp-cancel', 'click', closeRangePickerModal);
+  on('rp-apply', 'click', applyRangePickerSelection);
 
   on('btn-send-recap', 'click', async () => {
-    laState.rangeMode = 'period';
-    const { start, end } = await computeRangeDates('period');
-    laState.rangeStart = start;
-    laState.rangeEnd = end;
-    const rangeData = await fetchRangeData(start, end, laState.activeTab);
+    const now = todayDate();
+    const { start, end } = quarterRange(now.getFullYear(), quarterIndex(now));
+    const rangeData = await fetchRangeData(dateKey(start), dateKey(clampToToday(end)), laState.activeTab);
     laState.recap = computeAggregate(rangeData);
+    laState.reportRange = { start: dateKey(start), end: dateKey(clampToToday(end)) };
     await openGenerateReportModal();
     const periodRadio = document.querySelector('input[name="sr-timeframe"][value="period"]');
     if (periodRadio) periodRadio.checked = true;
