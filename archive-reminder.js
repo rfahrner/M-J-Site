@@ -21,11 +21,11 @@ function prettyDate(dateKey) {
 }
 
 function addArchiveAdminLink() {
-  if (document.getElementById("admin-archive-link")) return;
+  if (document.getElementById("admin-archive-link")) return true;
 
   const logout = document.getElementById("nav-logout");
   const tabs = document.getElementById("tabs");
-  if (!logout || !tabs) return;
+  if (!logout || !tabs) return false;
 
   const link = document.createElement("a");
   link.id = "admin-archive-link";
@@ -39,6 +39,18 @@ function addArchiveAdminLink() {
   // right. Move that spacing to Archive so the two controls stay together.
   logout.style.marginLeft = "0";
   tabs.insertBefore(link, logout);
+  return true;
+}
+
+function waitForNavAndAddArchiveLink() {
+  if (addArchiveAdminLink()) return;
+
+  const startedAt = Date.now();
+  const timer = window.setInterval(() => {
+    if (addArchiveAdminLink() || Date.now() - startedAt > 10000) {
+      window.clearInterval(timer);
+    }
+  }, 100);
 }
 
 function showArchiveDueBanner({ count, oldestDate, cutoff }) {
@@ -111,7 +123,7 @@ async function initArchiveReminder() {
   const role = roleRows?.[0]?.role || null;
   if (role !== "admin" && role !== "it") return;
 
-  addArchiveAdminLink();
+  waitForNavAndAddArchiveLink();
 
   const cutoff = archiveCutoffDate();
   const { data: oldestRows, error: loadError, count } = await client
@@ -134,9 +146,8 @@ async function initArchiveReminder() {
 }
 
 function scheduleArchiveReminder() {
-  // loadboard.js renders the normal nav during DOMContentLoaded. Waiting for
-  // the window load event keeps this reminder out of that critical path and
-  // ensures #nav-logout exists before Archive is inserted beside it.
+  // Start after the page load, then wait up to ten seconds for the app's
+  // async auth/database initialization to finish rendering #nav-logout.
   if (document.readyState === "complete") {
     window.setTimeout(() => initArchiveReminder().catch((e) => console.error("Archive reminder failed:", e)), 0);
   } else {
