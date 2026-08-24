@@ -22,29 +22,23 @@ function prettyDate(dateKey) {
 
 function addArchiveAdminLink() {
   if (document.getElementById("admin-archive-link")) return;
-  const topbar = document.querySelector(".topbar");
-  if (!topbar) return;
+
+  const logout = document.getElementById("nav-logout");
+  const tabs = document.getElementById("tabs");
+  if (!logout || !tabs) return;
 
   const link = document.createElement("a");
   link.id = "admin-archive-link";
   link.href = "archive.html";
   link.textContent = "Archive";
   link.title = "Historical load archive";
-  link.style.cssText = [
-    "display:inline-flex",
-    "align-items:center",
-    "justify-content:center",
-    "margin-left:auto",
-    "padding:6px 11px",
-    "border:1px solid rgba(255,255,255,.24)",
-    "border-radius:6px",
-    "color:inherit",
-    "text-decoration:none",
-    "font-size:12.5px",
-    "font-weight:600",
-    "white-space:nowrap",
-  ].join(";");
-  topbar.appendChild(link);
+  link.className = "tab-btn";
+  link.style.marginLeft = "auto";
+
+  // Log Out previously owned the auto margin that pushed it to the far
+  // right. Move that spacing to Archive so the two controls stay together.
+  logout.style.marginLeft = "0";
+  tabs.insertBefore(link, logout);
 }
 
 function showArchiveDueBanner({ count, oldestDate, cutoff }) {
@@ -140,8 +134,9 @@ async function initArchiveReminder() {
 }
 
 function scheduleArchiveReminder() {
-  // loadboard.js performs its own async auth initialization. Waiting for the
-  // window load event keeps this reminder out of that critical path.
+  // loadboard.js renders the normal nav during DOMContentLoaded. Waiting for
+  // the window load event keeps this reminder out of that critical path and
+  // ensures #nav-logout exists before Archive is inserted beside it.
   if (document.readyState === "complete") {
     window.setTimeout(() => initArchiveReminder().catch((e) => console.error("Archive reminder failed:", e)), 0);
   } else {
