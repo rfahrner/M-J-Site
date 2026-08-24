@@ -1,25 +1,21 @@
 /* Trusted application-role compatibility layer.
    loadboard.js historically reads user.user_metadata.role for UI routing.
-   Authorization is now enforced by public.user_roles + RLS, so this wrapper
+   Authorization is enforced by public.user_roles + RLS, so this wrapper
    replaces only the role value returned by auth.getUser() with the trusted
    database role. Raw user metadata is never treated as authoritative.
 
-   IT remains a distinct database role, but the existing UI currently has
-   only admin/accounting checks. Until the UI is refactored, IT is presented
-   to those UI checks as "admin" so IT/Security gets admin-equivalent access.
-   The database still sees the real "it" role and enforces it independently.
+   Important: the bundled supabase.min.js exposes createClient as a getter-only
+   export. ES modules run in strict mode, so assigning directly to
+   window.supabase.createClient throws and prevents loadboard.js from starting.
+   Instead, replace window.supabase with a shallow writable copy whose
+   createClient property wraps the original function.
 */
 
 const INSTALL_FLAG = '__dlTrustedRoleCompatInstalled';
 const ROLE_TABLE = 'user_roles';
 
-function installTrustedRoleCompat() {
-  const sdk = typeof window !== 'undefined' ? window.supabase : null;
-  if (!sdk || typeof sdk.createClient !== 'function' || sdk[INSTALL_FLAG]) return false;
-
-  const originalCreateClient = sdk.createClient.bind(sdk);
-
-  sdk.createClient = function trustedRoleCreateClient(...args) {
+function buildTrustedCreateClient(originalCreateClient) {
+  return function trustedRoleCreateClient(...args) {
     const client = originalCreateClient(...args);
     if (!client || !client.auth || typeof client.auth.getUser !== 'function') return client;
 
@@ -66,8 +62,21 @@ function installTrustedRoleCompat() {
 
     return client;
   };
+}
 
-  Object.defineProperty(sdk, INSTALL_FLAG, { value: true, configurable: false });
+function installTrustedRoleCompat() {
+  if (typeof window === 'undefined') return false;
+  if (window[INSTALL_FLAG]) return true;
+
+  const sdk = window.supabase;
+  if (!sdk || typeof sdk.createClient !== 'function') return false;
+
+  const originalCreateClient = sdk.createClient.bind(sdk);
+  window.supabase = {
+    ...sdk,
+    createClient: buildTrustedCreateClient(originalCreateClient),
+  };
+  window[INSTALL_FLAG] = true;
   return true;
 }
 
