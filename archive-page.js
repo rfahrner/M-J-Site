@@ -149,6 +149,35 @@ async function writeFile(dir, name, contents) {
   await writable.close();
 }
 
+async function verifyLocalWrite(chosenRoot, archiveDir) {
+  if (typeof chosenRoot.requestPermission === "function") {
+    const permission = await chosenRoot.requestPermission({ mode: "readwrite" });
+    if (permission !== "granted") {
+      throw new Error("Windows/browser did not grant write access to the selected folder.");
+    }
+  }
+
+  const markerName = "Archive Export Info.txt";
+  const markerText = [
+    "M-J Site archive local-write verification",
+    `Selected folder: ${chosenRoot.name || "(browser did not provide a folder name)"}`,
+    `Verified at: ${new Date().toISOString()}`,
+    "If you can read this file in File Explorer, the browser has write access to this Archive folder.",
+    "This file is safe to keep.",
+    "",
+  ].join("\n");
+
+  await writeFile(archiveDir, markerName, markerText);
+  const markerHandle = await archiveDir.getFileHandle(markerName);
+  const markerFile = await markerHandle.getFile();
+  const readBack = await markerFile.text();
+  if (readBack !== markerText) {
+    throw new Error("The browser created the archive test file but could not read back the same contents.");
+  }
+
+  return markerName;
+}
+
 async function writeBlob(dir, name, blob) {
   const handle = await dir.getFileHandle(safeName(name), { create: true });
   const writable = await handle.createWritable();
@@ -276,14 +305,19 @@ async function runExport() {
   progressEl.value = 0;
 
   try {
+    statusEl.textContent = "Choose the local Windows folder that should contain the Archive folder…";
     const chosenRoot = await window.showDirectoryPicker({ mode: "readwrite" });
     const archiveDir = await getOrCreateDir(chosenRoot, "Archive");
+    const markerName = await verifyLocalWrite(chosenRoot, archiveDir);
+    const selectedLabel = chosenRoot.name || "selected folder";
+    statusEl.textContent = `Local write verified: ${selectedLabel}\\Archive\\${markerName}. Starting archive export…`;
+
     const summariesByDay = new Map();
     const total = currentPreview.shifts.length;
 
     for (let i = 0; i < total; i++) {
       const shift = currentPreview.shifts[i];
-      statusEl.textContent = `Exporting ${i + 1} of ${total}: ${shift.shift_date} — ${shift.aljex_load_number || shift.pro_number || shift.id}`;
+      statusEl.textContent = `Writing to ${selectedLabel}\\Archive — exporting ${i + 1} of ${total}: ${shift.shift_date} — ${shift.aljex_load_number || shift.pro_number || shift.id}`;
       const result = await archiveOne(archiveDir, shift, currentPreview.cutoff);
       if (!summariesByDay.has(result.dayKey)) summariesByDay.set(result.dayKey, { dir: result.dayDir, rows: [] });
       summariesByDay.get(result.dayKey).rows.push(result.summary);
@@ -300,16 +334,18 @@ async function runExport() {
       completed_at: new Date().toISOString(),
       cutoff: currentPreview.cutoff,
       loads_exported: total,
+      selected_folder_name: selectedLabel,
+      local_write_verified: true,
       supabase_deleted: false,
     }, null, 2) + "\n");
 
-    statusEl.textContent = `Export complete: ${total.toLocaleString()} loads written to the Archive folder. Upload/merge that Archive folder into M-J Site Backups in OneDrive, then verify it there. Nothing was deleted from Supabase.`;
+    statusEl.textContent = `Export complete: ${total.toLocaleString()} loads written locally. In File Explorer, open the folder you selected (${selectedLabel}) and then open Archive. You should see ${markerName}, Last Archive Run.json, and the dated archive folders. Nothing was deleted from Supabase.`;
   } catch (error) {
     if (error?.name === "AbortError") {
       statusEl.textContent = "Export cancelled. Nothing was changed in Supabase.";
     } else {
       console.error("Archive export failed:", error);
-      statusEl.textContent = `Export stopped: ${error.message || error}. Nothing was deleted from Supabase.`;
+      statusEl.textContent = `Local export stopped: ${error.message || error}. No Supabase records were deleted. If an Archive folder was created, it may contain the write-test file and any files completed before the error.`;
     }
   } finally {
     progressEl.classList.add("hidden");
