@@ -29,7 +29,7 @@
     <div class="toolbar" style="padding:0 0 12px; border:0;">
       <div class="toolbar-left">
         <h1 style="margin:0;">Historical Load Archive</h1>
-        <div class="subtext">Admin/IT only. Export complete load records older than six months to a local folder for browser upload to OneDrive.</div>
+        <div class="subtext">Admin/IT only. Export complete records older than six months from every active customer/location to a local folder.</div>
       </div>
     </div>
 
@@ -61,22 +61,22 @@
     <div class="archive-panel">
       <strong>Archive layout</strong>
       <pre style="margin:10px 0 0; font-size:12px; overflow:auto;">Archive/
-  YYYY/
-    MM-Month/
+  Kroger/
+    Atlanta/
       YYYY-MM-DD/
         Daily Summary.csv
         Load ###### - Driver Name/
-          Load Details.json
-          Load Details.csv
-          Routes.csv
-          Stops.csv
-          Notes.csv
-          Change History.csv
-          Accounting.csv
-          Accounting Routes.csv
-          Attachments.csv
-          Archive Manifest.json
-          Documents/</pre>
+          ...existing archive files...
+    Building C/
+    Delaware/
+    Houston/
+  Mondelez/
+    West Chester/
+    Morris/
+    Boise/
+    Kent/
+    Las Vegas/
+    ...other/future locations automatically...</pre>
       <progress id="archive-progress" class="archive-progress hidden" value="0" max="100"></progress>
     </div>
   </main>
