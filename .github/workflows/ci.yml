@@ -29,8 +29,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Generate lockfile security fix
+        run: npm audit fix --package-lock-only
+
+      - name: Reinstall fixed dependency tree
+        run: npm ci
+
       - name: Audit dependencies
         run: npm audit --audit-level=high
 
       - name: Build site
         run: npm run build
+
+      - name: Upload fixed lockfile
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixed-package-lock
+          path: package-lock.json
+          if-no-files-found: error
