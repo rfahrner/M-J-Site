@@ -34,7 +34,7 @@
     </div>
 
     <div class="archive-warning">
-      Exporting is non-destructive. This page does not delete Supabase records. After you upload and verify the archive in OneDrive, purge will remain a separate controlled step.
+      Exporting itself is non-destructive. After a successful export, you can optionally confirm that the OneDrive copy was uploaded and verified, then purge only the exact records included in that export. Analytics history is preserved before deletion.
     </div>
 
     <div class="archive-panel">
@@ -76,13 +76,16 @@
     Boise/
     Kent/
     Las Vegas/
-    ...other/future locations automatically...</pre>
+    ...other/future locations automatically...
+  Last Archive Run.json
+  Last Purge Run.json   (after a verified purge)</pre>
       <progress id="archive-progress" class="archive-progress hidden" value="0" max="100"></progress>
     </div>
   </main>
 
   <script src="supabase.min.js"></script>
   <script type="module" src="archive-nav.js"></script>
+  <script type="module" src="archive-purge.js"></script>
   <script type="module" src="archive-page.js"></script>
 </body>
 </html>
