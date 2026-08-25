@@ -1,51 +1,56 @@
-# Sample workflow for building and deploying a Jekyll site to GitHub Pages
-name: Deploy Jekyll with GitHub Pages dependencies preinstalled
+# M-J Site
 
-on:
-  # Runs on pushes targeting the default branch
-  push:
-    branches: ["main"]
+D&L Transport's internal dispatch web application for load boards, accounting, driver/location analytics, alerts, and verified local archival.
 
-  # Allows you to run this workflow manually from the Actions tab
-  workflow_dispatch:
+Production site: https://rfahrner.github.io/M-J-Site/
 
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+## Stack
 
-# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
-# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
+- Static HTML, CSS, and JavaScript
+- Supabase for Auth, Postgres, Storage, and application data
+- Vite for local development and build validation
+- GitHub Pages for hosting
 
-jobs:
-  # Build job
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-      - name: Build with Jekyll
-        uses: actions/jekyll-build-pages@v1
-        with:
-          source: ./
-          destination: ./_site
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+## Local development
 
-  # Deployment job
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+Use Node.js 22.12 or newer.
+
+```bash
+npm ci
+npm run dev
+```
+
+Vite serves the site on `http://127.0.0.1:5173` by default.
+
+## Build
+
+```bash
+npm run build
+```
+
+The Vite config automatically includes every top-level `.html` page, so new pages do not need to be manually added to the build configuration. Build output is written to `dist/`.
+
+GitHub Actions runs `npm ci` and `npm run build` on pull requests and pushes to `main`. The CI workflow validates the site; it does not replace the repository's existing GitHub Pages publishing configuration.
+
+## Supabase and secrets
+
+The browser application must use only Supabase publishable/public client credentials. Never place a Supabase `service_role` or other secret key in browser code or commit it to this repository.
+
+Legacy command-line archive scripts under `scripts/` require local environment variables when used. Copy `.env.example` to a local `.env` only if you need those scripts; `.env*` files are ignored by Git except for the example file.
+
+## Archive and historical imports
+
+The supported archive workflow is the browser Archive page, including local export, verification, and exact-record purge controls.
+
+Before loading historical data, read [`docs/HISTORICAL_IMPORT_CONTRACT.md`](docs/HISTORICAL_IMPORT_CONTRACT.md).
+
+## Repository hygiene
+
+Generated dependencies and build output are intentionally not tracked:
+
+- `node_modules/`
+- `dist/`
+- `.vite/`
+- local `.env*` files
+
+Install dependencies from `package-lock.json` with `npm ci` instead of committing generated dependency folders.
