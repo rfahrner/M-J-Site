@@ -185,13 +185,13 @@
   (async function init() {
     const { data } = await client.auth.getSession();
     if (!data?.session) {
-      window.location.href = "login.html";
+      window.location.href = "login.html?next=security.html";
       return;
     }
     try {
       const { data: aal } = await client.auth.mfa.getAuthenticatorAssuranceLevel();
       if (aal?.nextLevel === "aal2" && aal.currentLevel !== "aal2") {
-        window.location.href = "login.html";
+        window.location.href = "login.html?next=security.html";
         return;
       }
       await refreshState();
