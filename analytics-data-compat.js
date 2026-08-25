@@ -9,6 +9,8 @@
     loads_shifts: 'analytics_shifts_all',
     loads_trips: 'analytics_trips_all',
     loads_accounting: 'analytics_accounting_all',
+    loads_houston: 'analytics_houston_all',
+    mondelez_loads: 'analytics_mondelez_all',
   };
 
   function wrapClient(client) {
