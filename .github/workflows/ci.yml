@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -17,8 +17,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout feature branch
         uses: actions/checkout@v7
+        with:
+          ref: chore/repo-deployment-cleanup
 
       - name: Setup Node
         uses: actions/setup-node@v7
@@ -32,7 +34,20 @@ jobs:
       - name: Generate lockfile security fix
         run: npm audit fix --package-lock-only
 
-      - name: Reinstall fixed dependency tree
+      - name: Commit repaired lockfile
+        shell: bash
+        run: |
+          if git diff --quiet -- package-lock.json; then
+            echo "package-lock.json is already clean"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "Update audited dependency lockfile"
+          git push origin HEAD:chore/repo-deployment-cleanup
+
+      - name: Install repaired dependency tree
         run: npm ci
 
       - name: Audit dependencies
@@ -40,10 +55,3 @@ jobs:
 
       - name: Build site
         run: npm run build
-
-      - name: Upload fixed lockfile
-        uses: actions/upload-artifact@v7
-        with:
-          name: fixed-package-lock
-          path: package-lock.json
-          if-no-files-found: error
