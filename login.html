@@ -17,6 +17,7 @@
   .auth-error { color:#b91c1c; font-size:13px; margin-top:12px; min-height:16px; }
   .hidden { display:none !important; }
   .mfa-hint { font-size:13px; color:#475569; margin:0 0 14px; line-height:1.4; }
+  .security-link { display:block; text-align:center; margin-top:14px; font-size:13px; color:#475569; }
 </style>
 </head>
 <body>
@@ -31,6 +32,7 @@
         <button type="submit" class="btn" id="login-submit">Sign In</button>
         <div id="login-error" class="auth-error"></div>
       </form>
+      <a class="security-link" href="login.html?next=security.html">Account security / set up MFA</a>
     </div>
 
     <div id="mfa-step" class="hidden">
@@ -50,6 +52,8 @@
     const SUPABASE_URL = "https://ygsapysqzwrpcimgvaqx.supabase.co";
     const SUPABASE_KEY = "sb_publishable_8b8bSIiYm5TzLTw0WG1pAw_5ZWW5ZPL";
     const USERNAME_DOMAIN = "dltransport.local";
+    const requestedNext = new URLSearchParams(window.location.search).get("next");
+    const nextPage = requestedNext === "security.html" ? "security.html" : "index.html";
     const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
       auth: { persistSession:true, autoRefreshToken:true, storageKey:"dl-dispatch-auth" },
     });
@@ -79,7 +83,7 @@
         mfaCode.focus();
         return;
       }
-      window.location.href = "index.html";
+      window.location.href = nextPage;
     }
 
     supabaseClient.auth.getSession().then(async ({ data }) => {
@@ -130,7 +134,7 @@
         if (challengeError) throw challengeError;
         const { error: verifyError } = await supabaseClient.auth.mfa.verify({ factorId: factor.id, challengeId: challenge.id, code });
         if (verifyError) throw verifyError;
-        window.location.href = "index.html";
+        window.location.href = nextPage;
       } catch (error) {
         console.error("MFA verification failed:", error);
         mfaError.textContent = "That code could not be verified. Try the current code from your authenticator app.";
