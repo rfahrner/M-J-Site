@@ -34,15 +34,23 @@
   }
 
   function patchCreateClient() {
-    if (!window.supabase || typeof window.supabase.createClient !== 'function') return false;
-    if (window.supabase.createClient.__analyticsCompatWrapped) return true;
+    const sdk = window.supabase;
+    if (!sdk || typeof sdk.createClient !== 'function') return false;
+    if (sdk.createClient.__analyticsCompatWrapped) return true;
 
-    const originalCreateClient = window.supabase.createClient.bind(window.supabase);
+    const originalCreateClient = sdk.createClient.bind(sdk);
     const wrapped = function (...args) {
       return wrapClient(originalCreateClient(...args));
     };
     wrapped.__analyticsCompatWrapped = true;
-    window.supabase.createClient = wrapped;
+
+    // The bundled Supabase SDK exposes createClient as a getter-only property.
+    // Replacing the global SDK object is reliable; assigning sdk.createClient
+    // directly can silently fail in classic scripts or throw in strict mode.
+    window.supabase = {
+      ...sdk,
+      createClient: wrapped,
+    };
     return true;
   }
 
