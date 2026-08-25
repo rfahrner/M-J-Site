@@ -1,6 +1,5 @@
 const ARCHIVE_SUPABASE_URL = "https://ygsapysqzwrpcimgvaqx.supabase.co";
 const ARCHIVE_SUPABASE_KEY = "sb_publishable_8b8bSIiYm5TzLTw0WG1pAw_5ZWW5ZPL";
-const ARCHIVE_LOCATIONS = ["atlanta", "buildingc", "delaware"];
 const ARCHIVE_ROLE_TABLE = "user_roles";
 const ARCHIVE_STORAGE_KEY = "dl-dispatch-auth";
 
@@ -35,8 +34,6 @@ function addArchiveAdminLink() {
   link.className = "tab-btn";
   link.style.marginLeft = "auto";
 
-  // Log Out previously owned the auto margin that pushed it to the far
-  // right. Move that spacing to Archive so the two controls stay together.
   logout.style.marginLeft = "0";
   tabs.insertBefore(link, logout);
   return true;
@@ -74,7 +71,7 @@ function showArchiveDueBanner({ count, oldestDate, cutoff }) {
 
   const message = document.createElement("div");
   message.style.cssText = "flex:1;min-width:0;";
-  message.innerHTML = `<strong>Historical archive due.</strong> ${count.toLocaleString()} load${count === 1 ? "" : "s"} older than six months ${count === 1 ? "is" : "are"} ready to export. Oldest: ${prettyDate(oldestDate)}.`;
+  message.innerHTML = `<strong>Historical archive due.</strong> ${count.toLocaleString()} load${count === 1 ? "" : "s"} across all locations older than six months ${count === 1 ? "is" : "are"} ready to export. Oldest: ${prettyDate(oldestDate)}.`;
 
   const review = document.createElement("a");
   review.href = "archive.html";
@@ -94,6 +91,14 @@ function showArchiveDueBanner({ count, oldestDate, cutoff }) {
   const topbar = document.querySelector(".topbar");
   if (topbar && topbar.parentNode) topbar.insertAdjacentElement("afterend", banner);
   else document.body.prepend(banner);
+}
+
+async function countEligible(client, table, cutoff, apply = null) {
+  let query = client.from(table).select("shift_date", { count: "exact" }).lt("shift_date", cutoff);
+  if (apply) query = apply(query);
+  const { data, error, count } = await query.order("shift_date", { ascending: true }).limit(1);
+  if (error) throw new Error(`${table}: ${error.message}`);
+  return { count: count || 0, oldest: data?.[0]?.shift_date || null };
 }
 
 async function initArchiveReminder() {
@@ -126,28 +131,22 @@ async function initArchiveReminder() {
   waitForNavAndAddArchiveLink();
 
   const cutoff = archiveCutoffDate();
-  const { data: oldestRows, error: loadError, count } = await client
-    .from("loads_shifts")
-    .select("id,shift_date", { count: "exact" })
-    .in("location", ARCHIVE_LOCATIONS)
-    .lt("shift_date", cutoff)
-    .order("shift_date", { ascending: true })
-    .order("id", { ascending: true })
-    .limit(1);
+  try {
+    const [kroger, houston, mondelez] = await Promise.all([
+      countEligible(client, "loads_shifts", cutoff, (q) => q.in("location", ["atlanta", "buildingc", "delaware"])),
+      countEligible(client, "loads_houston", cutoff),
+      countEligible(client, "mondelez_loads", cutoff),
+    ]);
 
-  if (loadError) {
-    console.error("Archive reminder load check failed:", loadError);
-    return;
-  }
-
-  if ((count || 0) > 0) {
-    showArchiveDueBanner({ count, oldestDate: oldestRows?.[0]?.shift_date || null, cutoff });
+    const count = kroger.count + houston.count + mondelez.count;
+    const oldestDate = [kroger.oldest, houston.oldest, mondelez.oldest].filter(Boolean).sort()[0] || null;
+    if (count > 0) showArchiveDueBanner({ count, oldestDate, cutoff });
+  } catch (error) {
+    console.error("Archive reminder load check failed:", error);
   }
 }
 
 function scheduleArchiveReminder() {
-  // Start after the page load, then wait up to ten seconds for the app's
-  // async auth/database initialization to finish rendering #nav-logout.
   if (document.readyState === "complete") {
     window.setTimeout(() => initArchiveReminder().catch((e) => console.error("Archive reminder failed:", e)), 0);
   } else {
