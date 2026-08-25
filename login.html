@@ -6,65 +6,147 @@
 <title>Sign In — DL Transport Dispatch</title>
 <link rel="stylesheet" href="loadboard.css">
 <style>
-  body { display: flex; align-items: center; justify-content: center; min-height: 100vh; background: var(--slate-100, #f1f5f9); }
-  .login-card { background: #fff; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); padding: 36px 32px; width: 100%; max-width: 360px; }
-  .login-card h1 { font-size: 19px; margin: 0 0 4px; }
-  .login-card .subtext { margin-bottom: 22px; }
-  .login-card .field { margin-bottom: 16px; }
-  .login-card label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 5px; }
-  .login-card input { width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid var(--slate-500, #cbd5e1); border-radius: 6px; font-size: 14px; }
-  .login-card .btn { width: 100%; margin-top: 6px; padding: 10px; }
-  #login-error { color: #b91c1c; font-size: 13px; margin-top: 12px; min-height: 16px; }
+  body { display:flex; align-items:center; justify-content:center; min-height:100vh; background:var(--slate-100,#f1f5f9); }
+  .login-card { background:#fff; border-radius:12px; box-shadow:0 4px 24px rgba(0,0,0,.08); padding:36px 32px; width:100%; max-width:360px; }
+  .login-card h1 { font-size:19px; margin:0 0 4px; }
+  .login-card .subtext { margin-bottom:22px; }
+  .login-card .field { margin-bottom:16px; }
+  .login-card label { display:block; font-size:13px; font-weight:600; margin-bottom:5px; }
+  .login-card input { width:100%; box-sizing:border-box; padding:9px 10px; border:1px solid var(--slate-500,#cbd5e1); border-radius:6px; font-size:14px; }
+  .login-card .btn { width:100%; margin-top:6px; padding:10px; }
+  .auth-error { color:#b91c1c; font-size:13px; margin-top:12px; min-height:16px; }
+  .hidden { display:none !important; }
+  .mfa-hint { font-size:13px; color:#475569; margin:0 0 14px; line-height:1.4; }
+  .security-link { display:block; text-align:center; margin-top:14px; font-size:13px; color:#475569; }
 </style>
 </head>
 <body>
   <div class="login-card">
     <h1>DL Transport Dispatch</h1>
-    <div class="subtext">Sign in to continue</div>
-    <form id="login-form">
-      <div class="field"><label for="login-username">Username</label><input type="text" id="login-username" autocomplete="username" required></div>
-      <div class="field"><label for="login-password">Password</label><input type="password" id="login-password" autocomplete="current-password" required></div>
-      <button type="submit" class="btn" id="login-submit">Sign In</button>
-      <div id="login-error"></div>
-    </form>
+
+    <div id="password-step">
+      <div class="subtext">Sign in to continue</div>
+      <form id="login-form">
+        <div class="field"><label for="login-username">Username</label><input type="text" id="login-username" autocomplete="username" required></div>
+        <div class="field"><label for="login-password">Password</label><input type="password" id="login-password" autocomplete="current-password" required></div>
+        <button type="submit" class="btn" id="login-submit">Sign In</button>
+        <div id="login-error" class="auth-error"></div>
+      </form>
+      <a class="security-link" href="login.html?next=security.html">Account security / set up MFA</a>
+    </div>
+
+    <div id="mfa-step" class="hidden">
+      <div class="subtext">Two-factor authentication</div>
+      <p class="mfa-hint">Enter the 6-digit code from your authenticator app.</p>
+      <form id="mfa-form">
+        <div class="field"><label for="mfa-code">Authentication code</label><input type="text" id="mfa-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required></div>
+        <button type="submit" class="btn" id="mfa-submit">Verify</button>
+        <button type="button" class="btn btn-ghost" id="mfa-cancel">Use a different account</button>
+        <div id="mfa-error" class="auth-error"></div>
+      </form>
+    </div>
   </div>
 
   <script src="supabase.min.js"></script>
   <script>
     const SUPABASE_URL = "https://ygsapysqzwrpcimgvaqx.supabase.co";
     const SUPABASE_KEY = "sb_publishable_8b8bSIiYm5TzLTw0WG1pAw_5ZWW5ZPL";
-    const USERNAME_DOMAIN = "dltransport.local"; // usernames map internally to username@dltransport.local
-
+    const USERNAME_DOMAIN = "dltransport.local";
+    const requestedNext = new URLSearchParams(window.location.search).get("next");
+    const nextPage = requestedNext === "security.html" ? "security.html" : "index.html";
     const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
-      auth: { persistSession: true, autoRefreshToken: true, storageKey: "dl-dispatch-auth" },
+      auth: { persistSession:true, autoRefreshToken:true, storageKey:"dl-dispatch-auth" },
     });
 
-    // Already signed in? Skip straight to the app.
-    supabaseClient.auth.getSession().then(({ data }) => {
-      if (data.session) window.location.href = "index.html";
+    const passwordStep = document.getElementById("password-step");
+    const mfaStep = document.getElementById("mfa-step");
+    const loginForm = document.getElementById("login-form");
+    const loginError = document.getElementById("login-error");
+    const loginSubmit = document.getElementById("login-submit");
+    const mfaForm = document.getElementById("mfa-form");
+    const mfaCode = document.getElementById("mfa-code");
+    const mfaError = document.getElementById("mfa-error");
+    const mfaSubmit = document.getElementById("mfa-submit");
+
+    function showPasswordStep() {
+      mfaStep.classList.add("hidden");
+      passwordStep.classList.remove("hidden");
+    }
+
+    async function continueAfterPassword() {
+      const { data, error } = await supabaseClient.auth.mfa.getAuthenticatorAssuranceLevel();
+      if (error) throw error;
+      if (data?.nextLevel === "aal2" && data?.currentLevel !== "aal2") {
+        passwordStep.classList.add("hidden");
+        mfaStep.classList.remove("hidden");
+        mfaCode.value = "";
+        mfaCode.focus();
+        return;
+      }
+      window.location.href = nextPage;
+    }
+
+    supabaseClient.auth.getSession().then(async ({ data }) => {
+      if (!data?.session) return;
+      try { await continueAfterPassword(); }
+      catch (error) { console.error("MFA state check failed:", error); }
     });
 
-    const form = document.getElementById("login-form");
-    const errorEl = document.getElementById("login-error");
-    const submitBtn = document.getElementById("login-submit");
-
-    form.addEventListener("submit", async (e) => {
+    loginForm.addEventListener("submit", async (e) => {
       e.preventDefault();
-      errorEl.textContent = "";
+      loginError.textContent = "";
       const username = document.getElementById("login-username").value.trim();
       const password = document.getElementById("login-password").value;
       if (!username || !password) return;
-      submitBtn.disabled = true;
-      submitBtn.textContent = "Signing in…";
+      loginSubmit.disabled = true;
+      loginSubmit.textContent = "Signing in…";
       const email = username.includes("@") ? username : `${username}@${USERNAME_DOMAIN}`;
       const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
-      submitBtn.disabled = false;
-      submitBtn.textContent = "Sign In";
+      loginSubmit.disabled = false;
+      loginSubmit.textContent = "Sign In";
       if (error) {
-        errorEl.textContent = "Incorrect username or password.";
+        loginError.textContent = "Incorrect username or password.";
         return;
       }
-      window.location.href = "index.html";
+      try { await continueAfterPassword(); }
+      catch (error) {
+        console.error("MFA check failed:", error);
+        loginError.textContent = "Could not complete sign in. Please try again.";
+      }
+    });
+
+    mfaForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      mfaError.textContent = "";
+      const code = mfaCode.value.replace(/\s+/g, "");
+      if (!/^\d{6}$/.test(code)) {
+        mfaError.textContent = "Enter the 6-digit code from your authenticator app.";
+        return;
+      }
+      mfaSubmit.disabled = true;
+      mfaSubmit.textContent = "Verifying…";
+      try {
+        const { data: factors, error: factorsError } = await supabaseClient.auth.mfa.listFactors();
+        if (factorsError) throw factorsError;
+        const factor = (factors?.totp || []).find((f) => f.status === "verified") || (factors?.totp || [])[0];
+        if (!factor) throw new Error("No authenticator factor found.");
+        const { data: challenge, error: challengeError } = await supabaseClient.auth.mfa.challenge({ factorId: factor.id });
+        if (challengeError) throw challengeError;
+        const { error: verifyError } = await supabaseClient.auth.mfa.verify({ factorId: factor.id, challengeId: challenge.id, code });
+        if (verifyError) throw verifyError;
+        window.location.href = nextPage;
+      } catch (error) {
+        console.error("MFA verification failed:", error);
+        mfaError.textContent = "That code could not be verified. Try the current code from your authenticator app.";
+      } finally {
+        mfaSubmit.disabled = false;
+        mfaSubmit.textContent = "Verify";
+      }
+    });
+
+    document.getElementById("mfa-cancel").addEventListener("click", async () => {
+      await supabaseClient.auth.signOut();
+      showPasswordStep();
     });
   </script>
 </body>
