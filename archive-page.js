@@ -1,9 +1,28 @@
 const SUPABASE_URL = "https://ygsapysqzwrpcimgvaqx.supabase.co";
 const SUPABASE_KEY = "sb_publishable_8b8bSIiYm5TzLTw0WG1pAw_5ZWW5ZPL";
-const INTERNAL_LOCATIONS = ["atlanta", "buildingc", "delaware"];
 const ROUTE_IMAGE_BUCKET = "mondelez-routes";
 const TRIP_SHEET_BUCKET = "trip-sheets";
 const PAGE_SIZE = 1000;
+
+const KROGER_LOCATION_LABELS = {
+  atlanta: "Atlanta",
+  buildingc: "Building C",
+  delaware: "Delaware",
+  houston: "Houston",
+};
+const MONDELEZ_LOCATION_LABELS = {
+  westchester: "West Chester",
+  morris: "Morris",
+  addison: "Addison",
+  indianapolis: "Indianapolis",
+  louisville: "Louisville",
+  spokane: "Spokane",
+  lasvegas: "Las Vegas",
+  boise: "Boise",
+  kent: "Kent",
+  saltlakecity: "Salt Lake City",
+  newberlin: "New Berlin",
+};
 
 const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: "dl-dispatch-auth" },
@@ -29,10 +48,14 @@ function safeName(value, fallback = "Unknown") {
   return s.replace(/[<>:"/\\|?*\x00-\x1F]/g, "-").replace(/\s+/g, " ").slice(0, 120);
 }
 
-function monthFolder(dateKey) {
-  const d = new Date(`${dateKey}T00:00:00`);
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  return `${month}-${d.toLocaleString("en-US", { month: "long" })}`;
+function titleCaseLocation(value) {
+  const raw = String(value || "Unknown").replace(/[_-]+/g, " ").trim();
+  return raw.replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
+function locationLabel(item) {
+  if (item.customer === "Kroger") return KROGER_LOCATION_LABELS[item.location] || titleCaseLocation(item.location);
+  return MONDELEZ_LOCATION_LABELS[item.location] || titleCaseLocation(item.location);
 }
 
 function csvEscape(value) {
@@ -99,42 +122,83 @@ async function getCurrentRole() {
   return data?.[0]?.role || null;
 }
 
-async function getEligibleShifts(cutoff) {
-  return fetchAll("loads_shifts", "*", (q) => q
-    .in("location", INTERNAL_LOCATIONS)
-    .lt("shift_date", cutoff)
-    .order("shift_date", { ascending: true })
-    .order("id", { ascending: true }));
+async function getEligibleRecords(cutoff) {
+  const [krogerRows, houstonRows, mondelezRows] = await Promise.all([
+    fetchAll("loads_shifts", "*", (q) => q
+      .in("location", ["atlanta", "buildingc", "delaware"])
+      .lt("shift_date", cutoff)
+      .order("shift_date", { ascending: true })
+      .order("id", { ascending: true })),
+    fetchAll("loads_houston", "*", (q) => q
+      .lt("shift_date", cutoff)
+      .order("shift_date", { ascending: true })
+      .order("id", { ascending: true })),
+    fetchAll("mondelez_loads", "*", (q) => q
+      .lt("shift_date", cutoff)
+      .order("shift_date", { ascending: true })
+      .order("location", { ascending: true })
+      .order("id", { ascending: true })),
+  ]);
+
+  const items = [
+    ...krogerRows.map((record) => ({ source: "loads_shifts", customer: "Kroger", location: record.location, record })),
+    ...houstonRows.map((record) => ({ source: "loads_houston", customer: "Kroger", location: "houston", record })),
+    ...mondelezRows.map((record) => ({ source: "mondelez_loads", customer: "Mondelez", location: record.location || "unknown", record })),
+  ];
+
+  items.sort((a, b) =>
+    String(a.record.shift_date).localeCompare(String(b.record.shift_date)) ||
+    a.customer.localeCompare(b.customer) ||
+    locationLabel(a).localeCompare(locationLabel(b)) ||
+    Number(a.record.id) - Number(b.record.id));
+
+  return { items, krogerRows, houstonRows, mondelezRows };
 }
 
 async function buildPreview(cutoff) {
-  statusEl.textContent = "Checking historical loads…";
+  statusEl.textContent = "Checking historical loads across all locations…";
   exportBtn.disabled = true;
   currentPreview = null;
 
-  const shifts = await getEligibleShifts(cutoff);
-  const shiftIds = shifts.map((s) => s.id);
-  const [trips, attachments, accounting] = await Promise.all([
+  const eligible = await getEligibleRecords(cutoff);
+  const shiftIds = eligible.krogerRows.map((s) => s.id);
+  const houstonIds = eligible.houstonRows.map((s) => s.id);
+  const [trips, attachments, shiftAccounting, houstonAccounting] = await Promise.all([
     fetchByIds("loads_trips", "shift_id", shiftIds, "id,shift_id,route_id,trip_id,route_miles,stop_count"),
     fetchByIds("load_attachments", "shift_id", shiftIds, "id,shift_id,file_name,file_path"),
     fetchByIds("loads_accounting", "source_shift_id", shiftIds, "id,source_shift_id"),
+    fetchByIds("loads_accounting", "source_houston_id", houstonIds, "id,source_houston_id"),
   ]);
 
-  const oldest = shifts[0]?.shift_date || null;
-  const newest = shifts[shifts.length - 1]?.shift_date || null;
-  currentPreview = { cutoff, shifts, trips, attachments, accounting };
+  const oldest = eligible.items[0]?.record?.shift_date || null;
+  const newest = eligible.items[eligible.items.length - 1]?.record?.shift_date || null;
+  const mondelezRouteCount = eligible.mondelezRows.length;
+  const internalRouteCount = trips.filter((t) => String(t.route_id || t.trip_id || "").trim()).length;
 
-  $("#archive-loads").textContent = shifts.length.toLocaleString();
-  $("#archive-routes").textContent = trips.filter((t) => String(t.route_id || t.trip_id || "").trim()).length.toLocaleString();
+  currentPreview = {
+    cutoff,
+    ...eligible,
+    trips,
+    attachments,
+    accounting: [...shiftAccounting, ...houstonAccounting],
+  };
+
+  $("#archive-loads").textContent = eligible.items.length.toLocaleString();
+  $("#archive-routes").textContent = (internalRouteCount + mondelezRouteCount).toLocaleString();
   $("#archive-attachments").textContent = attachments.length.toLocaleString();
-  $("#archive-accounting").textContent = accounting.length.toLocaleString();
+  $("#archive-accounting").textContent = (shiftAccounting.length + houstonAccounting.length).toLocaleString();
 
-  if (!shifts.length) {
-    statusEl.textContent = `No load-board loads are older than ${cutoff}. Nothing is due yet.`;
+  if (!eligible.items.length) {
+    statusEl.textContent = `No loads from any active location are older than ${cutoff}. Nothing is due yet.`;
     return;
   }
 
-  statusEl.textContent = `${shifts.length.toLocaleString()} loads ready, covering ${oldest} through ${newest}. No Supabase records will be deleted.`;
+  const byCustomer = eligible.items.reduce((acc, item) => {
+    acc[item.customer] = (acc[item.customer] || 0) + 1;
+    return acc;
+  }, {});
+  const breakdown = Object.entries(byCustomer).map(([name, count]) => `${name}: ${count.toLocaleString()}`).join(" • ");
+  statusEl.textContent = `${eligible.items.length.toLocaleString()} loads ready across all locations, covering ${oldest} through ${newest}. ${breakdown}. No Supabase records will be deleted.`;
   exportBtn.disabled = false;
 }
 
@@ -152,9 +216,7 @@ async function writeFile(dir, name, contents) {
 async function verifyLocalWrite(chosenRoot, archiveDir) {
   if (typeof chosenRoot.requestPermission === "function") {
     const permission = await chosenRoot.requestPermission({ mode: "readwrite" });
-    if (permission !== "granted") {
-      throw new Error("Windows/browser did not grant write access to the selected folder.");
-    }
+    if (permission !== "granted") throw new Error("Windows/browser did not grant write access to the selected folder.");
   }
 
   const markerName = "Archive Export Info.txt";
@@ -162,8 +224,8 @@ async function verifyLocalWrite(chosenRoot, archiveDir) {
     "M-J Site archive local-write verification",
     `Selected folder: ${chosenRoot.name || "(browser did not provide a folder name)"}`,
     `Verified at: ${new Date().toISOString()}`,
+    "Archive layout: Customer / Location / Date / Load",
     "If you can read this file in File Explorer, the browser has write access to this Archive folder.",
-    "This file is safe to keep.",
     "",
   ].join("\n");
 
@@ -171,10 +233,7 @@ async function verifyLocalWrite(chosenRoot, archiveDir) {
   const markerHandle = await archiveDir.getFileHandle(markerName);
   const markerFile = await markerHandle.getFile();
   const readBack = await markerFile.text();
-  if (readBack !== markerText) {
-    throw new Error("The browser created the archive test file but could not read back the same contents.");
-  }
-
+  if (readBack !== markerText) throw new Error("The browser created the archive test file but could not read back the same contents.");
   return markerName;
 }
 
@@ -192,7 +251,64 @@ async function downloadStorageObject(bucket, objectPath) {
   return data;
 }
 
-async function loadPackage(shift) {
+async function archiveDateDir(rootArchiveDir, item) {
+  const customerDir = await getOrCreateDir(rootArchiveDir, item.customer);
+  const locationDir = await getOrCreateDir(customerDir, locationLabel(item));
+  return getOrCreateDir(locationDir, item.record.shift_date);
+}
+
+function loadNumberFor(item) {
+  if (item.source === "loads_shifts") return item.record.aljex_load_number || item.record.pro_number || item.record.id;
+  return item.record.aljex_number || item.record.id;
+}
+
+function driverNameFor(item) {
+  if (item.source === "loads_shifts") return item.record.driver_name_text || `Driver ${item.record.driver_id || "Unassigned"}`;
+  return item.record.driver_name || `Driver ${item.record.driver_id || "Unassigned"}`;
+}
+
+function summaryRow(item, pkg = {}) {
+  const record = item.record;
+  const driver = driverNameFor(item);
+  let routes = 0;
+  let miles = 0;
+  let stops = 0;
+  let revenue = 0;
+  let cost = 0;
+
+  if (item.source === "loads_shifts") {
+    routes = (pkg.trips || []).filter((t) => String(t.route_id || t.trip_id || "").trim()).length;
+    miles = (pkg.trips || []).reduce((n, t) => n + (Number(t.route_miles) || 0), 0);
+    stops = (pkg.trips || []).reduce((n, t) => n + (Number(t.stop_count) || 0), 0);
+    revenue = (pkg.accounting || []).reduce((n, a) => n + (Number(a.total_revenue) || 0), 0);
+    cost = (pkg.accounting || []).reduce((n, a) => n + (Number(a.total_cost) || 0), 0);
+  } else if (item.source === "loads_houston") {
+    revenue = (pkg.accounting || []).reduce((n, a) => n + (Number(a.total_revenue) || 0), 0);
+    cost = (pkg.accounting || []).reduce((n, a) => n + (Number(a.total_cost) || 0), 0);
+  } else {
+    routes = 1;
+    miles = Number(record.miles) || 0;
+    stops = Number(record.stop_count) || 0;
+    revenue = Number(record.revenue_total) || 0;
+    cost = Number(record.carrier_pay) || 0;
+  }
+
+  return {
+    Date: record.shift_date,
+    Customer: item.customer,
+    Location: locationLabel(item),
+    "Load #": loadNumberFor(item),
+    Driver: driver,
+    Routes: routes,
+    Miles: miles,
+    Stops: stops,
+    Revenue: revenue,
+    Cost: cost,
+    Margin: revenue - cost,
+  };
+}
+
+async function loadInternalPackage(shift) {
   const trips = await fetchAll("loads_trips", "*", (q) => q.eq("shift_id", shift.id).order("trip_number", { ascending: true }));
   const tripIds = trips.map((t) => t.id);
   const [stops, notes, changes, attachments, accounting] = await Promise.all([
@@ -203,42 +319,31 @@ async function loadPackage(shift) {
     fetchAll("loads_accounting", "*", (q) => q.eq("source_shift_id", shift.id).order("id", { ascending: true })),
   ]);
   const accountingRoutes = await fetchByIds("loads_accounting_routes", "accounting_id", accounting.map((a) => a.id));
-  return { shift, trips, stops, notes, changes, attachments, accounting, accountingRoutes };
+  return { trips, stops, notes, changes, attachments, accounting, accountingRoutes };
 }
 
-function driverNameFor(shift) {
-  return shift.driver_name_text || `Driver ${shift.driver_id || "Unassigned"}`;
+async function loadHoustonPackage(row) {
+  const accounting = await fetchAll("loads_accounting", "*", (q) => q.eq("source_houston_id", row.id).order("id", { ascending: true }));
+  const accountingRoutes = await fetchByIds("loads_accounting_routes", "accounting_id", accounting.map((a) => a.id));
+  return { accounting, accountingRoutes };
 }
 
-function summaryRow(pkg) {
-  const driverName = driverNameFor(pkg.shift);
-  const revenue = pkg.accounting.reduce((n, a) => n + (Number(a.total_revenue) || 0), 0);
-  const cost = pkg.accounting.reduce((n, a) => n + (Number(a.total_cost) || 0), 0);
-  return {
-    Date: pkg.shift.shift_date,
-    Location: pkg.shift.location,
-    "Load #": pkg.shift.aljex_load_number || pkg.shift.pro_number || pkg.shift.id,
-    Driver: driverName,
-    Routes: pkg.trips.filter((t) => String(t.route_id || t.trip_id || "").trim()).length,
-    Miles: pkg.trips.reduce((n, t) => n + (Number(t.route_miles) || 0), 0),
-    Stops: pkg.trips.reduce((n, t) => n + (Number(t.stop_count) || 0), 0),
-    Revenue: revenue,
-    Cost: cost,
-    Margin: revenue - cost,
-  };
+async function writeRouteImage(docsDir, objectPath, prefix = "Route Image") {
+  if (!objectPath) return [];
+  const blob = await downloadStorageObject(ROUTE_IMAGE_BUCKET, objectPath);
+  const name = `${prefix} - ${safeName(objectPath.split("/").pop())}`;
+  await writeBlob(docsDir, name, blob);
+  return [{ bucket: ROUTE_IMAGE_BUCKET, path: objectPath, file: name }];
 }
 
-async function archiveOne(rootArchiveDir, shift, cutoff) {
-  const pkg = await loadPackage(shift);
-  const yearDir = await getOrCreateDir(rootArchiveDir, shift.shift_date.slice(0, 4));
-  const monthDir = await getOrCreateDir(yearDir, monthFolder(shift.shift_date));
-  const dayDir = await getOrCreateDir(monthDir, shift.shift_date);
-  const loadNumber = shift.aljex_load_number || shift.pro_number || shift.id;
-  const driverName = driverNameFor(shift);
-  const loadDir = await getOrCreateDir(dayDir, `Load ${loadNumber} - ${driverName}`);
+async function archiveInternal(rootArchiveDir, item, cutoff) {
+  const shift = item.record;
+  const pkg = await loadInternalPackage(shift);
+  const dayDir = await archiveDateDir(rootArchiveDir, item);
+  const loadDir = await getOrCreateDir(dayDir, `Load ${loadNumberFor(item)} - ${driverNameFor(item)}`);
   const docsDir = await getOrCreateDir(loadDir, "Documents");
 
-  const loadDetails = { ...pkg.shift, driver_name_archive: driverName };
+  const loadDetails = { ...shift, driver_name_archive: driverNameFor(item) };
   await writeFile(loadDir, "Load Details.json", JSON.stringify(loadDetails, null, 2) + "\n");
   await writeFile(loadDir, "Load Details.csv", toCsv(fieldValueRows(loadDetails), ["Field", "Value"]));
   await writeFile(loadDir, "Routes.csv", toCsv(pkg.trips));
@@ -249,16 +354,12 @@ async function archiveOne(rootArchiveDir, shift, cutoff) {
   await writeFile(loadDir, "Accounting Routes.csv", toCsv(pkg.accountingRoutes));
   await writeFile(loadDir, "Attachments.csv", toCsv(pkg.attachments));
 
-  const routeImagePaths = [...new Set([shift.route_image_path, ...pkg.trips.map((t) => t.route_image_path)].filter(Boolean))];
   const documentResults = [];
-
+  const routeImagePaths = [...new Set([shift.route_image_path, ...pkg.trips.map((t) => t.route_image_path)].filter(Boolean))];
   for (const objectPath of routeImagePaths) {
-    const blob = await downloadStorageObject(ROUTE_IMAGE_BUCKET, objectPath);
-    const name = `Route Image - ${safeName(objectPath.split("/").pop())}`;
-    await writeBlob(docsDir, name, blob);
-    documentResults.push({ bucket: ROUTE_IMAGE_BUCKET, path: objectPath, file: name });
+    const result = await writeRouteImage(docsDir, objectPath);
+    documentResults.push(...result);
   }
-
   for (const attachment of pkg.attachments) {
     if (!attachment.file_path) continue;
     const blob = await downloadStorageObject(TRIP_SHEET_BUCKET, attachment.file_path);
@@ -268,32 +369,71 @@ async function archiveOne(rootArchiveDir, shift, cutoff) {
   }
 
   const manifest = {
-    exported_at: new Date().toISOString(),
-    cutoff,
-    source_shift_id: shift.id,
-    shift_date: shift.shift_date,
-    location: shift.location,
-    load_number: loadNumber,
-    driver_name: driverName,
-    counts: {
-      trips: pkg.trips.length,
-      stops: pkg.stops.length,
-      notes: pkg.notes.length,
-      changes: pkg.changes.length,
-      attachments: pkg.attachments.length,
-      accounting: pkg.accounting.length,
-      accounting_routes: pkg.accountingRoutes.length,
-    },
-    documents: documentResults,
-    supabase_deleted: false,
+    exported_at: new Date().toISOString(), cutoff, source_table: item.source, source_id: shift.id,
+    customer: item.customer, location: item.location, location_label: locationLabel(item),
+    shift_date: shift.shift_date, load_number: loadNumberFor(item), driver_name: driverNameFor(item),
+    counts: { trips: pkg.trips.length, stops: pkg.stops.length, notes: pkg.notes.length, changes: pkg.changes.length, attachments: pkg.attachments.length, accounting: pkg.accounting.length, accounting_routes: pkg.accountingRoutes.length },
+    documents: documentResults, supabase_deleted: false,
   };
   await writeFile(loadDir, "Archive Manifest.json", JSON.stringify(manifest, null, 2) + "\n");
+  return { dayDir, groupKey: `${item.customer}|${item.location}|${shift.shift_date}`, summary: summaryRow(item, pkg) };
+}
 
-  return { dayDir, dayKey: shift.shift_date, summary: summaryRow(pkg) };
+async function archiveHouston(rootArchiveDir, item, cutoff) {
+  const row = item.record;
+  const pkg = await loadHoustonPackage(row);
+  const dayDir = await archiveDateDir(rootArchiveDir, item);
+  const loadDir = await getOrCreateDir(dayDir, `Load ${loadNumberFor(item)} - ${driverNameFor(item)}`);
+  const docsDir = await getOrCreateDir(loadDir, "Documents");
+
+  const loadDetails = { ...row, driver_name_archive: driverNameFor(item) };
+  await writeFile(loadDir, "Load Details.json", JSON.stringify(loadDetails, null, 2) + "\n");
+  await writeFile(loadDir, "Load Details.csv", toCsv(fieldValueRows(loadDetails), ["Field", "Value"]));
+  await writeFile(loadDir, "Accounting.csv", toCsv(pkg.accounting));
+  await writeFile(loadDir, "Accounting Routes.csv", toCsv(pkg.accountingRoutes));
+
+  const documents = await writeRouteImage(docsDir, row.route_image_path);
+  const manifest = {
+    exported_at: new Date().toISOString(), cutoff, source_table: item.source, source_id: row.id,
+    customer: item.customer, location: item.location, location_label: locationLabel(item),
+    shift_date: row.shift_date, load_number: loadNumberFor(item), driver_name: driverNameFor(item),
+    counts: { accounting: pkg.accounting.length, accounting_routes: pkg.accountingRoutes.length },
+    documents, supabase_deleted: false,
+  };
+  await writeFile(loadDir, "Archive Manifest.json", JSON.stringify(manifest, null, 2) + "\n");
+  return { dayDir, groupKey: `${item.customer}|${item.location}|${row.shift_date}`, summary: summaryRow(item, pkg) };
+}
+
+async function archiveMondelez(rootArchiveDir, item, cutoff) {
+  const row = item.record;
+  const dayDir = await archiveDateDir(rootArchiveDir, item);
+  const loadDir = await getOrCreateDir(dayDir, `Load ${loadNumberFor(item)} - ${driverNameFor(item)}`);
+  const docsDir = await getOrCreateDir(loadDir, "Documents");
+
+  const loadDetails = { ...row, driver_name_archive: driverNameFor(item) };
+  await writeFile(loadDir, "Load Details.json", JSON.stringify(loadDetails, null, 2) + "\n");
+  await writeFile(loadDir, "Load Details.csv", toCsv(fieldValueRows(loadDetails), ["Field", "Value"]));
+
+  const documents = await writeRouteImage(docsDir, row.route_image_path);
+  const manifest = {
+    exported_at: new Date().toISOString(), cutoff, source_table: item.source, source_id: row.id,
+    customer: item.customer, location: item.location, location_label: locationLabel(item),
+    shift_date: row.shift_date, load_number: loadNumberFor(item), driver_name: driverNameFor(item),
+    documents, supabase_deleted: false,
+  };
+  await writeFile(loadDir, "Archive Manifest.json", JSON.stringify(manifest, null, 2) + "\n");
+  return { dayDir, groupKey: `${item.customer}|${item.location}|${row.shift_date}`, summary: summaryRow(item) };
+}
+
+async function archiveOne(rootArchiveDir, item, cutoff) {
+  if (item.source === "loads_shifts") return archiveInternal(rootArchiveDir, item, cutoff);
+  if (item.source === "loads_houston") return archiveHouston(rootArchiveDir, item, cutoff);
+  if (item.source === "mondelez_loads") return archiveMondelez(rootArchiveDir, item, cutoff);
+  throw new Error(`Unsupported archive source: ${item.source}`);
 }
 
 async function runExport() {
-  if (!currentPreview || !currentPreview.shifts.length) return;
+  if (!currentPreview || !currentPreview.items.length) return;
   if (!("showDirectoryPicker" in window)) {
     statusEl.textContent = "This browser does not support folder export. Use current Chrome or Edge on desktop.";
     return;
@@ -310,23 +450,27 @@ async function runExport() {
     const archiveDir = await getOrCreateDir(chosenRoot, "Archive");
     const markerName = await verifyLocalWrite(chosenRoot, archiveDir);
     const selectedLabel = chosenRoot.name || "selected folder";
-    statusEl.textContent = `Local write verified: ${selectedLabel}\\Archive\\${markerName}. Starting archive export…`;
+    statusEl.textContent = `Local write verified: ${selectedLabel}\\Archive\\${markerName}. Starting all-location archive export…`;
 
     const summariesByDay = new Map();
-    const total = currentPreview.shifts.length;
+    const total = currentPreview.items.length;
+    const locationCounts = {};
 
     for (let i = 0; i < total; i++) {
-      const shift = currentPreview.shifts[i];
-      statusEl.textContent = `Writing to ${selectedLabel}\\Archive — exporting ${i + 1} of ${total}: ${shift.shift_date} — ${shift.aljex_load_number || shift.pro_number || shift.id}`;
-      const result = await archiveOne(archiveDir, shift, currentPreview.cutoff);
-      if (!summariesByDay.has(result.dayKey)) summariesByDay.set(result.dayKey, { dir: result.dayDir, rows: [] });
-      summariesByDay.get(result.dayKey).rows.push(result.summary);
+      const item = currentPreview.items[i];
+      const loc = locationLabel(item);
+      statusEl.textContent = `Writing to ${selectedLabel}\\Archive\\${item.customer}\\${loc} — exporting ${i + 1} of ${total}: ${item.record.shift_date} — ${loadNumberFor(item)}`;
+      const result = await archiveOne(archiveDir, item, currentPreview.cutoff);
+      if (!summariesByDay.has(result.groupKey)) summariesByDay.set(result.groupKey, { dir: result.dayDir, rows: [] });
+      summariesByDay.get(result.groupKey).rows.push(result.summary);
+      const countKey = `${item.customer} / ${loc}`;
+      locationCounts[countKey] = (locationCounts[countKey] || 0) + 1;
       progressEl.value = Math.round(((i + 1) / total) * 100);
     }
 
     for (const { dir, rows } of summariesByDay.values()) {
       await writeFile(dir, "Daily Summary.csv", toCsv(rows, [
-        "Date", "Location", "Load #", "Driver", "Routes", "Miles", "Stops", "Revenue", "Cost", "Margin",
+        "Date", "Customer", "Location", "Load #", "Driver", "Routes", "Miles", "Stops", "Revenue", "Cost", "Margin",
       ]));
     }
 
@@ -334,23 +478,25 @@ async function runExport() {
       completed_at: new Date().toISOString(),
       cutoff: currentPreview.cutoff,
       loads_exported: total,
+      loads_by_location: locationCounts,
       selected_folder_name: selectedLabel,
       local_write_verified: true,
+      folder_layout: "Archive/Customer/Location/YYYY-MM-DD/Load...",
       supabase_deleted: false,
     }, null, 2) + "\n");
 
-    statusEl.textContent = `Export complete: ${total.toLocaleString()} loads written locally. In File Explorer, open the folder you selected (${selectedLabel}) and then open Archive. You should see ${markerName}, Last Archive Run.json, and the dated archive folders. Nothing was deleted from Supabase.`;
+    statusEl.textContent = `Export complete: ${total.toLocaleString()} loads written locally and separated by customer/location. In File Explorer, open ${selectedLabel}\\Archive. Nothing was deleted from Supabase.`;
   } catch (error) {
     if (error?.name === "AbortError") {
       statusEl.textContent = "Export cancelled. Nothing was changed in Supabase.";
     } else {
       console.error("Archive export failed:", error);
-      statusEl.textContent = `Local export stopped: ${error.message || error}. No Supabase records were deleted. If an Archive folder was created, it may contain the write-test file and any files completed before the error.`;
+      statusEl.textContent = `Local export stopped: ${error.message || error}. No Supabase records were deleted. Files completed before the error are safe to keep.`;
     }
   } finally {
     progressEl.classList.add("hidden");
     previewBtn.disabled = false;
-    exportBtn.disabled = !(currentPreview?.shifts?.length);
+    exportBtn.disabled = !(currentPreview?.items?.length);
   }
 }
 
