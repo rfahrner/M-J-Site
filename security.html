@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Security — DL Transport Dispatch</title>
+<link rel="stylesheet" href="loadboard.css">
+<style>
+  body { background:var(--slate-100,#f1f5f9); margin:0; min-height:100vh; }
+  .security-shell { max-width:720px; margin:42px auto; padding:0 18px; }
+  .security-card { background:#fff; border:1px solid #dbe2ea; border-radius:12px; box-shadow:0 4px 18px rgba(0,0,0,.06); padding:28px; }
+  .security-head { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:22px; }
+  .security-head h1 { margin:0; font-size:22px; }
+  .security-status { border-radius:8px; padding:12px 14px; margin:16px 0; background:#f8fafc; border:1px solid #dbe2ea; }
+  .security-status.good { background:#f0fdf4; border-color:#86efac; }
+  .security-status.warn { background:#fff7ed; border-color:#fdba74; }
+  .security-actions { display:flex; gap:10px; flex-wrap:wrap; margin-top:18px; }
+  .setup-box { margin-top:22px; padding-top:22px; border-top:1px solid #e2e8f0; }
+  .qr-wrap { display:flex; justify-content:center; margin:18px 0; }
+  .qr-wrap img { width:220px; max-width:100%; border:10px solid #fff; box-shadow:0 0 0 1px #cbd5e1; }
+  .secret { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; background:#f1f5f9; padding:10px; border-radius:6px; overflow-wrap:anywhere; }
+  .field { margin-top:16px; }
+  .field label { display:block; font-weight:600; font-size:13px; margin-bottom:5px; }
+  .field input { width:100%; max-width:260px; box-sizing:border-box; padding:9px 10px; border:1px solid #cbd5e1; border-radius:6px; font-size:15px; }
+  .message { min-height:20px; margin-top:12px; font-size:13px; }
+  .message.error { color:#b91c1c; }
+  .message.success { color:#166534; }
+  .note { font-size:13px; color:#475569; line-height:1.5; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+  <main class="security-shell">
+    <div class="security-card">
+      <div class="security-head">
+        <div>
+          <h1>Account Security</h1>
+          <div class="subtext">Authenticator-based two-factor authentication</div>
+        </div>
+        <a href="index.html" class="btn btn-ghost">Back to Dispatch</a>
+      </div>
+
+      <div id="security-loading" class="security-status">Checking your security settings…</div>
+
+      <section id="security-content" class="hidden">
+        <div id="mfa-disabled">
+          <div class="security-status warn"><strong>Two-factor authentication is off.</strong><br>Your password is currently the only factor required to sign in.</div>
+          <p class="note">Enable an authenticator app such as Microsoft Authenticator, Google Authenticator, Authy, 1Password, or Apple Passwords. No SMS or Supabase account is required.</p>
+          <div class="security-actions"><button type="button" class="btn" id="start-enroll">Enable two-factor authentication</button></div>
+        </div>
+
+        <div id="mfa-enabled" class="hidden">
+          <div class="security-status good"><strong>Two-factor authentication is enabled.</strong><br>Future sign-ins require a code from your authenticator app after your password.</div>
+          <p class="note">Supabase TOTP does not issue recovery codes. Keep access to your authenticator. If you lose every enrolled factor, an administrator must reset MFA for the account.</p>
+          <div class="security-actions"><button type="button" class="btn btn-ghost" id="disable-mfa" style="color:#b91c1c;border-color:#b91c1c;">Disable two-factor authentication</button></div>
+        </div>
+
+        <div id="enroll-box" class="setup-box hidden">
+          <h2 style="font-size:17px;margin:0 0 8px;">Set up your authenticator</h2>
+          <p class="note">Scan this QR code with your authenticator app. If scanning does not work, enter the secret manually. Then enter the current 6-digit code below.</p>
+          <div class="qr-wrap"><img id="mfa-qr" alt="Authenticator QR code"></div>
+          <div class="note">Manual setup secret:</div>
+          <div class="secret" id="mfa-secret"></div>
+          <form id="verify-enroll-form">
+            <div class="field"><label for="enroll-code">6-digit code</label><input id="enroll-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required></div>
+            <div class="security-actions">
+              <button type="submit" class="btn" id="verify-enroll">Verify & Enable</button>
+              <button type="button" class="btn btn-ghost" id="cancel-enroll">Cancel</button>
+            </div>
+          </form>
+        </div>
+        <div id="security-message" class="message"></div>
+      </section>
+    </div>
+  </main>
+
+<script src="supabase.min.js"></script>
+<script>
+  const SUPABASE_URL = "https://ygsapysqzwrpcimgvaqx.supabase.co";
+  const SUPABASE_KEY = "sb_publishable_8b8bSIiYm5TzLTw0WG1pAw_5ZWW5ZPL";
+  const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+    auth:{ persistSession:true, autoRefreshToken:true, storageKey:"dl-dispatch-auth" },
+  });
+
+  const loading = document.getElementById("security-loading");
+  const content = document.getElementById("security-content");
+  const disabledBox = document.getElementById("mfa-disabled");
+  const enabledBox = document.getElementById("mfa-enabled");
+  const enrollBox = document.getElementById("enroll-box");
+  const message = document.getElementById("security-message");
+  let pendingFactorId = null;
+
+  function setMessage(text, type="") {
+    message.textContent = text || "";
+    message.className = `message${type ? ` ${type}` : ""}`;
+  }
+
+  async function verifiedTotpFactor() {
+    const { data, error } = await client.auth.mfa.listFactors();
+    if (error) throw error;
+    return (data?.totp || []).find((f) => f.status === "verified") || null;
+  }
+
+  async function refreshState() {
+    const factor = await verifiedTotpFactor();
+    disabledBox.classList.toggle("hidden", !!factor);
+    enabledBox.classList.toggle("hidden", !factor);
+    if (factor) enrollBox.classList.add("hidden");
+    return factor;
+  }
+
+  document.getElementById("start-enroll").addEventListener("click", async () => {
+    setMessage("");
+    try {
+      const { data, error } = await client.auth.mfa.enroll({ factorType:"totp", friendlyName:"DL Transport Authenticator" });
+      if (error) throw error;
+      pendingFactorId = data.id;
+      document.getElementById("mfa-qr").src = data.totp.qr_code;
+      document.getElementById("mfa-secret").textContent = data.totp.secret;
+      document.getElementById("enroll-code").value = "";
+      enrollBox.classList.remove("hidden");
+      document.getElementById("enroll-code").focus();
+    } catch (error) {
+      console.error("MFA enrollment failed:", error);
+      setMessage("Could not start two-factor setup. Please try again.", "error");
+    }
+  });
+
+  document.getElementById("verify-enroll-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    setMessage("");
+    const code = document.getElementById("enroll-code").value.replace(/\s+/g, "");
+    if (!pendingFactorId || !/^\d{6}$/.test(code)) {
+      setMessage("Enter the current 6-digit code from your authenticator app.", "error");
+      return;
+    }
+    const btn = document.getElementById("verify-enroll");
+    btn.disabled = true;
+    btn.textContent = "Verifying…";
+    try {
+      const { data: challenge, error: challengeError } = await client.auth.mfa.challenge({ factorId:pendingFactorId });
+      if (challengeError) throw challengeError;
+      const { error: verifyError } = await client.auth.mfa.verify({ factorId:pendingFactorId, challengeId:challenge.id, code });
+      if (verifyError) throw verifyError;
+      pendingFactorId = null;
+      await refreshState();
+      setMessage("Two-factor authentication is now enabled for your account.", "success");
+    } catch (error) {
+      console.error("MFA enrollment verification failed:", error);
+      setMessage("That code could not be verified. Try the newest code shown in your authenticator app.", "error");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Verify & Enable";
+    }
+  });
+
+  document.getElementById("cancel-enroll").addEventListener("click", async () => {
+    const id = pendingFactorId;
+    pendingFactorId = null;
+    enrollBox.classList.add("hidden");
+    setMessage("");
+    if (id) {
+      try { await client.auth.mfa.unenroll({ factorId:id }); }
+      catch (error) { console.warn("Could not remove cancelled MFA factor:", error); }
+    }
+  });
+
+  document.getElementById("disable-mfa").addEventListener("click", async () => {
+    setMessage("");
+    if (!confirm("Disable two-factor authentication for this account?")) return;
+    try {
+      const factor = await verifiedTotpFactor();
+      if (!factor) return refreshState();
+      const { error } = await client.auth.mfa.unenroll({ factorId:factor.id });
+      if (error) throw error;
+      await client.auth.refreshSession();
+      await refreshState();
+      setMessage("Two-factor authentication has been disabled.", "success");
+    } catch (error) {
+      console.error("MFA disable failed:", error);
+      setMessage("Could not disable two-factor authentication. Sign in again and try once more.", "error");
+    }
+  });
+
+  (async function init() {
+    const { data } = await client.auth.getSession();
+    if (!data?.session) {
+      window.location.href = "login.html";
+      return;
+    }
+    try {
+      const { data: aal } = await client.auth.mfa.getAuthenticatorAssuranceLevel();
+      if (aal?.nextLevel === "aal2" && aal.currentLevel !== "aal2") {
+        window.location.href = "login.html";
+        return;
+      }
+      await refreshState();
+      loading.classList.add("hidden");
+      content.classList.remove("hidden");
+    } catch (error) {
+      console.error("Security settings failed:", error);
+      loading.textContent = "Could not load your security settings. Please refresh and try again.";
+    }
+  })();
+</script>
+</body>
+</html>
