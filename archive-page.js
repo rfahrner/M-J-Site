@@ -166,8 +166,8 @@ async function buildPreview(cutoff) {
   const [trips, attachments, shiftAccounting, houstonAccounting] = await Promise.all([
     fetchByIds("loads_trips", "shift_id", shiftIds, "id,shift_id,route_id,trip_id,route_miles,stop_count"),
     fetchByIds("load_attachments", "shift_id", shiftIds, "id,shift_id,file_name,file_path"),
-    fetchByIds("loads_accounting", "source_shift_id", shiftIds, "id,source_shift_id"),
-    fetchByIds("loads_accounting", "source_houston_id", houstonIds, "id,source_houston_id"),
+    fetchByIds("loads_accounting", "source_shift_id", shiftIds, "id,source_shift_id,total_cost,total_revenue"),
+    fetchByIds("loads_accounting", "source_houston_id", houstonIds, "id,source_houston_id,total_cost,total_revenue"),
   ]);
 
   const oldest = eligible.items[0]?.record?.shift_date || null;
@@ -204,6 +204,26 @@ async function buildPreview(cutoff) {
 
 async function getOrCreateDir(parent, name) {
   return parent.getDirectoryHandle(safeName(name), { create: true });
+}
+
+async function getExistingDir(parent, name) {
+  try {
+    return await parent.getDirectoryHandle(safeName(name), { create: false });
+  } catch (error) {
+    if (error?.name === "NotFoundError") return null;
+    throw error;
+  }
+}
+
+async function readJsonFile(dir, name) {
+  try {
+    const handle = await dir.getFileHandle(safeName(name), { create: false });
+    const file = await handle.getFile();
+    return JSON.parse(await file.text());
+  } catch (error) {
+    if (error?.name === "NotFoundError" || error instanceof SyntaxError) return null;
+    throw error;
+  }
 }
 
 async function writeFile(dir, name, contents) {
@@ -257,6 +277,14 @@ async function archiveDateDir(rootArchiveDir, item) {
   return getOrCreateDir(locationDir, item.record.shift_date);
 }
 
+async function existingArchiveDateDir(rootArchiveDir, item) {
+  const customerDir = await getExistingDir(rootArchiveDir, item.customer);
+  if (!customerDir) return null;
+  const locationDir = await getExistingDir(customerDir, locationLabel(item));
+  if (!locationDir) return null;
+  return getExistingDir(locationDir, item.record.shift_date);
+}
+
 function loadNumberFor(item) {
   if (item.source === "loads_shifts") return item.record.aljex_load_number || item.record.pro_number || item.record.id;
   return item.record.aljex_number || item.record.id;
@@ -265,6 +293,22 @@ function loadNumberFor(item) {
 function driverNameFor(item) {
   if (item.source === "loads_shifts") return item.record.driver_name_text || `Driver ${item.record.driver_id || "Unassigned"}`;
   return item.record.driver_name || `Driver ${item.record.driver_id || "Unassigned"}`;
+}
+
+function previewPackageFor(item) {
+  if (!currentPreview) return {};
+  if (item.source === "loads_shifts") {
+    return {
+      trips: currentPreview.trips.filter((row) => Number(row.shift_id) === Number(item.record.id)),
+      accounting: currentPreview.accounting.filter((row) => Number(row.source_shift_id) === Number(item.record.id)),
+    };
+  }
+  if (item.source === "loads_houston") {
+    return {
+      accounting: currentPreview.accounting.filter((row) => Number(row.source_houston_id) === Number(item.record.id)),
+    };
+  }
+  return {};
 }
 
 function summaryRow(item, pkg = {}) {
@@ -305,6 +349,29 @@ function summaryRow(item, pkg = {}) {
     Revenue: revenue,
     Cost: cost,
     Margin: revenue - cost,
+  };
+}
+
+async function findCompletedArchive(rootArchiveDir, item) {
+  const dayDir = await existingArchiveDateDir(rootArchiveDir, item);
+  if (!dayDir) return null;
+  const loadDir = await getExistingDir(dayDir, `Load ${loadNumberFor(item)} - ${driverNameFor(item)}`);
+  if (!loadDir) return null;
+  const manifest = await readJsonFile(loadDir, "Archive Manifest.json");
+  if (!manifest) return null;
+
+  const matches =
+    manifest.exported_at &&
+    manifest.source_table === item.source &&
+    Number(manifest.source_id) === Number(item.record.id) &&
+    String(manifest.shift_date) === String(item.record.shift_date);
+  if (!matches) return null;
+
+  return {
+    dayDir,
+    groupKey: `${item.customer}|${item.location}|${item.record.shift_date}`,
+    summary: summaryRow(item, previewPackageFor(item)),
+    manifest,
   };
 }
 
@@ -455,12 +522,25 @@ async function runExport() {
     const summariesByDay = new Map();
     const total = currentPreview.items.length;
     const locationCounts = {};
+    let exportedCount = 0;
+    let skippedCount = 0;
 
     for (let i = 0; i < total; i++) {
       const item = currentPreview.items[i];
       const loc = locationLabel(item);
-      statusEl.textContent = `Writing to ${selectedLabel}\\Archive\\${item.customer}\\${loc} — exporting ${i + 1} of ${total}: ${item.record.shift_date} — ${loadNumberFor(item)}`;
-      const result = await archiveOne(archiveDir, item, currentPreview.cutoff);
+      const existing = await findCompletedArchive(archiveDir, item);
+      let result;
+
+      if (existing) {
+        skippedCount += 1;
+        result = existing;
+        statusEl.textContent = `Resume check: ${selectedLabel}\\Archive\\${item.customer}\\${loc} — skipped completed load ${i + 1} of ${total}: ${item.record.shift_date} — ${loadNumberFor(item)} (${skippedCount.toLocaleString()} skipped)`;
+      } else {
+        statusEl.textContent = `Writing to ${selectedLabel}\\Archive\\${item.customer}\\${loc} — exporting ${i + 1} of ${total}: ${item.record.shift_date} — ${loadNumberFor(item)}`;
+        result = await archiveOne(archiveDir, item, currentPreview.cutoff);
+        exportedCount += 1;
+      }
+
       if (!summariesByDay.has(result.groupKey)) summariesByDay.set(result.groupKey, { dir: result.dayDir, rows: [] });
       summariesByDay.get(result.groupKey).rows.push(result.summary);
       const countKey = `${item.customer} / ${loc}`;
@@ -477,15 +557,18 @@ async function runExport() {
     await writeFile(archiveDir, "Last Archive Run.json", JSON.stringify({
       completed_at: new Date().toISOString(),
       cutoff: currentPreview.cutoff,
-      loads_exported: total,
+      loads_completed_total: total,
+      loads_exported: exportedCount,
+      loads_skipped_existing: skippedCount,
       loads_by_location: locationCounts,
       selected_folder_name: selectedLabel,
       local_write_verified: true,
+      resume_enabled: true,
       folder_layout: "Archive/Customer/Location/YYYY-MM-DD/Load...",
       supabase_deleted: false,
     }, null, 2) + "\n");
 
-    statusEl.textContent = `Export complete: ${total.toLocaleString()} loads written locally and separated by customer/location. In File Explorer, open ${selectedLabel}\\Archive. Nothing was deleted from Supabase.`;
+    statusEl.textContent = `Export complete: ${total.toLocaleString()} loads confirmed in the local archive — ${exportedCount.toLocaleString()} written this run, ${skippedCount.toLocaleString()} already complete and skipped. In File Explorer, open ${selectedLabel}\\Archive. Nothing was deleted from Supabase.`;
   } catch (error) {
     if (error?.name === "AbortError") {
       statusEl.textContent = "Export cancelled. Nothing was changed in Supabase.";
