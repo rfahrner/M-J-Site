@@ -5,6 +5,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Driver List</title>
   <link rel="stylesheet" href="loadboard.css">
+  <style>
+    #activity-rating-sort { white-space: nowrap; }
+    .activity-rating-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 28px;
+      padding: 2px 7px;
+      border: 1px solid var(--line, #dbe2ea);
+      border-radius: 999px;
+      background: var(--slate-100, #f1f5f9);
+      font-weight: 700;
+      cursor: help;
+    }
+    .activity-grade-0 { color: var(--slate-500, #64748b); }
+  </style>
 </head>
 <body>
   <div class="topbar">
@@ -47,6 +63,7 @@
             <th>Dispatcher Phone</th>
             <th>Email</th><th>2nd Email</th>
             <th class="sortable" data-sort="rating">Rating<span class="sort-arrow"></span></th>
+            <th class="sortable" id="activity-rating-sort" title="Carrier activity: days with at least one load out of the last 60 operating days">Activity Rating<span class="sort-arrow"></span></th>
             <th class="sortable" data-sort="normalRate">Rate<span class="sort-arrow"></span></th>
             <th class="sortable" data-sort="carrier">Carrier<span class="sort-arrow"></span></th>
             <th>Rate/Booking Contact</th>
@@ -238,5 +255,6 @@
   </div>
   <script src="supabase.min.js"></script>
   <script type="module" src="loadboard.js" defer></script>
+  <script type="module" src="driver-activity.js" defer></script>
 </body>
 </html>
