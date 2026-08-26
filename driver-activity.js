@@ -2,7 +2,7 @@ import { supabaseClient, driversForLocation } from './loadboard.js';
 
 const ACTIVITY_VIEW = 'driver_carrier_activity_ratings';
 const REFRESH_MS = 5 * 60 * 1000;
-const VALID_SCOPES = new Set(['atlanta', 'delaware', 'houston', 'mondelez']);
+const VALID_SCOPES = new Set(['atlanta', 'buildingc', 'delaware', 'houston', 'mondelez']);
 
 let activityLoaded = false;
 let activityRows = new Map();
@@ -31,18 +31,29 @@ function driverPoolForScope(scope) {
   return scope === 'preferred' ? allKnownDrivers() : driversForLocation(scope);
 }
 
+function profileRunScopes(driver) {
+  const runsOutOf = Array.isArray(driver?.runsOutOf) ? driver.runsOutOf : [];
+  return [...new Set(runsOutOf.map((value) => String(value || '').toLowerCase()).filter((value) => VALID_SCOPES.has(value)))];
+}
+
 function activityScopeForDriver(driver, selectedScope) {
+  // Normal location tabs rate the driver only against that location's own
+  // operating days. The Atlanta tab is visually shared with Building C, so
+  // a future Building-C-only profile should still use Building C math.
+  if (selectedScope === 'atlanta') {
+    const runScopes = profileRunScopes(driver);
+    if (runScopes.includes('buildingc') && !runScopes.includes('atlanta')) return 'buildingc';
+    return 'atlanta';
+  }
   if (VALID_SCOPES.has(selectedScope)) return selectedScope;
 
-  // Preferred Drivers is not itself an operating location. Use the driver's
-  // primary/home location there, with runs_out_of as a fallback.
+  // Preferred Drivers is not an operating location. Only use a rating when
+  // the profile identifies one unambiguous operating location. Do not quietly
+  // assume Atlanta for profiles with no run location or several run locations.
   const home = String(driver?.location || '').toLowerCase();
-  if (home === 'buildingc' || home === 'atlanta') return 'atlanta';
-  if (home === 'delaware' || home === 'houston') return home;
-  const runsOutOf = Array.isArray(driver?.runsOutOf) ? driver.runsOutOf : [];
-  if (runsOutOf.includes('mondelez')) return 'mondelez';
-  if (runsOutOf.includes('houston')) return 'houston';
-  return 'atlanta';
+  if (VALID_SCOPES.has(home)) return home;
+  const runScopes = profileRunScopes(driver);
+  return runScopes.length === 1 ? runScopes[0] : null;
 }
 
 function activityForDriver(driver, selectedScope) {
@@ -62,6 +73,16 @@ function activityForDriver(driver, selectedScope) {
   }
 
   const scope = activityScopeForDriver(driver, selectedScope);
+  if (!scope) {
+    return {
+      grade: '—',
+      activeDays: null,
+      operatingDays: null,
+      percent: null,
+      title: 'No single operating location is set for this driver profile, so an activity rating cannot be calculated here.',
+    };
+  }
+
   const carrierKey = normalizeCarrier(carrier);
   const record = activityRows.get(`${scope}|${carrierKey}`);
   const operatingDays = Number(record?.operating_days ?? operatingDaysByScope.get(scope) ?? 0);
