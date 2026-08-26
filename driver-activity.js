@@ -37,9 +37,13 @@ function profileRunScopes(driver) {
 }
 
 function activityScopeForDriver(driver, selectedScope) {
+  // Preferred Drivers is an Atlanta dispatch list, so always measure it
+  // against Atlanta's qualifying operating-day window and grade scale.
+  if (selectedScope === 'preferred') return 'atlanta';
+
   // Normal location tabs rate the driver only against that location's own
   // operating days. The Atlanta tab is visually shared with Building C, so
-  // a future Building-C-only profile should still use Building C math.
+  // a Building-C-only profile still uses Building C math.
   if (selectedScope === 'atlanta') {
     const runScopes = profileRunScopes(driver);
     if (runScopes.includes('buildingc') && !runScopes.includes('atlanta')) return 'buildingc';
@@ -47,13 +51,7 @@ function activityScopeForDriver(driver, selectedScope) {
   }
   if (VALID_SCOPES.has(selectedScope)) return selectedScope;
 
-  // Preferred Drivers is not an operating location. Only use a rating when
-  // the profile identifies one unambiguous operating location. Do not quietly
-  // assume Atlanta for profiles with no run location or several run locations.
-  const home = String(driver?.location || '').toLowerCase();
-  if (VALID_SCOPES.has(home)) return home;
-  const runScopes = profileRunScopes(driver);
-  return runScopes.length === 1 ? runScopes[0] : null;
+  return null;
 }
 
 function activityForDriver(driver, selectedScope) {
@@ -79,7 +77,7 @@ function activityForDriver(driver, selectedScope) {
       activeDays: null,
       operatingDays: null,
       percent: null,
-      title: 'No single operating location is set for this driver profile, so an activity rating cannot be calculated here.',
+      title: 'No operating location is available for this activity rating.',
     };
   }
 
