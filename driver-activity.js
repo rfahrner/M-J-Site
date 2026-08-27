@@ -8,6 +8,7 @@ let activityLoaded = false;
 let activityRows = new Map();
 let operatingDaysByScope = new Map();
 let activitySortDir = null;
+let qualitySortDir = null;
 let hydrateQueued = false;
 let tableObserver = null;
 
@@ -17,6 +18,14 @@ function normalizeCarrier(value) {
 
 function normalizeDriverName(value) {
   return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function normalizeMc(value) {
+  return String(value || '').replace(/\D/g, '');
+}
+
+function normalizePhone(value) {
+  return String(value || '').replace(/\D/g, '');
 }
 
 function currentListScope() {
@@ -35,6 +44,14 @@ function isAtlantaCarrierSource(driver) {
   return scopes.includes('atlanta') || scopes.includes('buildingc');
 }
 
+function isCarrierSourceForScope(driver, scope) {
+  if (!driver) return false;
+  if (scope === 'atlanta' || scope === 'buildingc') return isAtlantaCarrierSource(driver);
+  if (scope === 'mondelez') return profileRunScopes(driver).includes('mondelez');
+  if (String(driver.location || '').toLowerCase() === scope) return true;
+  return profileRunScopes(driver).includes(scope);
+}
+
 function chooseCarrier(candidates, scope) {
   const byKey = new Map();
   candidates.forEach((candidate) => {
@@ -48,11 +65,10 @@ function chooseCarrier(candidates, scope) {
   if (!choices.length) return '';
   if (choices.length === 1) return choices[0][1];
 
-  // Duplicate carrier spellings can exist under the same driver/MC. If only
-  // one of the possible names actually has activity in this scope, that is
-  // the useful canonical choice. If several do, only pick one when its
-  // activity history is strictly stronger; otherwise leave it unresolved
-  // rather than silently attaching the wrong carrier.
+  // Duplicate carrier spellings occasionally exist. Prefer a carrier name
+  // that is actually represented in this scope's activity history; if more
+  // than one is represented, only pick the one with strictly more active
+  // days. Otherwise leave it unresolved rather than guessing.
   const withActivity = choices
     .map(([key, display]) => ({ key, display, record: activityRows.get(`${scope}|${key}`) }))
     .filter((item) => item.record);
@@ -65,40 +81,6 @@ function chooseCarrier(candidates, scope) {
   }
 
   return '';
-}
-
-function resolveCarrierForActivity(driver, selectedScope) {
-  const direct = String(driver?.carrier || '').trim();
-  if (direct) return { carrier: direct, inherited: false };
-  if (selectedScope !== 'preferred' || !driver) return { carrier: '', inherited: false };
-
-  const driverName = normalizeDriverName(driver.name);
-  const mc = String(driver.mc || '').trim();
-  const sources = (state?.drivers || []).filter((candidate) =>
-    String(candidate.id) !== String(driver.id)
-    && isAtlantaCarrierSource(candidate)
-    && String(candidate.carrier || '').trim()
-  );
-
-  const stages = [
-    // Strongest identity: same person name and same MC.
-    sources.filter((candidate) => driverName && mc
-      && normalizeDriverName(candidate.name) === driverName
-      && String(candidate.mc || '').trim() === mc),
-    // Imported Preferred rows often duplicate the Atlanta row by name even
-    // when one side is missing or has a stale MC.
-    sources.filter((candidate) => driverName && normalizeDriverName(candidate.name) === driverName),
-    // MC identifies the carrier company. Only use this stage if it resolves
-    // unambiguously (chooseCarrier enforces that).
-    sources.filter((candidate) => mc && String(candidate.mc || '').trim() === mc),
-  ];
-
-  for (const candidates of stages) {
-    const carrier = chooseCarrier(candidates, 'atlanta');
-    if (carrier) return { carrier, inherited: true };
-  }
-
-  return { carrier: '', inherited: false };
 }
 
 function activityScopeForDriver(driver, selectedScope) {
@@ -119,23 +101,276 @@ function activityScopeForDriver(driver, selectedScope) {
   return null;
 }
 
+function resolveCarrierForActivity(driver, selectedScope) {
+  const direct = String(driver?.carrier || '').trim();
+  if (direct) return { carrier: direct, inherited: false };
+  if (!driver) return { carrier: '', inherited: false };
+
+  const scope = activityScopeForDriver(driver, selectedScope);
+  if (!scope) return { carrier: '', inherited: false };
+
+  const driverName = normalizeDriverName(driver.name);
+  const mc = normalizeMc(driver.mc);
+  const sources = (state?.drivers || []).filter((candidate) =>
+    String(candidate.id) !== String(driver.id)
+    && isCarrierSourceForScope(candidate, scope)
+    && String(candidate.carrier || '').trim()
+  );
+
+  const stages = [
+    // Strongest identity: same person and same MC.
+    sources.filter((candidate) => driverName && mc
+      && normalizeDriverName(candidate.name) === driverName
+      && normalizeMc(candidate.mc) === mc),
+    // MC is a carrier identifier, so this is especially useful after the
+    // history-based MC backfill for profiles whose Carrier box was blank.
+    sources.filter((candidate) => mc && normalizeMc(candidate.mc) === mc),
+    // Exact driver-name fallback for older imported duplicates with no MC.
+    sources.filter((candidate) => driverName && normalizeDriverName(candidate.name) === driverName),
+  ];
+
+  for (const candidates of stages) {
+    const carrier = chooseCarrier(candidates, scope);
+    if (carrier) return { carrier, inherited: true };
+  }
+
+  return { carrier: '', inherited: false };
+}
+
+// ---------------------------------------------------------------------------
+// Manual driver-quality Rating
+// ---------------------------------------------------------------------------
+// Atlanta / Building C no longer owns an independent manual rating. Preferred
+// Drivers is the source of truth: if an Atlanta driver is not represented in
+// Preferred (or the Preferred copy has no rating), the Atlanta list shows no
+// manual rating. Activity Rating remains completely separate and automatic.
+
+function preferredDrivers() {
+  return (state?.drivers || []).filter((driver) => String(driver.location || '').toLowerCase() === 'preferred');
+}
+
+function choosePreferredRating(candidates) {
+  const values = new Map();
+  candidates.forEach((candidate) => {
+    const rating = String(candidate?.rating || '').trim();
+    if (!rating) return;
+    const key = rating.toUpperCase();
+    if (!values.has(key)) values.set(key, rating);
+  });
+  if (values.size !== 1) return null;
+  return [...values.values()][0];
+}
+
+function resolvePreferredRating(driver) {
+  if (!driver) return null;
+  const name = normalizeDriverName(driver.name);
+  const mc = normalizeMc(driver.mc);
+  const phone = normalizePhone(driver.phone);
+  const preferred = preferredDrivers();
+
+  const stages = [
+    // Same person + MC is the strongest cross-list identity.
+    preferred.filter((candidate) => name && mc
+      && normalizeDriverName(candidate.name) === name
+      && normalizeMc(candidate.mc) === mc),
+    // Name + phone survives old rows where one copy was missing an MC.
+    preferred.filter((candidate) => name && phone
+      && normalizeDriverName(candidate.name) === name
+      && normalizePhone(candidate.phone) === phone),
+    // Exact normalized name is the practical fallback for the imported lists.
+    // choosePreferredRating refuses to choose if duplicate Preferred rows
+    // disagree about the rating.
+    preferred.filter((candidate) => name && normalizeDriverName(candidate.name) === name),
+    // Phone-only is allowed only when all matching Preferred rows agree.
+    preferred.filter((candidate) => phone && normalizePhone(candidate.phone) === phone),
+  ];
+
+  for (const candidates of stages) {
+    const rating = choosePreferredRating(candidates);
+    if (rating) return rating;
+  }
+  return null;
+}
+
+function qualityRatingForDriver(driver, selectedScope) {
+  if (!driver) return null;
+  if (selectedScope === 'atlanta') return resolvePreferredRating(driver);
+  return String(driver.rating || '').trim() || null;
+}
+
+function qualityRatingInfo(driver, selectedScope) {
+  const rating = qualityRatingForDriver(driver, selectedScope);
+  if (selectedScope !== 'atlanta') {
+    return {
+      rating,
+      title: rating ? `Driver rating: ${rating}` : 'No manual driver rating is on file.',
+    };
+  }
+  return {
+    rating,
+    title: rating
+      ? `Preferred Driver rating: ${rating}`
+      : 'No Preferred Driver rating — this driver is not rated for the Atlanta / Building C call list.',
+  };
+}
+
+function ensureQualityRatingCell(row, driver, selectedScope) {
+  const cell = row.cells[7];
+  if (!cell) return;
+  const info = qualityRatingInfo(driver, selectedScope);
+  cell.classList.add('preferred-quality-rating-cell');
+  cell.dataset.qualityRating = info.rating || '';
+  cell.title = info.title;
+  cell.textContent = info.rating || '—';
+}
+
+function qualityRank(value) {
+  const raw = String(value || '').trim().toUpperCase();
+  if (!raw) return null;
+  if (raw.startsWith('DNU')) return 90;
+  if (raw.startsWith('A')) return 10;
+  if (raw.startsWith('B')) return 20;
+  if (raw.startsWith('C')) return 30;
+  if (raw.startsWith('D')) return 40;
+  if (raw.startsWith('E')) return 50;
+  if (raw.startsWith('F')) return 60;
+  if (raw.startsWith('R')) return 70;
+  return 80;
+}
+
+function sortRowsByQuality() {
+  if (!qualitySortDir || currentListScope() !== 'atlanta') return;
+  const body = document.getElementById('driverlist-table-body');
+  if (!body) return;
+  const rows = [...body.querySelectorAll('tr[id^="dl-"]')];
+  rows.sort((a, b) => {
+    const av = a.querySelector('.preferred-quality-rating-cell')?.dataset.qualityRating || '';
+    const bv = b.querySelector('.preferred-quality-rating-cell')?.dataset.qualityRating || '';
+    const ar = qualityRank(av);
+    const br = qualityRank(bv);
+    if (ar == null && br == null) return rowName(a).localeCompare(rowName(b));
+    if (ar == null) return 1;
+    if (br == null) return -1;
+    if (ar !== br) return qualitySortDir === 'asc' ? ar - br : br - ar;
+    const textCmp = String(av).localeCompare(String(bv), undefined, { sensitivity: 'base', numeric: true });
+    if (textCmp) return qualitySortDir === 'asc' ? textCmp : -textCmp;
+    return rowName(a).localeCompare(rowName(b));
+  });
+
+  if (tableObserver) tableObserver.disconnect();
+  const fragment = document.createDocumentFragment();
+  rows.forEach((row) => fragment.appendChild(row));
+  body.appendChild(fragment);
+  observeTable();
+}
+
+function updateQualityArrow() {
+  const header = document.querySelector('th[data-sort="rating"]');
+  if (!header) return;
+  const arrow = header.querySelector('.sort-arrow');
+  if (!arrow) return;
+  arrow.textContent = qualitySortDir && currentListScope() === 'atlanta'
+    ? (qualitySortDir === 'asc' ? ' ▲' : ' ▼')
+    : '';
+}
+
+// The legacy Text Group implementation reads driver.rating directly. During
+// the two click events where it builds the Rating options / recipient list,
+// temporarily present Atlanta drivers with their Preferred-derived rating.
+// The stored driver objects are restored immediately after the event bubbles,
+// so nothing is written back to the Atlanta Driver Rating column.
+function exposePreferredRatingsForCurrentEvent() {
+  if (currentListScope() !== 'atlanta') return;
+  const snapshots = [];
+  (state?.drivers || []).forEach((driver) => {
+    if (String(driver.location || '').toLowerCase() !== 'atlanta') return;
+    snapshots.push([driver, driver.rating]);
+    driver.rating = resolvePreferredRating(driver);
+  });
+  setTimeout(() => snapshots.forEach(([driver, rating]) => { driver.rating = rating; }), 0);
+}
+
+function configureRatingField(driver, addContext) {
+  const field = document.getElementById('ad-rating');
+  if (!field) return;
+  const label = field.closest('.field')?.querySelector('label');
+  if (label && !label.dataset.originalText) label.dataset.originalText = label.textContent;
+
+  const isAtlantaExisting = driver && String(driver.location || '').toLowerCase() === 'atlanta';
+  const isAtlantaAdd = !driver && ['atlanta', 'buildingc'].includes(String(addContext || '').toLowerCase());
+  if (isAtlantaExisting || isAtlantaAdd) {
+    field.disabled = true;
+    field.value = isAtlantaExisting ? (resolvePreferredRating(driver) || '') : '';
+    field.title = 'Atlanta / Building C ratings are managed from Preferred Drivers.';
+    if (label) label.textContent = 'Driver rating (managed on Preferred Drivers)';
+  } else {
+    field.disabled = false;
+    field.title = '';
+    if (label && label.dataset.originalText) label.textContent = label.dataset.originalText;
+  }
+}
+
+function wirePreferredQualityBehavior() {
+  const thead = document.querySelector('.driverlist thead');
+  if (thead) {
+    thead.addEventListener('click', (event) => {
+      const ratingHeader = event.target.closest('th[data-sort="rating"]');
+      if (ratingHeader && currentListScope() === 'atlanta') {
+        // Take over Atlanta quality sorting because loadboard's native sorter
+        // only knows the dormant Atlanta-side stored rating.
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        activitySortDir = null;
+        qualitySortDir = qualitySortDir === 'asc' ? 'desc' : 'asc';
+        updateActivityArrow();
+        updateQualityArrow();
+        sortRowsByQuality();
+        return;
+      }
+
+      if (event.target.closest('th[data-sort]') || event.target.closest('#activity-rating-sort')) {
+        qualitySortDir = null;
+        updateQualityArrow();
+      }
+    }, true);
+  }
+
+  document.addEventListener('click', (event) => {
+    if (event.target.closest('#btn-text-group') || event.target.closest('#tg-start')) {
+      exposePreferredRatingsForCurrentEvent();
+    }
+
+    const editButton = event.target.closest('[data-action="edit-driver"]');
+    if (editButton) {
+      const driver = findDriver(editButton.dataset.driverId);
+      setTimeout(() => configureRatingField(driver, null), 0);
+    }
+
+    if (event.target.closest('#btn-add-driver')) {
+      const context = state.activeLocation || state.driverListTab || 'atlanta';
+      setTimeout(() => configureRatingField(null, context), 0);
+    }
+
+    // Preserve the dormant Atlanta-side value when an Atlanta profile is
+    // saved. The disabled field shows the Preferred rating for reference,
+    // but the Preferred copy remains the only authoritative source.
+    if (event.target.closest('#ad-submit') && state.editingDriverId) {
+      const driver = findDriver(state.editingDriverId);
+      if (driver && String(driver.location || '').toLowerCase() === 'atlanta') {
+        const field = document.getElementById('ad-rating');
+        if (field) field.value = driver.rating || '';
+      }
+    }
+  }, true);
+}
+
+// ---------------------------------------------------------------------------
+// Activity rating
+// ---------------------------------------------------------------------------
+
 function activityForDriver(driver, selectedScope) {
   if (!activityLoaded) {
     return { grade: '…', activeDays: null, operatingDays: null, percent: null, title: 'Loading carrier activity…' };
-  }
-
-  const resolved = resolveCarrierForActivity(driver, selectedScope);
-  const carrier = resolved.carrier;
-  if (!carrier) {
-    return {
-      grade: '—',
-      activeDays: null,
-      operatingDays: null,
-      percent: null,
-      title: selectedScope === 'preferred'
-        ? 'No matching Atlanta / Building C carrier could be resolved for this Preferred driver.'
-        : 'No carrier is listed for this driver, so a carrier activity rating cannot be calculated.',
-    };
   }
 
   const scope = activityScopeForDriver(driver, selectedScope);
@@ -149,10 +384,22 @@ function activityForDriver(driver, selectedScope) {
     };
   }
 
+  const resolved = resolveCarrierForActivity(driver, selectedScope);
+  const carrier = resolved.carrier;
+  if (!carrier) {
+    return {
+      grade: '—',
+      activeDays: null,
+      operatingDays: null,
+      percent: null,
+      title: 'No carrier could be resolved from this driver profile, MC, or matching profile.',
+    };
+  }
+
   const carrierKey = normalizeCarrier(carrier);
   const record = activityRows.get(`${scope}|${carrierKey}`);
   const operatingDays = Number(record?.operating_days ?? operatingDaysByScope.get(scope) ?? 0);
-  const inheritedNote = resolved.inherited ? ' · carrier inherited from Atlanta / Building C profile' : '';
+  const inheritedNote = resolved.inherited ? ' · carrier inherited from matching profile / MC' : '';
 
   if (!operatingDays) {
     return {
@@ -253,16 +500,11 @@ function hydrateRows() {
 
   const selectedScope = currentListScope();
 
-  // The table row already contains the canonical driver id (`dl-<id>`).
-  // Resolve that id directly from loadboard's full driver state instead of
-  // rebuilding a location pool here. Preferred drivers have `location =
-  // "preferred"`, so reconstructing a pool from only the normal operating
-  // locations caused every Preferred row to be skipped before its activity
-  // cell could be inserted.
   body.querySelectorAll('tr[id^="dl-"]').forEach((row) => {
     const driverId = row.id.slice(3);
     const driver = findDriver(driverId);
     if (!driver) return;
+    ensureQualityRatingCell(row, driver, selectedScope);
     ensureActivityCell(row, activityForDriver(driver, selectedScope));
   });
 
@@ -270,7 +512,9 @@ function hydrateRows() {
   if (emptyCell) emptyCell.colSpan = 15;
 
   updateActivityArrow();
-  sortRowsByActivity();
+  updateQualityArrow();
+  if (activitySortDir) sortRowsByActivity();
+  else sortRowsByQuality();
 }
 
 function scheduleHydrate() {
@@ -326,18 +570,22 @@ function wireSorting() {
   if (!header || !thead) return;
 
   header.addEventListener('click', () => {
+    qualitySortDir = null;
     activitySortDir = activitySortDir === 'desc' ? 'asc' : 'desc';
+    updateQualityArrow();
     updateActivityArrow();
     sortRowsByActivity();
   });
 
   // If the user switches back to one of the existing sort columns, let the
-  // loadboard's normal sorter take over and clear this module's arrow/state.
+  // loadboard's normal sorter take over and clear this module's activity state.
   thead.addEventListener('click', (event) => {
     const otherSort = event.target.closest('th[data-sort]');
     if (!otherSort) return;
-    activitySortDir = null;
-    updateActivityArrow();
+    if (otherSort.dataset.sort !== 'rating' || currentListScope() !== 'atlanta') {
+      activitySortDir = null;
+      updateActivityArrow();
+    }
   }, true);
 }
 
@@ -345,6 +593,7 @@ function initCarrierActivityRatings() {
   if (!document.getElementById('driverlist-table-body')) return;
   observeTable();
   wireSorting();
+  wirePreferredQualityBehavior();
   scheduleHydrate();
   refreshActivityRatings();
   setInterval(refreshActivityRatings, REFRESH_MS);
