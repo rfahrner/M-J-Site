@@ -1,4 +1,4 @@
-import { supabaseClient, driversForLocation } from './loadboard.js';
+import { supabaseClient, findDriver } from './loadboard.js';
 
 const ACTIVITY_VIEW = 'driver_carrier_activity_ratings';
 const REFRESH_MS = 5 * 60 * 1000;
@@ -17,18 +17,6 @@ function normalizeCarrier(value) {
 
 function currentListScope() {
   return document.querySelector('#driverlist-location-tabs .location-tab.is-active')?.dataset.location || 'atlanta';
-}
-
-function allKnownDrivers() {
-  const byId = new Map();
-  ['atlanta', 'delaware', 'houston', 'mondelez'].forEach((scope) => {
-    driversForLocation(scope).forEach((driver) => byId.set(String(driver.id), driver));
-  });
-  return [...byId.values()];
-}
-
-function driverPoolForScope(scope) {
-  return scope === 'preferred' ? allKnownDrivers() : driversForLocation(scope);
 }
 
 function profileRunScopes(driver) {
@@ -183,12 +171,16 @@ function hydrateRows() {
   if (!body) return;
 
   const selectedScope = currentListScope();
-  const drivers = driverPoolForScope(selectedScope);
-  const driversById = new Map(drivers.map((driver) => [String(driver.id), driver]));
 
+  // The table row already contains the canonical driver id (`dl-<id>`).
+  // Resolve that id directly from loadboard's full driver state instead of
+  // rebuilding a location pool here. Preferred drivers have `location =
+  // "preferred"`, so reconstructing a pool from only the normal operating
+  // locations caused every Preferred row to be skipped before its activity
+  // cell could be inserted.
   body.querySelectorAll('tr[id^="dl-"]').forEach((row) => {
     const driverId = row.id.slice(3);
-    const driver = driversById.get(driverId);
+    const driver = findDriver(driverId);
     if (!driver) return;
     ensureActivityCell(row, activityForDriver(driver, selectedScope));
   });
