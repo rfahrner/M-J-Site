@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Accounting</title>
-  <!-- BUILD MARKER: 2026-08-13-b — check View Source / DevTools Elements for this exact string to confirm this file is actually the one loaded -->
+  <!-- BUILD MARKER: 2026-08-27-accounting-columns — check View Source / DevTools Elements for this exact string to confirm this file is actually the one loaded -->
   <link rel="stylesheet" href="loadboard.css">
 </head>
 <body>
@@ -19,7 +19,7 @@
     <div class="toolbar" style="padding-left:0;padding-right:0;border-bottom:none;">
       <div class="toolbar-left">
         <h1 style="margin-top:0;">Accounting</h1>
-        <div class="subtext">Loads land here automatically when marked Shift Complete on any board. Cost/Revenue Level, status, and Total Carrier Pay are editable per load.</div>
+        <div class="subtext">Loads land here automatically when marked Shift Complete on any board. Cost/Revenue Level, status, Customer Rate, and Carrier Rate are editable per load.</div>
       </div>
       <div class="toolbar-actions" style="align-items:center; gap:8px;">
         <label for="fsc-rate-input" style="font-size:12.5px; font-weight:700;">Current FSC Rate</label>
@@ -105,5 +105,6 @@
   </div>
 <script src="supabase.min.js"></script>
 <script type="module" src="loadboard.js" defer></script>
+<script type="module" src="accounting-columns.js" defer></script>
 </body>
 </html>
