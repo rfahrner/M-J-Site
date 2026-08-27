@@ -1,4 +1,4 @@
-import { supabaseClient, findDriver } from './loadboard.js';
+import { supabaseClient, findDriver, state } from './loadboard.js';
 
 const ACTIVITY_VIEW = 'driver_carrier_activity_ratings';
 const REFRESH_MS = 5 * 60 * 1000;
@@ -15,6 +15,10 @@ function normalizeCarrier(value) {
   return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
+function normalizeDriverName(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
 function currentListScope() {
   return document.querySelector('#driverlist-location-tabs .location-tab.is-active')?.dataset.location || 'atlanta';
 }
@@ -22,6 +26,79 @@ function currentListScope() {
 function profileRunScopes(driver) {
   const runsOutOf = Array.isArray(driver?.runsOutOf) ? driver.runsOutOf : [];
   return [...new Set(runsOutOf.map((value) => String(value || '').toLowerCase()).filter((value) => VALID_SCOPES.has(value)))];
+}
+
+function isAtlantaCarrierSource(driver) {
+  if (!driver) return false;
+  if (String(driver.location || '').toLowerCase() === 'atlanta') return true;
+  const scopes = profileRunScopes(driver);
+  return scopes.includes('atlanta') || scopes.includes('buildingc');
+}
+
+function chooseCarrier(candidates, scope) {
+  const byKey = new Map();
+  candidates.forEach((candidate) => {
+    const carrier = String(candidate?.carrier || '').trim();
+    if (!carrier) return;
+    const key = normalizeCarrier(carrier);
+    if (!byKey.has(key)) byKey.set(key, carrier);
+  });
+
+  const choices = [...byKey.entries()];
+  if (!choices.length) return '';
+  if (choices.length === 1) return choices[0][1];
+
+  // Duplicate carrier spellings can exist under the same driver/MC. If only
+  // one of the possible names actually has activity in this scope, that is
+  // the useful canonical choice. If several do, only pick one when its
+  // activity history is strictly stronger; otherwise leave it unresolved
+  // rather than silently attaching the wrong carrier.
+  const withActivity = choices
+    .map(([key, display]) => ({ key, display, record: activityRows.get(`${scope}|${key}`) }))
+    .filter((item) => item.record);
+  if (withActivity.length === 1) return withActivity[0].display;
+  if (withActivity.length > 1) {
+    withActivity.sort((a, b) => Number(b.record.active_days || 0) - Number(a.record.active_days || 0));
+    const first = Number(withActivity[0].record.active_days || 0);
+    const second = Number(withActivity[1].record.active_days || 0);
+    if (first > second) return withActivity[0].display;
+  }
+
+  return '';
+}
+
+function resolveCarrierForActivity(driver, selectedScope) {
+  const direct = String(driver?.carrier || '').trim();
+  if (direct) return { carrier: direct, inherited: false };
+  if (selectedScope !== 'preferred' || !driver) return { carrier: '', inherited: false };
+
+  const driverName = normalizeDriverName(driver.name);
+  const mc = String(driver.mc || '').trim();
+  const sources = (state?.drivers || []).filter((candidate) =>
+    String(candidate.id) !== String(driver.id)
+    && isAtlantaCarrierSource(candidate)
+    && String(candidate.carrier || '').trim()
+  );
+
+  const stages = [
+    // Strongest identity: same person name and same MC.
+    sources.filter((candidate) => driverName && mc
+      && normalizeDriverName(candidate.name) === driverName
+      && String(candidate.mc || '').trim() === mc),
+    // Imported Preferred rows often duplicate the Atlanta row by name even
+    // when one side is missing or has a stale MC.
+    sources.filter((candidate) => driverName && normalizeDriverName(candidate.name) === driverName),
+    // MC identifies the carrier company. Only use this stage if it resolves
+    // unambiguously (chooseCarrier enforces that).
+    sources.filter((candidate) => mc && String(candidate.mc || '').trim() === mc),
+  ];
+
+  for (const candidates of stages) {
+    const carrier = chooseCarrier(candidates, 'atlanta');
+    if (carrier) return { carrier, inherited: true };
+  }
+
+  return { carrier: '', inherited: false };
 }
 
 function activityScopeForDriver(driver, selectedScope) {
@@ -47,14 +124,17 @@ function activityForDriver(driver, selectedScope) {
     return { grade: '…', activeDays: null, operatingDays: null, percent: null, title: 'Loading carrier activity…' };
   }
 
-  const carrier = String(driver?.carrier || '').trim();
+  const resolved = resolveCarrierForActivity(driver, selectedScope);
+  const carrier = resolved.carrier;
   if (!carrier) {
     return {
       grade: '—',
       activeDays: null,
       operatingDays: null,
       percent: null,
-      title: 'No carrier is listed for this driver, so a carrier activity rating cannot be calculated.',
+      title: selectedScope === 'preferred'
+        ? 'No matching Atlanta / Building C carrier could be resolved for this Preferred driver.'
+        : 'No carrier is listed for this driver, so a carrier activity rating cannot be calculated.',
     };
   }
 
@@ -72,6 +152,7 @@ function activityForDriver(driver, selectedScope) {
   const carrierKey = normalizeCarrier(carrier);
   const record = activityRows.get(`${scope}|${carrierKey}`);
   const operatingDays = Number(record?.operating_days ?? operatingDaysByScope.get(scope) ?? 0);
+  const inheritedNote = resolved.inherited ? ' · carrier inherited from Atlanta / Building C profile' : '';
 
   if (!operatingDays) {
     return {
@@ -79,7 +160,7 @@ function activityForDriver(driver, selectedScope) {
       activeDays: 0,
       operatingDays: 0,
       percent: 0,
-      title: `0/0 operating days — no activity history is available yet for ${carrier}.`,
+      title: `0/0 operating days — no activity history is available yet for ${carrier}${inheritedNote}.`,
     };
   }
 
@@ -91,7 +172,7 @@ function activityForDriver(driver, selectedScope) {
     activeDays,
     operatingDays,
     percent,
-    title: `${activeDays}/${operatingDays} operating days (${percent.toFixed(1)}%) — ${carrier}`,
+    title: `${activeDays}/${operatingDays} operating days (${percent.toFixed(1)}%) — ${carrier}${inheritedNote}`,
   };
 }
 
