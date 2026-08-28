@@ -1,5 +1,5 @@
 /* ---------------- board alerts: bottom-right notification panel ---------------- */
-import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, parseHHMM, AVG_MPH, minsToClock, escapeHtml, $, openSendTextModal, currentFile, isAccountingUser, isAdminUser, signOut, scrollToAndOutlineShiftRow, renderCalendarGrid, resetCalendarViewMonth} from './loadboard.js';
+import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, parseHHMM, AVG_MPH, minsToClock, escapeHtml, $, openSendTextModal, currentFile, isAccountingUser, isAdminUser, signOut, scrollToAndOutlineShiftRow} from './loadboard.js';
   const ALL_ALERT_LOCATIONS = ["atlanta", "buildingc", "delaware"];
   export const IDLE_THRESHOLD_MIN = 45; // Stage 4: 45 min after shift start, no dispatch yet -- repeats every 45 min after that
   export const PRE_SHIFT_TEXT_LEAD_MIN = 60; // Stage 1: pre-shift ETA text needed 60 min before shift start
@@ -379,103 +379,7 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
       }
     });
   }
-
-  // Calendar markers have one meaning everywhere: a driver was actually
-  // assigned/sent in for that location on that day. A TONU still counts —
-  // the driver was sent in even though no load ran. Truly blank/unassigned
-  // rows do not count, and called-off Kroger shifts do not count because the
-  // driver was never sent in. Historic rows that only have a driver-name
-  // snapshot still count even if their driver_id was never linked.
-  let driverRunCalendarWired = false;
-  let driverRunCalendarRequest = 0;
-
-  function currentDriverRunCalendarSource() {
-    const file = currentFile();
-    const kroger = (location) => ({ table: SHIFTS_TABLE, location, nameColumn: "driver_name_text", calledOffColumn: "called_off" });
-    if (file === "index.html") return kroger("atlanta");
-    if (file === "dalaware.html") return kroger("delaware");
-    if (file === "buildingc.html") return kroger("buildingc");
-    if (file === "houston.html") return { table: "loads_houston", location: null, nameColumn: "driver_name", calledOffColumn: null };
-    if (file === "mondelez.html") {
-      const activeBtn = document.querySelector("#mondelez-location-tabs [data-mdz-tab].is-active");
-      const urlLoc = new URLSearchParams(window.location.search).get("loc");
-      const activeLoc = (activeBtn && activeBtn.dataset.mdzTab) || urlLoc || "westchester";
-      return { table: "mondelez_loads", location: activeLoc === "combined" ? null : activeLoc, nameColumn: "driver_name", calledOffColumn: null };
-    }
-    if (file === "accounting.html") {
-      const loc = state.acctLocationTab || "atlanta";
-      if (loc === "houston") return { table: "loads_houston", location: null, nameColumn: "driver_name", calledOffColumn: null };
-      return kroger(loc);
-    }
-    return null;
-  }
-
-  async function loadDriverRunDatesForCalendar(source) {
-    if (!supabaseClient || !source) return new Set();
-    const PAGE_SIZE = 1000;
-    const dates = new Set();
-    let from = 0;
-    const columns = ["id", "shift_date", "driver_id", source.nameColumn];
-    if (source.calledOffColumn) columns.push(source.calledOffColumn);
-    const selectColumns = [...new Set(columns)].join(",");
-
-    while (true) {
-      let query = supabaseClient
-        .from(source.table)
-        .select(selectColumns)
-        .gte("shift_date", state.minDate)
-        .lte("shift_date", state.maxDate);
-      if (source.location) query = query.eq("location", source.location);
-      query = query.order("id", { ascending: true }).range(from, from + PAGE_SIZE - 1);
-      const { data, error } = await query;
-      if (error) throw error;
-      const rows = data || [];
-      rows.forEach((row) => {
-        const hasDriver = row.driver_id != null || !!String(row[source.nameColumn] || "").trim();
-        const calledOff = source.calledOffColumn ? !!row[source.calledOffColumn] : false;
-        if (row.shift_date && hasDriver && !calledOff) dates.add(row.shift_date);
-      });
-      if (rows.length < PAGE_SIZE) break;
-      from += PAGE_SIZE;
-    }
-    return dates;
-  }
-
-  function wireDriverRunCalendarMarkers() {
-    if (driverRunCalendarWired) return;
-    const input = $("#date-input");
-    const dropdown = $("#date-dropdown");
-    if (!input || !dropdown) return;
-    driverRunCalendarWired = true;
-
-    // Capture-phase interception deliberately runs before each page's older
-    // calendar click handler. That lets every page use one authoritative
-    // marker query without rewriting five separate calendar implementations.
-    input.addEventListener("click", async (e) => {
-      const source = currentDriverRunCalendarSource();
-      if (!source) return;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      const requestId = ++driverRunCalendarRequest;
-      try {
-        const dates = await loadDriverRunDatesForCalendar(source);
-        if (requestId !== driverRunCalendarRequest) return;
-        state.datesWithData = dates;
-        resetCalendarViewMonth();
-        renderCalendarGrid(dates);
-        dropdown.classList.remove("hidden");
-      } catch (err) {
-        console.error("Failed to load driver-run calendar markers:", err);
-        if (requestId !== driverRunCalendarRequest) return;
-        resetCalendarViewMonth();
-        renderCalendarGrid(new Set());
-        dropdown.classList.remove("hidden");
-      }
-    }, true);
-  }
-
   export function startAlertScanning() {
-    wireDriverRunCalendarMarkers();
     if (!$("#alert-widget")) injectAlertWidget();
     refreshBoardAlerts();
     if (alertScanTimer) clearInterval(alertScanTimer);
