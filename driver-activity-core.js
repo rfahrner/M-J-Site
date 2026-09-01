@@ -1,0 +1,357 @@
+import { supabaseClient, findDriver, state } from './loadboard.js';
+
+const ACTIVITY_VIEW = 'driver_carrier_activity_ratings';
+const REFRESH_MS = 5 * 60 * 1000;
+const VALID_SCOPES = new Set(['atlanta', 'buildingc', 'delaware', 'houston', 'mondelez']);
+
+let activityLoaded = false;
+let activityRows = new Map();
+let operatingDaysByScope = new Map();
+let activitySortDir = null;
+let hydrateQueued = false;
+let tableObserver = null;
+
+function normalizeCarrier(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function normalizeDriverName(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function currentListScope() {
+  return document.querySelector('#driverlist-location-tabs .location-tab.is-active')?.dataset.location || 'atlanta';
+}
+
+function profileRunScopes(driver) {
+  const runsOutOf = Array.isArray(driver?.runsOutOf) ? driver.runsOutOf : [];
+  return [...new Set(runsOutOf.map((value) => String(value || '').toLowerCase()).filter((value) => VALID_SCOPES.has(value)))];
+}
+
+function isAtlantaCarrierSource(driver) {
+  if (!driver) return false;
+  if (String(driver.location || '').toLowerCase() === 'atlanta') return true;
+  const scopes = profileRunScopes(driver);
+  return scopes.includes('atlanta') || scopes.includes('buildingc');
+}
+
+function chooseCarrier(candidates, scope) {
+  const byKey = new Map();
+  candidates.forEach((candidate) => {
+    const carrier = String(candidate?.carrier || '').trim();
+    if (!carrier) return;
+    const key = normalizeCarrier(carrier);
+    if (!byKey.has(key)) byKey.set(key, carrier);
+  });
+
+  const choices = [...byKey.entries()];
+  if (!choices.length) return '';
+  if (choices.length === 1) return choices[0][1];
+
+  // Duplicate carrier spellings can exist under the same driver/MC. If only
+  // one of the possible names actually has activity in this scope, that is
+  // the useful canonical choice. If several do, only pick one when its
+  // activity history is strictly stronger; otherwise leave it unresolved
+  // rather than silently attaching the wrong carrier.
+  const withActivity = choices
+    .map(([key, display]) => ({ key, display, record: activityRows.get(`${scope}|${key}`) }))
+    .filter((item) => item.record);
+  if (withActivity.length === 1) return withActivity[0].display;
+  if (withActivity.length > 1) {
+    withActivity.sort((a, b) => Number(b.record.active_days || 0) - Number(a.record.active_days || 0));
+    const first = Number(withActivity[0].record.active_days || 0);
+    const second = Number(withActivity[1].record.active_days || 0);
+    if (first > second) return withActivity[0].display;
+  }
+
+  return '';
+}
+
+function resolveCarrierForActivity(driver, selectedScope) {
+  const direct = String(driver?.carrier || '').trim();
+  if (direct) return { carrier: direct, inherited: false };
+  if (selectedScope !== 'preferred' || !driver) return { carrier: '', inherited: false };
+
+  const driverName = normalizeDriverName(driver.name);
+  const mc = String(driver.mc || '').trim();
+  const sources = (state?.drivers || []).filter((candidate) =>
+    String(candidate.id) !== String(driver.id)
+    && isAtlantaCarrierSource(candidate)
+    && String(candidate.carrier || '').trim()
+  );
+
+  const stages = [
+    // Strongest identity: same person name and same MC.
+    sources.filter((candidate) => driverName && mc
+      && normalizeDriverName(candidate.name) === driverName
+      && String(candidate.mc || '').trim() === mc),
+    // Imported Preferred rows often duplicate the Atlanta row by name even
+    // when one side is missing or has a stale MC.
+    sources.filter((candidate) => driverName && normalizeDriverName(candidate.name) === driverName),
+    // MC identifies the carrier company. Only use this stage if it resolves
+    // unambiguously (chooseCarrier enforces that).
+    sources.filter((candidate) => mc && String(candidate.mc || '').trim() === mc),
+  ];
+
+  for (const candidates of stages) {
+    const carrier = chooseCarrier(candidates, 'atlanta');
+    if (carrier) return { carrier, inherited: true };
+  }
+
+  return { carrier: '', inherited: false };
+}
+
+function activityScopeForDriver(driver, selectedScope) {
+  // Preferred Drivers is an Atlanta dispatch list, so always measure it
+  // against Atlanta's qualifying operating-day window and grade scale.
+  if (selectedScope === 'preferred') return 'atlanta';
+
+  // Normal location tabs rate the driver only against that location's own
+  // operating days. The Atlanta tab is visually shared with Building C, so
+  // a Building-C-only profile still uses Building C math.
+  if (selectedScope === 'atlanta') {
+    const runScopes = profileRunScopes(driver);
+    if (runScopes.includes('buildingc') && !runScopes.includes('atlanta')) return 'buildingc';
+    return 'atlanta';
+  }
+  if (VALID_SCOPES.has(selectedScope)) return selectedScope;
+
+  return null;
+}
+
+function activityForDriver(driver, selectedScope) {
+  if (!activityLoaded) {
+    return { grade: '…', activeDays: null, operatingDays: null, percent: null, title: 'Loading carrier activity…' };
+  }
+
+  const resolved = resolveCarrierForActivity(driver, selectedScope);
+  const carrier = resolved.carrier;
+  if (!carrier) {
+    return {
+      grade: '—',
+      activeDays: null,
+      operatingDays: null,
+      percent: null,
+      title: selectedScope === 'preferred'
+        ? 'No matching Atlanta / Building C carrier could be resolved for this Preferred driver.'
+        : 'No carrier is listed for this driver, so a carrier activity rating cannot be calculated.',
+    };
+  }
+
+  const scope = activityScopeForDriver(driver, selectedScope);
+  if (!scope) {
+    return {
+      grade: '—',
+      activeDays: null,
+      operatingDays: null,
+      percent: null,
+      title: 'No operating location is available for this activity rating.',
+    };
+  }
+
+  const carrierKey = normalizeCarrier(carrier);
+  const record = activityRows.get(`${scope}|${carrierKey}`);
+  const operatingDays = Number(record?.operating_days ?? operatingDaysByScope.get(scope) ?? 0);
+  const inheritedNote = resolved.inherited ? ' · carrier inherited from Atlanta / Building C profile' : '';
+
+  if (!operatingDays) {
+    return {
+      grade: '0',
+      activeDays: 0,
+      operatingDays: 0,
+      percent: 0,
+      title: `0/0 operating days — no activity history is available yet for ${carrier}${inheritedNote}.`,
+    };
+  }
+
+  const activeDays = Number(record?.active_days || 0);
+  const percent = record ? Number(record.activity_percent || 0) : 0;
+  const grade = record?.grade || '0';
+  return {
+    grade,
+    activeDays,
+    operatingDays,
+    percent,
+    title: `${activeDays}/${operatingDays} operating days (${percent.toFixed(1)}%) — ${carrier}${inheritedNote}`,
+  };
+}
+
+function gradeClass(grade) {
+  return /^[A-F0]$/.test(grade) ? ` activity-grade-${grade}` : '';
+}
+
+function ensureActivityCell(row, info) {
+  let cell = row.querySelector('.carrier-activity-cell');
+  if (!cell) {
+    cell = document.createElement('td');
+    cell.className = 'carrier-activity-cell';
+    // Existing layout: Rating is cell 7 and Rate is cell 8. Insert between them.
+    row.insertBefore(cell, row.cells[8] || null);
+  }
+
+  cell.dataset.activityPercent = Number.isFinite(info.percent) ? String(info.percent) : '';
+  cell.innerHTML = `<span class="activity-rating-badge${gradeClass(info.grade)}" title="${escapeAttribute(info.title)}">${escapeHtml(info.grade)}</span>`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function escapeAttribute(value) {
+  return escapeHtml(value).replace(/\n/g, ' ');
+}
+
+function updateActivityArrow() {
+  const header = document.getElementById('activity-rating-sort');
+  if (!header) return;
+  const arrow = header.querySelector('.sort-arrow');
+  if (arrow) arrow.textContent = activitySortDir ? (activitySortDir === 'asc' ? ' ▲' : ' ▼') : '';
+
+  if (activitySortDir) {
+    document.querySelectorAll('th[data-sort] .sort-arrow').forEach((el) => { el.textContent = ''; });
+  }
+}
+
+function sortRowsByActivity() {
+  if (!activitySortDir) return;
+  const body = document.getElementById('driverlist-table-body');
+  if (!body) return;
+
+  const rows = [...body.querySelectorAll('tr[id^="dl-"]')];
+  rows.sort((a, b) => {
+    const av = Number.parseFloat(a.querySelector('.carrier-activity-cell')?.dataset.activityPercent ?? '');
+    const bv = Number.parseFloat(b.querySelector('.carrier-activity-cell')?.dataset.activityPercent ?? '');
+    const aMissing = Number.isNaN(av);
+    const bMissing = Number.isNaN(bv);
+    if (aMissing && bMissing) return rowName(a).localeCompare(rowName(b));
+    if (aMissing) return 1;
+    if (bMissing) return -1;
+    if (av !== bv) return activitySortDir === 'desc' ? bv - av : av - bv;
+    return rowName(a).localeCompare(rowName(b));
+  });
+
+  if (tableObserver) tableObserver.disconnect();
+  const fragment = document.createDocumentFragment();
+  rows.forEach((row) => fragment.appendChild(row));
+  body.appendChild(fragment);
+  observeTable();
+}
+
+function rowName(row) {
+  return String(row.cells[1]?.textContent || '').trim();
+}
+
+function hydrateRows() {
+  hydrateQueued = false;
+  const body = document.getElementById('driverlist-table-body');
+  if (!body) return;
+
+  const selectedScope = currentListScope();
+
+  // The table row already contains the canonical driver id (`dl-<id>`).
+  // Resolve that id directly from loadboard's full driver state instead of
+  // rebuilding a location pool here. Preferred drivers have `location =
+  // "preferred"`, so reconstructing a pool from only the normal operating
+  // locations caused every Preferred row to be skipped before its activity
+  // cell could be inserted.
+  body.querySelectorAll('tr[id^="dl-"]').forEach((row) => {
+    const driverId = row.id.slice(3);
+    const driver = findDriver(driverId);
+    if (!driver) return;
+    ensureActivityCell(row, activityForDriver(driver, selectedScope));
+  });
+
+  const emptyCell = body.querySelector('tr:not([id^="dl-"]) > td[colspan]');
+  if (emptyCell) emptyCell.colSpan = 15;
+
+  updateActivityArrow();
+  sortRowsByActivity();
+}
+
+function scheduleHydrate() {
+  if (hydrateQueued) return;
+  hydrateQueued = true;
+  requestAnimationFrame(hydrateRows);
+}
+
+function observeTable() {
+  const body = document.getElementById('driverlist-table-body');
+  if (!body) return;
+  if (!tableObserver) tableObserver = new MutationObserver(scheduleHydrate);
+  tableObserver.observe(body, { childList: true });
+}
+
+async function waitForSupabaseClient() {
+  for (let i = 0; i < 100; i += 1) {
+    if (supabaseClient) return supabaseClient;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error('Supabase client did not initialize.');
+}
+
+async function refreshActivityRatings() {
+  try {
+    const client = await waitForSupabaseClient();
+    const { data, error } = await client
+      .from(ACTIVITY_VIEW)
+      .select('scope,carrier_key,carrier_display,active_days,operating_days,activity_percent,grade');
+    if (error) throw error;
+
+    const nextRows = new Map();
+    const nextOperatingDays = new Map();
+    (data || []).forEach((row) => {
+      nextRows.set(`${row.scope}|${row.carrier_key}`, row);
+      const current = nextOperatingDays.get(row.scope) || 0;
+      nextOperatingDays.set(row.scope, Math.max(current, Number(row.operating_days || 0)));
+    });
+    activityRows = nextRows;
+    operatingDaysByScope = nextOperatingDays;
+    activityLoaded = true;
+    scheduleHydrate();
+  } catch (error) {
+    console.error('Carrier activity ratings failed to load:', error);
+    activityLoaded = true;
+    scheduleHydrate();
+  }
+}
+
+function wireSorting() {
+  const header = document.getElementById('activity-rating-sort');
+  const thead = document.querySelector('.driverlist thead');
+  if (!header || !thead) return;
+
+  header.addEventListener('click', () => {
+    activitySortDir = activitySortDir === 'desc' ? 'asc' : 'desc';
+    updateActivityArrow();
+    sortRowsByActivity();
+  });
+
+  // If the user switches back to one of the existing sort columns, let the
+  // loadboard's normal sorter take over and clear this module's arrow/state.
+  thead.addEventListener('click', (event) => {
+    const otherSort = event.target.closest('th[data-sort]');
+    if (!otherSort) return;
+    activitySortDir = null;
+    updateActivityArrow();
+  }, true);
+}
+
+function initCarrierActivityRatings() {
+  if (!document.getElementById('driverlist-table-body')) return;
+  observeTable();
+  wireSorting();
+  scheduleHydrate();
+  refreshActivityRatings();
+  setInterval(refreshActivityRatings, REFRESH_MS);
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initCarrierActivityRatings, { once: true });
+} else {
+  initCarrierActivityRatings();
+}
