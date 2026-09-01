@@ -3410,26 +3410,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (!s) return;
     const batch = s.batches[s.batchIndex];
     const addrs = batch.map((d) => formatTextAddress(d.phone)).join(",");
-
-    // Houston group texts must be composed from the MEM/PPW mailbox instead
-    // of whichever Outlook account happens to be the system mailto default.
-    // Keep this scoped to Driver List > Houston so every other board and tab
-    // preserves its existing Outlook/mailto behavior.
-    const isHoustonDriverList = currentFile() === "driverlist.html" && state.driverListTab === "houston";
-    if (isHoustonDriverList) {
-      const mailbox = "memppw@dltransport.com";
-      const params = new URLSearchParams({ to: addrs, body: s.message });
-      window.open(
-        `https://outlook.office.com/mail/${encodeURIComponent(mailbox)}/deeplink/compose?${params.toString()}`,
-        "_blank",
-        "noopener"
-      );
-    } else {
-      const a = document.createElement("a");
-      a.href = `mailto:${addrs}?body=${encodeURIComponent(s.message)}`;
-      a.click();
-    }
-
+    const a = document.createElement("a");
+    a.href = `mailto:${addrs}?body=${encodeURIComponent(s.message)}`;
+    a.click();
     $("#tg-open-batch").classList.add("hidden");
     $("#tg-confirm-sent").classList.remove("hidden");
   }
