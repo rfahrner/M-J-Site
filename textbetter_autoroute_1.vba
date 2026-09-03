@@ -86,9 +86,11 @@ Private Sub TryRouteTextBetterMail(ByVal mail As Outlook.MailItem)
     On Error GoTo SafeExit
 
     If IsTextBetterMail(mail) Then
-        SetTextBetterSendAccount mail
+        ' Stop listening before changing SendUsingAccount; some Outlook builds
+        ' raise another property event for that assignment.
         Set PendingTextBetterMail = Nothing
         Set PendingTextBetterInspector = Nothing
+        SetTextBetterSendAccount mail
     End If
 
 SafeExit:
