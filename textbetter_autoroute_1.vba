@@ -2,14 +2,15 @@ Option Explicit
 
 ' Classic Outlook only. New Outlook for Windows does not support VBA.
 '
-' Text Group fallback messages are created by the site with a mailto: link.
-' Outlook normally opens those from whichever account/profile is currently
-' default. This module switches TextBetter messages to memPPW as the compose
-' inspector opens, rechecks once when the window activates, and repeats the
-' same check at send time as a final safety backstop.
+' Every site fallback addressed to @textbetter.com must send through memPPW.
+' Outlook may populate mailto: recipients after the compose inspector opens,
+' so this module checks at open, activation, recipient-property change, and
+' send time. The extra property-change check prevents a timing miss where a
+' draft initially appears under another Outlook account.
 
 Private WithEvents TextBetterInspectors As Outlook.Inspectors
 Private WithEvents PendingTextBetterInspector As Outlook.Inspector
+Private WithEvents PendingTextBetterMail As Outlook.MailItem
 Private Const TARGET_ACCOUNT As String = "memPPW@dltransport.com"
 Private Const TEXTBETTER_DOMAIN As String = "@textbetter.com"
 
@@ -20,9 +21,12 @@ End Sub
 Private Sub TextBetterInspectors_NewInspector(ByVal Inspector As Outlook.Inspector)
     On Error GoTo SafeExit
 
-    ' Keep the newest compose inspector long enough to recheck on Activate.
-    ' mailto: fields can finish populating after NewInspector is raised.
+    ' Keep the newest compose inspector and mail item long enough to catch
+    ' mailto: recipients that Outlook finishes populating asynchronously.
     Set PendingTextBetterInspector = Inspector
+    If TypeOf Inspector.CurrentItem Is Outlook.MailItem Then
+        Set PendingTextBetterMail = Inspector.CurrentItem
+    End If
     TryRouteTextBetterInspector Inspector
 
 SafeExit:
@@ -33,6 +37,20 @@ Private Sub PendingTextBetterInspector_Activate()
 
     If PendingTextBetterInspector Is Nothing Then Exit Sub
     TryRouteTextBetterInspector PendingTextBetterInspector
+
+SafeExit:
+End Sub
+
+Private Sub PendingTextBetterMail_PropertyChange(ByVal Name As String)
+    On Error GoTo SafeExit
+
+    If PendingTextBetterMail Is Nothing Then Exit Sub
+
+    ' The To property is the key event for drafts created from the site's
+    ' mailto: links. Check every built-in property change as a harmless
+    ' fallback because Outlook versions can report recipient changes
+    ' differently.
+    TryRouteTextBetterMail PendingTextBetterMail
 
 SafeExit:
 End Sub
@@ -59,9 +77,17 @@ Private Sub TryRouteTextBetterInspector(ByVal Inspector As Outlook.Inspector)
 
     Dim mail As Outlook.MailItem
     Set mail = Inspector.CurrentItem
+    TryRouteTextBetterMail mail
+
+SafeExit:
+End Sub
+
+Private Sub TryRouteTextBetterMail(ByVal mail As Outlook.MailItem)
+    On Error GoTo SafeExit
 
     If IsTextBetterMail(mail) Then
         SetTextBetterSendAccount mail
+        Set PendingTextBetterMail = Nothing
         Set PendingTextBetterInspector = Nothing
     End If
 
