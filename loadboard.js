@@ -3433,15 +3433,14 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const dispatchModeCheckbox = $("#tg-dispatch-mode");
     if (dispatchModeCheckbox) dispatchModeCheckbox.checked = true;
 
-    // Dispatch routing and scheduled-driver exclusion are independent
-    // on/off options. Reset exclusion on each open so a prior send cannot
-    // silently carry its date filter into the next group.
+    // Both independent options default on whenever the modal opens.
+    // The exclusion date starts on the user's current local date.
     const excludeScheduledCheckbox = $("#tg-exclude-scheduled");
-    if (excludeScheduledCheckbox) excludeScheduledCheckbox.checked = false;
+    if (excludeScheduledCheckbox) excludeScheduledCheckbox.checked = true;
     const dayWrap = $("#tg-day-wrap");
-    if (dayWrap) dayWrap.classList.remove("tg-day-visible");
+    if (dayWrap) dayWrap.classList.add("tg-day-visible");
     const dayInput = $("#tg-day");
-    if (dayInput) dayInput.value = dateKey(addDays(todayDate(), 1)); // filling tomorrow is the usual reason to ask
+    if (dayInput) dayInput.value = dateKey(todayDate());
     const dayNote = $("#tg-day-note");
     if (dayNote) dayNote.textContent = "Anyone already on a board that day is left out.";
 
