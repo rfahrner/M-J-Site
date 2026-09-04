@@ -197,11 +197,12 @@
           <div class="field">
             <div class="radio-row" style="flex-direction:column; align-items:flex-start; gap:8px;">
               <label><input type="checkbox" id="tg-dispatch-mode" checked> Text dispatch where applicable</label>
-              <label><input type="checkbox" id="tg-exclude-scheduled"> Exclude already scheduled drivers</label>
+              <label><input type="checkbox" id="tg-exclude-scheduled" checked> Exclude already scheduled drivers</label>
             </div>
           </div>
           <style>
             #tg-day-wrap { display: none; margin-top: 8px; align-items: center; gap: 8px; flex-wrap: wrap; }
+            #tg-setup-step:has(#tg-exclude-scheduled:checked) #tg-day-wrap,
             #tg-day-wrap.tg-day-visible { display: flex; }
           </style>
           <div class="field">
