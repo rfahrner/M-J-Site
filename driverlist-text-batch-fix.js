@@ -29,28 +29,6 @@ function initDriverListTextBatchFix() {
   const finishBtn = document.getElementById('tg-finish');
   const errorEl = document.getElementById('tg-error');
 
-  // Current loadboard.js still looks for the old checkbox id while the
-  // Driver List UI uses driver/dispatch radios. Bridge the two so the visible
-  // choice actually controls which phone number is used.
-  let dispatchBridge = document.getElementById('tg-dispatch-mode');
-  if (!dispatchBridge) {
-    dispatchBridge = document.createElement('input');
-    dispatchBridge.type = 'checkbox';
-    dispatchBridge.id = 'tg-dispatch-mode';
-    dispatchBridge.hidden = true;
-    modal.appendChild(dispatchBridge);
-  }
-
-  function syncPhoneMode() {
-    const selected = modal.querySelector('input[name="tg-phone-mode"]:checked');
-    dispatchBridge.checked = !selected || selected.value === 'dispatch';
-  }
-
-  modal.addEventListener('change', (event) => {
-    if (event.target.matches('input[name="tg-phone-mode"]')) syncPhoneMode();
-  });
-  syncPhoneMode();
-
   function resetSetupButtons() {
     if (!isVisible(setup)) return;
     if (startBtn) startBtn.classList.remove('hidden');
@@ -67,12 +45,7 @@ function initDriverListTextBatchFix() {
   // reset all footer buttons. Run after its normal click handler so a reopened
   // modal cannot show stale Send/Confirm buttons from the prior batch.
   openBtn.addEventListener('click', () => {
-    setTimeout(() => {
-      const dispatchRadio = modal.querySelector('input[name="tg-phone-mode"][value="dispatch"]');
-      if (dispatchRadio) dispatchRadio.checked = true;
-      syncPhoneMode();
-      resetSetupButtons();
-    }, 0);
+    setTimeout(resetSetupButtons, 0);
   });
 
   // Once Start successfully creates batches, it belongs to the setup step
