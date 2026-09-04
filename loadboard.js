@@ -37,6 +37,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     "analytics-volume.html": { type: "volume", label: "Volume" },
     "location-analytics.html": { type: "location-analytics", label: "Location Analytics" },
     "historics.html":  { type: "historics",   label: "Historics" },
+    "archive.html":    { type: "archive",     label: "Archive" },
   };
   export const NAV_ORDER = ["index.html", "dalaware.html", "buildingc.html", "houston.html", "mondelez.html", "accounting.html", "driverlist.html", "analytics-drivers.html", "location-analytics.html", "analytics-volume.html"];
   const LOCATIONS = NAV_ORDER
@@ -5880,6 +5881,13 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       return;
     }
     if (info && info.type === "location-analytics" && !isAdminUser()) {
+      window.location.href = "index.html";
+      return;
+    }
+    // archive-page.js re-checks this against user_roles before it will do
+    // anything; this is just the same UI-level guard every other admin page
+    // gets, so a non-admin never sees the page frame at all.
+    if (info && info.type === "archive" && !isAdminUser()) {
       window.location.href = "index.html";
       return;
     }

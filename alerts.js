@@ -487,6 +487,7 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
         { label: "Location Analytics", href: "location-analytics.html", visible: () => isAdminUser() },
       ],
     },
+    { label: "Archive", href: "archive.html", visible: () => isAdminUser() },
   ];
 
   let navDropdownCssInjected = false;
