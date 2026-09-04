@@ -3433,11 +3433,11 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const dispatchModeCheckbox = $("#tg-dispatch-mode");
     if (dispatchModeCheckbox) dispatchModeCheckbox.checked = true;
 
-    // Availability filter resets to "everyone" on each open — an
-    // exclusion left over from a previous send is the kind of thing
-    // you'd only notice after the texts had already gone out.
-    const allRadio = $("input[name='tg-availability'][value='all']");
-    if (allRadio) allRadio.checked = true;
+    // Dispatch routing and scheduled-driver exclusion are independent
+    // on/off options. Reset exclusion on each open so a prior send cannot
+    // silently carry its date filter into the next group.
+    const excludeScheduledCheckbox = $("#tg-exclude-scheduled");
+    if (excludeScheduledCheckbox) excludeScheduledCheckbox.checked = false;
     const dayWrap = $("#tg-day-wrap");
     if (dayWrap) dayWrap.classList.remove("tg-day-visible");
     const dayInput = $("#tg-day");
@@ -3593,8 +3593,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     let members = groupKey === "ALL" ? pool : pool.filter((d) => driverClassification(d) === groupKey);
     let label = groupKey === "ALL" ? "All Drivers" : (groupKey === "DNU" ? "DNU" : `Rating ${groupKey}`);
 
-    const availability = ($("input[name='tg-availability']:checked") || {}).value || "all";
-    if (availability === "unscheduled") {
+    const excludeScheduledCheckbox = $("#tg-exclude-scheduled");
+    const excludeScheduled = !!(excludeScheduledCheckbox && excludeScheduledCheckbox.checked);
+    if (excludeScheduled) {
       const day = ($("#tg-day") || {}).value || "";
       if (!day) { errEl.textContent = "Pick the day you're trying to fill."; errEl.classList.remove("hidden"); return; }
 
@@ -6166,9 +6167,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     on("tg-close", "click", closeTextGroupModal);
     if ($("#modal-text-group")) $("#modal-text-group").addEventListener("click", (e) => { if (e.target.id === "modal-text-group") closeTextGroupModal(); });
     if ($("#modal-text-group")) $("#modal-text-group").addEventListener("change", (e) => {
-      if (!e.target.matches("input[name='tg-availability']")) return;
+      if (!e.target.matches("#tg-exclude-scheduled")) return;
       const wrap = $("#tg-day-wrap");
-      if (wrap) wrap.classList.toggle("tg-day-visible", e.target.value === "unscheduled");
+      if (wrap) wrap.classList.toggle("tg-day-visible", e.target.checked);
     });
   }
 
