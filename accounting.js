@@ -10,6 +10,7 @@ import {
   showDriverAssignmentWarning, SHIFTS_TABLE,
 } from './loadboard.js';
 import { ACCOUNTING_TABLE, ACCOUNTING_ROUTES_TABLE, loadPricingData, calcRoute, getPricingTiers, getPricingSettings } from './accountingcalc.js';
+import { releaseToAljex } from './aljex-outbox.js';
 let accountingRecords = [];
   // Date descending (most recent first), then status within the same date
   // — active loads before released ones, since those are the ones more
@@ -470,11 +471,41 @@ export function renderDriverStatsTable() {
         else if (t.dataset.action === "acct-released") {
           const rec = accountingRecords.find((r) => r.id == t.dataset.id);
           if (!rec) return;
-          rec.status = t.checked ? "released" : "active";
-          accountingRecords.sort(acctSortCompare);
-          renderAccountingTable();
-          supabaseClient.from(ACCOUNTING_TABLE).update({ status: rec.status }).eq("id", rec.id)
-            .catch((err) => setDriverSyncStatus(`Couldn't save status (${err.message || err}).`, "error"));
+
+          // Un-releasing is purely local bookkeeping — it can't recall
+          // anything already handed to Aljex, so it never touches the outbox.
+          if (!t.checked) {
+            rec.status = "active";
+            accountingRecords.sort(acctSortCompare);
+            renderAccountingTable();
+            supabaseClient.from(ACCOUNTING_TABLE).update({ status: "active" }).eq("id", rec.id)
+              .catch((err) => setDriverSyncStatus(`Couldn't save status (${err.message || err}).`, "error"));
+            return;
+          }
+
+          // Releasing is the hand-off: Accounting's numbers become the
+          // authoritative payload and go out to Aljex.
+          t.disabled = true;
+          setDriverSyncStatus("Releasing to Aljex…", "");
+          releaseToAljex(rec.id)
+            .then((result) => {
+              rec.status = "released";
+              rec.sent = result.failed === 0;
+              accountingRecords.sort(acctSortCompare);
+              renderAccountingTable();
+              const refs = result.payload.refs.map((r) => r.value).join(", ") || "no route refs";
+              setDriverSyncStatus(
+                result.mode === "dry-run"
+                  ? `Released. DRY RUN — nothing sent to Aljex. Would have sent order ${result.payload.orderNo}: ${refs}.`
+                  : `Released to Aljex — order ${result.payload.orderNo}: ${refs}. ${result.sent} sent, ${result.failed} failed.`,
+                result.failed ? "error" : "success",
+              );
+            })
+            .catch((err) => {
+              t.checked = false;
+              setDriverSyncStatus(`Couldn't release to Aljex: ${err.message || err}`, "error");
+            })
+            .finally(() => { t.disabled = false; });
         }
         else if (t.dataset.action === "acct-day-type") {
           const rec = accountingRecords.find((r) => r.id == t.dataset.id);

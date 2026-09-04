@@ -1,5 +1,5 @@
 /* ---------------- board alerts: bottom-right notification panel ---------------- */
-import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, parseHHMM, AVG_MPH, minsToClock, escapeHtml, $, openSendTextModal, currentFile, isAccountingUser, isAdminUser, signOut, scrollToAndOutlineShiftRow} from './loadboard.js';
+import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, parseHHMM, AVG_MPH, minsToClock, escapeHtml, $, openSendTextModal, isAccountingUser, isAdminUser, signOut, scrollToAndOutlineShiftRow} from './loadboard.js';
   const ALL_ALERT_LOCATIONS = ["atlanta", "buildingc", "delaware"];
   export const IDLE_THRESHOLD_MIN = 45; // Stage 4: 45 min after shift start, no dispatch yet -- repeats every 45 min after that
   export const PRE_SHIFT_TEXT_LEAD_MIN = 60; // Stage 1: pre-shift ETA text needed 60 min before shift start
@@ -572,7 +572,12 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
     const tabsEl = $("#tabs");
     if (!tabsEl) return;
     ensureNavDropdownCss();
-    const cur = currentFile();
+    // Highlight from the real URL rather than currentFile(): currentFile()
+    // falls back to "index.html" for anything missing from PAGE_MAP, and
+    // index.html is Kroger's first child — so any unregistered page (or a
+    // stale cached loadboard.js) shaded the Kroger tab as if you were on
+    // Atlanta. Nothing should be highlighted when nothing matches.
+    const cur = location.pathname.split("/").pop() || "index.html";
     const curLocParam = new URLSearchParams(window.location.search).get("loc");
 
     tabsEl.innerHTML = NAV_STRUCTURE.map((item, idx) => {

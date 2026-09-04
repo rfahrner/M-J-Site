@@ -21,6 +21,7 @@ import { initDriverAnalyticsPage } from './analytics-drivers.js';
 import { initVolumePage } from './analytics-volume.js';
 import { initLocationAnalyticsPage } from './location-analytics.js';
 import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_MIN, PRE_SHIFT_CALL_FOLLOWUP_MIN, PRE_SHIFT_ESCALATION_MIN, LAST_STOP_RETURN_FOLLOWUP_MIN } from './alerts.js';
+import { queueLoadUpdateDebounced, flushQueuedUpdates } from './aljex-outbox.js';
 import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRateBreakdown, effectiveTierRate, effectiveSetting, isTierOverridden, isSettingOverridden, isDriverTierOverridden, isDriverSettingOverridden, saveTierRate, saveSetting } from './boardrates.js';
 
   /* ---------------- page map (single source of truth for nav) ---------------- */
@@ -276,6 +277,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
   export function isAccountingUser() { return currentUserRole === "accounting" || currentUserRole === "admin"; }
   export function isAdminUser() { return currentUserRole === "admin"; }
+  // Same value the load_change_history writes use, exposed so other
+  // modules can stamp an audit trail without duplicating the lookup.
+  export function currentUserName() { return currentUserLabel || "unknown user"; }
 
   export async function signOut() {
     if (supabaseClient) await supabaseClient.auth.signOut();
@@ -1007,6 +1011,20 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   }
 
 
+  // Kroger boards feed Aljex; Mondelez and Houston run on separate
+  // systems and aren't wired up. Widen this list to extend the sync.
+  const ALJEX_SYNCED_LOCATIONS = ["atlanta", "buildingc", "delaware"];
+
+  // Fire-and-forget: queueing to the outbox must never block or fail a
+  // board save. The queue debounces per load, so calling this on every
+  // keystroke-driven save is intentional and cheap.
+  function queueAljexSync(shiftDbId, location) {
+    if (!shiftDbId) return;
+    if (!ALJEX_SYNCED_LOCATIONS.includes(location || state.activeLocation)) return;
+    try { queueLoadUpdateDebounced(shiftDbId); }
+    catch (e) { console.error("[Aljex] queueing failed:", e); }
+  }
+
   async function saveShiftNow(row) {
     if (!supabaseClient) return null;
     try {
@@ -1014,11 +1032,13 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (row.dbId) {
         const { error } = await supabaseClient.from(SHIFTS_TABLE).update(payload).eq("id", row.dbId);
         if (error) { console.error("Failed to save row:", error); setDriverSyncStatus(`Couldn't save changes to this row (${error.message}).`, "error"); return null; }
+        queueAljexSync(row.dbId, row.location);
         return row.dbId;
       }
       const { data, error } = await supabaseClient.from(SHIFTS_TABLE).insert(payload).select();
       if (error) { console.error("Failed to create row:", error); setDriverSyncStatus(`Couldn't save this row (${error.message}).`, "error"); return null; }
       row.dbId = data[0].id;
+      queueAljexSync(row.dbId, row.location);
       return row.dbId;
     } catch (e) {
       console.error("saveShiftNow threw:", e);
@@ -1036,11 +1056,13 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (trip.dbId) {
         const { error } = await supabaseClient.from(TRIPS_TABLE).update(payload).eq("id", trip.dbId);
         if (error) { console.error("Failed to save load:", error); setDriverSyncStatus(`Couldn't save this load (${error.message}).`, "error"); return null; }
+        queueAljexSync(shiftDbId, row.location); // route_id lives here — this is the Ref# feed
         return trip.dbId;
       }
       const { data, error } = await supabaseClient.from(TRIPS_TABLE).insert(payload).select();
       if (error) { console.error("Failed to create load:", error); setDriverSyncStatus(`Couldn't save this load (${error.message}).`, "error"); return null; }
       trip.dbId = data[0].id;
+      queueAljexSync(shiftDbId, row.location);
       return trip.dbId;
     } catch (e) {
       console.error("saveTripNow threw:", e);
@@ -3278,6 +3300,19 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (msgEl) msgEl.value = "";
     const dispatchModeCheckbox = $("#tg-dispatch-mode");
     if (dispatchModeCheckbox) dispatchModeCheckbox.checked = true;
+
+    // Availability filter resets to "everyone" on each open — an
+    // exclusion left over from a previous send is the kind of thing
+    // you'd only notice after the texts had already gone out.
+    const allRadio = $("input[name='tg-availability'][value='all']");
+    if (allRadio) allRadio.checked = true;
+    const dayWrap = $("#tg-day-wrap");
+    if (dayWrap) dayWrap.classList.add("hidden");
+    const dayInput = $("#tg-day");
+    if (dayInput) dayInput.value = dateKey(addDays(todayDate(), 1)); // filling tomorrow is the usual reason to ask
+    const dayNote = $("#tg-day-note");
+    if (dayNote) dayNote.textContent = "Anyone already on a board that day is left out.";
+
     $("#tg-setup-step").classList.remove("hidden");
     $("#tg-progress-step").classList.add("hidden");
     $("#tg-error").classList.add("hidden");
@@ -3331,7 +3366,29 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     renderGroupTextProgress();
   }
 
-  function startGroupTexting() {
+  // Every driver already on a board for a given day, across all three
+  // load tables — a driver booked in Delaware isn't available for an
+  // Atlanta shift, so "scheduled" deliberately means scheduled anywhere.
+  // Called-off shifts don't count: that driver's day is free again.
+  async function driverIdsScheduledOn(dateStr) {
+    const scheduled = new Set();
+    if (!supabaseClient || !dateStr) return scheduled;
+    const [kroger, houston, mondelez] = await Promise.all([
+      supabaseClient.from(SHIFTS_TABLE).select("driver_id, called_off").eq("shift_date", dateStr).not("driver_id", "is", null),
+      supabaseClient.from("loads_houston").select("driver_id").eq("shift_date", dateStr).not("driver_id", "is", null),
+      supabaseClient.from("mondelez_loads").select("driver_id").eq("shift_date", dateStr).not("driver_id", "is", null),
+    ]);
+    const firstError = kroger.error || houston.error || mondelez.error;
+    // Failing open would text drivers who are already booked, which is
+    // worse than not sending — make the caller stop and show why.
+    if (firstError) throw new Error(firstError.message || String(firstError));
+    (kroger.data || []).forEach((r) => { if (!r.called_off) scheduled.add(String(r.driver_id)); });
+    (houston.data || []).forEach((r) => scheduled.add(String(r.driver_id)));
+    (mondelez.data || []).forEach((r) => scheduled.add(String(r.driver_id)));
+    return scheduled;
+  }
+
+  async function startGroupTexting() {
     const groupKey = ($("#tg-group-select") || {}).value || "";
     const message = $("#tg-message").value.trim();
     const errEl = $("#tg-error");
@@ -3340,9 +3397,41 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     errEl.classList.add("hidden");
 
     const pool = driversForLocation(state.driverListTab || "atlanta");
-    const rawMembers = groupKey === "ALL" ? pool : pool.filter((d) => driverClassification(d) === groupKey);
-    const label = groupKey === "ALL" ? "All Drivers" : (groupKey === "DNU" ? "DNU" : `Rating ${groupKey}`);
-    beginTextBatchFlow(applyPhoneMode(rawMembers), label, message);
+    let members = groupKey === "ALL" ? pool : pool.filter((d) => driverClassification(d) === groupKey);
+    let label = groupKey === "ALL" ? "All Drivers" : (groupKey === "DNU" ? "DNU" : `Rating ${groupKey}`);
+
+    const availability = ($("input[name='tg-availability']:checked") || {}).value || "all";
+    if (availability === "unscheduled") {
+      const day = ($("#tg-day") || {}).value || "";
+      if (!day) { errEl.textContent = "Pick the day you're trying to fill."; errEl.classList.remove("hidden"); return; }
+
+      const startBtn = $("#tg-start");
+      if (startBtn) { startBtn.disabled = true; startBtn.textContent = "Checking the boards…"; }
+      let scheduled;
+      try {
+        scheduled = await driverIdsScheduledOn(day);
+      } catch (e) {
+        errEl.textContent = `Couldn't check who's already scheduled (${e.message}). Nobody was texted.`;
+        errEl.classList.remove("hidden");
+        return;
+      } finally {
+        if (startBtn) { startBtn.disabled = false; startBtn.textContent = "Start"; }
+      }
+
+      const before = members.length;
+      members = members.filter((d) => !scheduled.has(String(d.id)));
+      const excluded = before - members.length;
+      if (!members.length) {
+        errEl.textContent = `Everyone in ${label} (${before}) is already scheduled on ${day}.`;
+        errEl.classList.remove("hidden");
+        return;
+      }
+      label = `${label} — open ${day}`;
+      const note = $("#tg-day-note");
+      if (note) note.textContent = `${excluded} already scheduled that day, ${members.length} left.`;
+    }
+
+    beginTextBatchFlow(applyPhoneMode(members), label, message);
   }
 
   function renderGroupTextProgress() {
@@ -5861,6 +5950,11 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     on("tg-cancel", "click", closeTextGroupModal);
     on("tg-close", "click", closeTextGroupModal);
     if ($("#modal-text-group")) $("#modal-text-group").addEventListener("click", (e) => { if (e.target.id === "modal-text-group") closeTextGroupModal(); });
+    if ($("#modal-text-group")) $("#modal-text-group").addEventListener("change", (e) => {
+      if (!e.target.matches("input[name='tg-availability']")) return;
+      const wrap = $("#tg-day-wrap");
+      if (wrap) wrap.classList.toggle("hidden", e.target.value !== "unscheduled");
+    });
   }
 
   
@@ -5908,6 +6002,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       else if (info.type === "accounting") initAccountingPage();
     } catch (e) { console.error("page-specific init failed:", e); }
     loadDriversFromSupabase().catch((e) => console.error("loadDriversFromSupabase() failed:", e));
+
+    // A route ID typed a second before navigating away is still sitting
+    // in the debounce timer — flush it rather than lose the sync.
+    window.addEventListener("pagehide", () => { flushQueuedUpdates(); });
   }
 
   document.addEventListener("DOMContentLoaded", init);

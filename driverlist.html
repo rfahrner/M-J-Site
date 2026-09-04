@@ -202,6 +202,18 @@
             </div>
           </div>
           <div class="field">
+            <label>Which of them</label>
+            <div class="radio-row">
+              <label><input type="radio" name="tg-availability" value="all" checked> Everyone in this group</label>
+              <label><input type="radio" name="tg-availability" value="unscheduled"> Only drivers open on a day</label>
+            </div>
+            <div id="tg-day-wrap" class="hidden" style="margin-top:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+              <label for="tg-day" style="margin:0; white-space:nowrap;">Open on</label>
+              <input type="date" id="tg-day" class="cell-input" style="width:auto;">
+              <span class="subtext" id="tg-day-note">Anyone already on a board that day is left out.</span>
+            </div>
+          </div>
+          <div class="field">
             <label for="tg-message">Message</label>
             <textarea id="tg-message" rows="5" placeholder="Type the message to send to this group…"></textarea>
           </div>
