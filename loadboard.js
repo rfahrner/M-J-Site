@@ -3522,16 +3522,21 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const phones = driverPhoneKeys((linked && linked.phone) || row[phoneField]);
 
     if (id) index.ids.add(id);
-    phones.forEach((phone) => index.phones.add(phone));
+    phones.forEach((phone) => {
+      if (name) index.namePhone.add(`${name}|${phone}`);
+      if (mc) index.phoneMc.add(`${phone}|${mc}`);
+    });
     if (name && mc) index.nameMc.add(`${name}|${mc}`);
     if (!id && name) index.unlinkedNames.add(name);
   }
 
   function driverIsScheduled(driver, index) {
     if (index.ids.has(String(driver.id))) return true;
-    if (driverPhoneKeys(driver.phone).some((phone) => index.phones.has(phone))) return true;
     const name = normalizedDriverName(driver.name);
     const mc = String(driver.mc || "").trim();
+    const phones = driverPhoneKeys(driver.phone);
+    if (name && phones.some((phone) => index.namePhone.has(`${name}|${phone}`))) return true;
+    if (mc && phones.some((phone) => index.phoneMc.has(`${phone}|${mc}`))) return true;
     if (name && mc && index.nameMc.has(`${name}|${mc}`)) return true;
     return !!name && index.unlinkedNames.has(name);
   }
@@ -3541,7 +3546,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // Atlanta shift, so "scheduled" deliberately means scheduled anywhere.
   // Called-off Kroger shifts don't count: that driver's day is free again.
   async function scheduledDriversOn(dateStr) {
-    const index = { ids: new Set(), phones: new Set(), nameMc: new Set(), unlinkedNames: new Set() };
+    const index = { ids: new Set(), namePhone: new Set(), phoneMc: new Set(), nameMc: new Set(), unlinkedNames: new Set() };
     if (!supabaseClient || !dateStr) return index;
     const [kroger, houston, mondelez] = await Promise.all([
       supabaseClient.from(SHIFTS_TABLE)
