@@ -195,27 +195,16 @@
             <select id="tg-group-select" class="cell-input"></select>
           </div>
           <div class="field">
-            <label>How to text them</label>
-            <div class="radio-row">
-              <label><input type="radio" name="tg-phone-mode" value="driver"> Text drivers directly</label>
-              <label><input type="radio" name="tg-phone-mode" value="dispatch" checked> Text dispatch where applicable</label>
+            <div class="radio-row" style="flex-direction:column; align-items:flex-start; gap:8px;">
+              <label><input type="checkbox" id="tg-dispatch-mode" checked> Text dispatch where applicable</label>
+              <label><input type="checkbox" id="tg-exclude-scheduled"> Exclude already scheduled drivers</label>
             </div>
           </div>
-          <!-- The date field's visibility is driven by CSS off the radio's
-               own :checked state, so it cannot get stuck hidden if the JS
-               toggle never binds. The .tg-day-visible class below is a
-               belt-and-braces fallback for browsers without :has(). -->
           <style>
             #tg-day-wrap { display: none; margin-top: 8px; align-items: center; gap: 8px; flex-wrap: wrap; }
-            #tg-availability-field:has(input[name="tg-availability"][value="unscheduled"]:checked) #tg-day-wrap,
             #tg-day-wrap.tg-day-visible { display: flex; }
           </style>
-          <div class="field" id="tg-availability-field">
-            <label>Which of them</label>
-            <div class="radio-row">
-              <label><input type="radio" name="tg-availability" value="all" checked> Everyone in this group</label>
-              <label><input type="radio" name="tg-availability" value="unscheduled"> Only drivers open on a day</label>
-            </div>
+          <div class="field">
             <div id="tg-day-wrap">
               <label for="tg-day" style="margin:0; white-space:nowrap;">Open on</label>
               <input type="date" id="tg-day" class="cell-input" style="width:auto;">
