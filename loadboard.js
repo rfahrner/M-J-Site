@@ -676,6 +676,56 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     return state.drivers.filter((d) => group.includes(d.location));
   }
 
+  // Single source of truth for turning a typed driver name into a driver
+  // record. Every entry point that accepts a name goes through this: the
+  // board cell, the Load Details editor, the Add Load modal and the
+  // available-drivers sheet each used to carry their own near-copy, with
+  // subtly different trimming and a different idea of which location's
+  // pool to search. Any one of them missing a match left the row saved
+  // with a name but no driver_id — and nothing downstream (MC, phone,
+  // email, Text Group, the Aljex payload) has any way to recover from
+  // that, so it just silently renders blank.
+  //
+  // Returns the match count as well as the driver: with 654 duplicate
+  // names on file (91 of them disagreeing on MC), guessing between two
+  // records would silently attach the wrong MC. Ambiguous names
+  // deliberately resolve to null so they can be surfaced instead.
+  export function resolveDriverByName(name, locationKey) {
+    const needle = String(name ?? "").trim().toLowerCase();
+    if (!needle) return { driver: null, matches: 0 };
+    const pool = driversForLocation(locationKey || state.activeLocation || "atlanta");
+    const hits = pool.filter((d) => String(d.name ?? "").trim().toLowerCase() === needle);
+    return { driver: hits.length === 1 ? hits[0] : null, matches: hits.length };
+  }
+
+  // Re-links rows that hold a driver name but no driver_id. The link is
+  // an invariant the app depends on, but it was only ever established
+  // opportunistically at entry time, so a single missed keystroke path
+  // left a row broken permanently. Running this whenever a sheet or the
+  // driver list lands makes the invariant self-healing instead: it no
+  // longer matters which entry point dropped it.
+  //
+  // Only unambiguous matches are linked. A name that matches nothing
+  // means that driver isn't on file at all — that needs a person, not a
+  // guess, so it's left alone and reported.
+  function healUnlinkedDriverRows(rows, locationKey) {
+    if (!rows || !state.drivers.length) return { linked: 0, unmatched: [], ambiguous: [] };
+    const linked = [];
+    const unmatched = [];
+    const ambiguous = [];
+    rows.forEach((row) => {
+      if (row.driverId || !String(row.driverNameText || "").trim()) return;
+      const { driver, matches } = resolveDriverByName(row.driverNameText, locationKey || row.location);
+      if (driver) { row.driverId = driver.id; linked.push(row); }
+      else if (matches > 1) ambiguous.push(row.driverNameText);
+      else unmatched.push(row.driverNameText);
+    });
+    // Persist repairs so the row is fixed for everyone, not just this tab.
+    linked.forEach((row) => { if (row.dbId) saveShiftNow(row); });
+    if (linked.length) console.info(`[driver-link] re-linked ${linked.length} row(s) that had a name but no driver record attached.`);
+    return { linked: linked.length, unmatched, ambiguous };
+  }
+
   function getSortedDrivers() {
     const { key, dir } = state.driverSort;
     const pool = driversForLocation(state.driverListTab || "atlanta");
@@ -780,6 +830,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       }
     }
     state.sheets[k] = rows;
+    // Drivers may still be paging in when a sheet lands; the load-order
+    // race is exactly how rows end up with a name and no link, so heal
+    // here AND again when the driver list finishes arriving.
+    healUnlinkedDriverRows(rows, locationKey);
   }
   export function findDriver(id) { return state.drivers.find((d) => String(d.id) === String(id)) || null; }
   const standaloneLoadedRows = {}; // row.id -> row, for modal access from pages that don't have state.sheets (e.g. Accounting)
@@ -844,6 +898,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     state.drivers = all.map(driverFromDbRow);
     setDriverSyncStatus("");
     refreshDriverDatalist();
+    // The full driver list is only now available — repair any row that
+    // was entered while the pool was still empty or half-loaded.
+    Object.entries(state.sheets).forEach(([k, rows]) => healUnlinkedDriverRows(rows, k.split("__")[0]));
     if (currentFile() === "driverlist.html") renderDriverList();
     else if (state.activeLocation && state.sheets[sheetKey(state.activeLocation, state.activeDate)]) renderBoardTable();
   }
@@ -853,6 +910,59 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   export const SAVE_DEBOUNCE_MS = 700;
   const shiftSaveTimers = new Map();
   const tripSaveTimers = new Map();
+
+  // Every board page is its own HTML document, so switching boards is a
+  // full page teardown -- any setTimeout still counting down dies with it
+  // and whatever it was going to save is gone. Holding the pending work
+  // next to its timer means pagehide can run it instead of dropping it.
+  const pendingSaves = new Map(); // "namespace:key" -> the save to run
+
+  function debounceSave(timers, ns, key, fn) {
+    const pendingKey = `${ns}:${key}`;
+    clearTimeout(timers.get(key));
+    pendingSaves.set(pendingKey, fn);
+    timers.set(key, setTimeout(() => { pendingSaves.delete(pendingKey); fn(); }, SAVE_DEBOUNCE_MS));
+  }
+
+  export function flushPendingBoardSaves() {
+    [shiftSaveTimers, tripSaveTimers, availableSaveTimers].forEach((timers) => {
+      timers.forEach((t) => clearTimeout(t));
+      timers.clear();
+    });
+    const runs = [...pendingSaves.values()];
+    pendingSaves.clear();
+    runs.forEach((fn) => {
+      try { fn(); } catch (e) { console.error("flushPendingBoardSaves failed:", e); }
+    });
+  }
+
+  // Rows carrying real content that never got a database id. A row like
+  // that only exists in this tab: nothing else can see it and a reload
+  // won't bring it back, so it needs to be findable rather than silently
+  // dropped. Blank filler rows are ignored -- they're supposed to be empty.
+  const UNSAVED_CONTENT_FIELDS = ["shiftStart", "proNumber", "driverNameText", "notes", "etaShiftReport", "rate"];
+  function rowsWithUnsavedContent() {
+    const out = [];
+    Object.values(state.sheets || {}).forEach((rows) => {
+      (rows || []).forEach((r) => {
+        if (!r || r.dbId) return;
+        if (UNSAVED_CONTENT_FIELDS.some((f) => String(r[f] ?? "").trim() !== "")) out.push(r);
+      });
+    });
+    return out;
+  }
+
+  // Called after a flush so a failure surfaces on the board instead of
+  // only in the console.
+  function warnAboutUnsavedRows() {
+    const stranded = rowsWithUnsavedContent();
+    if (!stranded.length) return;
+    const labels = stranded
+      .map((r) => [r.shiftStart, r.driverNameText || r.proNumber].filter(Boolean).join(" ") || "a row")
+      .join(", ");
+    console.warn("[unsaved] rows never written to the database:", stranded);
+    setDriverSyncStatus(`${stranded.length} row(s) haven't saved to the database yet (${labels}). Don't leave this page — they only exist in this tab.`, "error");
+  }
 
   // Handles both create (row.dbId is null) and update (row.dbId is set)
   // transparently — callers never need to branch on which one applies.
@@ -1364,13 +1474,35 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   }
 
 
+  // Rows that haven't reached the database yet have no dbId, so their
+  // first save is the INSERT that brings the row into existence. That one
+  // can't sit in a debounce timer: navigate away inside those 700ms and
+  // the row was never created at all -- not an edit lost, the whole row
+  // gone. A shift with just a start time typed in is the case that gets
+  // bitten, since typing a time takes about a second and then you move on.
+  // Once the row exists, edits debounce normally.
+  const shiftInsertsInFlight = new Map(); // row.id -> the INSERT currently running
   function scheduleShiftSave(row) {
     clearTimeout(shiftSaveTimers.get(row.id));
-    shiftSaveTimers.set(row.id, setTimeout(() => saveShiftNow(row), SAVE_DEBOUNCE_MS));
+    shiftSaveTimers.delete(row.id);
+    pendingSaves.delete(`shift:${row.id}`);
+
+    if (!row.dbId) {
+      // Keystrokes land faster than the INSERT round-trips, and every one
+      // of them still sees dbId as null -- without this guard each would
+      // fire its own INSERT and the row would be created several times.
+      const inFlight = shiftInsertsInFlight.get(row.id);
+      if (inFlight) { inFlight.then(() => scheduleShiftSave(row)); return; }
+      const p = saveShiftNow(row)
+        .then((dbId) => { if (!dbId) warnAboutUnsavedRows(); }) // insert didn't take -- say so on the board, don't fail silently
+        .finally(() => shiftInsertsInFlight.delete(row.id));
+      shiftInsertsInFlight.set(row.id, p);
+      return;
+    }
+    debounceSave(shiftSaveTimers, "shift", row.id, () => saveShiftNow(row));
   }
   function scheduleTripSave(row, trip, tripNumber) {
-    clearTimeout(tripSaveTimers.get(trip.id));
-    tripSaveTimers.set(trip.id, setTimeout(() => saveTripNow(row, trip, tripNumber), SAVE_DEBOUNCE_MS));
+    debounceSave(tripSaveTimers, "trip", trip.id, () => saveTripNow(row, trip, tripNumber));
   }
 
 
@@ -3307,7 +3439,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const allRadio = $("input[name='tg-availability'][value='all']");
     if (allRadio) allRadio.checked = true;
     const dayWrap = $("#tg-day-wrap");
-    if (dayWrap) dayWrap.classList.add("hidden");
+    if (dayWrap) dayWrap.classList.remove("tg-day-visible");
     const dayInput = $("#tg-day");
     if (dayInput) dayInput.value = dateKey(addDays(todayDate(), 1)); // filling tomorrow is the usual reason to ask
     const dayNote = $("#tg-day-note");
@@ -4122,7 +4254,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       const nameVal = $("#ld-ov-driver").value.trim();
       row.driverNameText = nameVal;
       row.driverId = null;
-      const match = driversForLocation(row.location || state.activeLocation || "atlanta").find((x) => x.name.toLowerCase() === nameVal.toLowerCase());
+      const match = resolveDriverByName(nameVal, row.location).driver;
       if (match) row.driverId = match.id;
       const timesheetReceivedEl = $("#ld-ov-timesheet-received");
       if (timesheetReceivedEl) {
@@ -4154,7 +4286,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       const driverNameVal = $("#ld-tr-driver").value.trim();
       trip.driverId = null;
       if (driverNameVal) {
-        const match = driversForLocation(row.location || state.activeLocation || "atlanta").find((x) => x.name.toLowerCase() === driverNameVal.toLowerCase());
+        const match = resolveDriverByName(driverNameVal, row.location).driver;
         if (match) trip.driverId = match.id;
       }
       const ppwkEl = $("#ld-tr-ppwk-received");
@@ -5051,7 +5183,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
     let driverId = nameField.dataset.driverId || null;
     if (!driverId) {
-      const match = driversForLocation(state.activeLocation || "atlanta").find((d) => d.name.toLowerCase() === name.toLowerCase());
+      const match = resolveDriverByName(name).driver;
       driverId = match ? match.id : null;
     }
 
@@ -5157,8 +5289,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
   const availableSaveTimers = new Map();
   function scheduleAvailableRowSave(row, locationKey, dKey) {
-    clearTimeout(availableSaveTimers.get(row.id));
-    availableSaveTimers.set(row.id, setTimeout(() => saveAvailableRowNow(row, locationKey, dKey), SAVE_DEBOUNCE_MS));
+    debounceSave(availableSaveTimers, "available", row.id, () => saveAvailableRowNow(row, locationKey, dKey));
   }
 
   function availableRowHtml(row) {
@@ -5275,7 +5406,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (!row) return;
       row.driverName = t.value;
       row.driverId = null;
-      const match = driversForLocation(state.activeLocation || "atlanta").find((d) => d.name.toLowerCase() === t.value.trim().toLowerCase());
+      const match = resolveDriverByName(t.value).driver;
       if (match) row.driverId = match.id;
       scheduleAvailableRowSave(row, state.activeLocation, state.activeDate);
       if (t.dataset.driverAc === "true") updateDriverAutocomplete(t, state.activeLocation);
@@ -5418,7 +5549,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           const found = loadDetailsState ? findRowAnywhere(loadDetailsState.rowId) : null;
           const row = found ? found.row : null;
           const nameVal = (row && row.driverNameText || "").trim().toLowerCase();
-          const match = nameVal ? driversForLocation(row.location || state.activeLocation || "atlanta").find((d) => d.name.trim().toLowerCase() === nameVal) : null;
+          const match = resolveDriverByName(nameVal, row && row.location).driver;
           if (match) {
             // Exact match already exists — link it for real (persists to
             // the database, same as picking it from the autocomplete
@@ -5711,7 +5842,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
               // every keystroke while still mid-type, which could fire
               // against some other driver whose name happened to exactly
               // match whatever partial text was on screen at that instant.
-              const match = driversForLocation(found.row.location || state.activeLocation || "atlanta").find((d) => d.name.toLowerCase() === t.value.trim().toLowerCase());
+              const match = resolveDriverByName(t.value, found.row.location).driver;
               if (match) {
                 warnIfDriverAlreadyScheduled(found.row, match.id);
                 checkDriverComplianceWarning(match);
@@ -5813,7 +5944,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (t.dataset.field === "driverName") {
         found.row.driverNameText = t.value;
         found.row.driverId = null;
-        const match = driversForLocation(state.activeLocation || "atlanta").find((d) => d.name.toLowerCase() === t.value.trim().toLowerCase());
+        const match = resolveDriverByName(t.value, found.row.location).driver;
         if (match) found.row.driverId = match.id;
         updateDriverLinkedCellsInPlace(rowId);
         scheduleShiftSave(found.row);
@@ -5953,7 +6084,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if ($("#modal-text-group")) $("#modal-text-group").addEventListener("change", (e) => {
       if (!e.target.matches("input[name='tg-availability']")) return;
       const wrap = $("#tg-day-wrap");
-      if (wrap) wrap.classList.toggle("hidden", e.target.value !== "unscheduled");
+      if (wrap) wrap.classList.toggle("tg-day-visible", e.target.value === "unscheduled");
     });
   }
 
@@ -6005,7 +6136,24 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
     // A route ID typed a second before navigating away is still sitting
     // in the debounce timer — flush it rather than lose the sync.
-    window.addEventListener("pagehide", () => { flushQueuedUpdates(); });
+    // Same goes for the row and trip saves themselves: anything still
+    // waiting on its debounce gets written now rather than dying with the
+    // page. visibilitychange fires early enough for the requests to
+    // actually get out the door; pagehide is the backstop.
+    const flushEverything = () => { flushPendingBoardSaves(); flushQueuedUpdates(); };
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushEverything(); });
+    window.addEventListener("pagehide", flushEverything);
+
+    // Last line of defence. A row holding real content but no database id
+    // has not been written -- whatever the reason, a failed insert, a
+    // dropped connection, permissions. Leaving the page at that point
+    // loses it with nothing to recover from, so stop and ask instead of
+    // letting it go quietly.
+    window.addEventListener("beforeunload", (e) => {
+      if (!rowsWithUnsavedContent().length) return;
+      e.preventDefault();
+      e.returnValue = "";
+    });
   }
 
   document.addEventListener("DOMContentLoaded", init);

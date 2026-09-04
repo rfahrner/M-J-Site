@@ -201,13 +201,22 @@
               <label><input type="radio" name="tg-phone-mode" value="dispatch" checked> Text dispatch where applicable</label>
             </div>
           </div>
-          <div class="field">
+          <!-- The date field's visibility is driven by CSS off the radio's
+               own :checked state, so it cannot get stuck hidden if the JS
+               toggle never binds. The .tg-day-visible class below is a
+               belt-and-braces fallback for browsers without :has(). -->
+          <style>
+            #tg-day-wrap { display: none; margin-top: 8px; align-items: center; gap: 8px; flex-wrap: wrap; }
+            #tg-availability-field:has(input[name="tg-availability"][value="unscheduled"]:checked) #tg-day-wrap,
+            #tg-day-wrap.tg-day-visible { display: flex; }
+          </style>
+          <div class="field" id="tg-availability-field">
             <label>Which of them</label>
             <div class="radio-row">
               <label><input type="radio" name="tg-availability" value="all" checked> Everyone in this group</label>
               <label><input type="radio" name="tg-availability" value="unscheduled"> Only drivers open on a day</label>
             </div>
-            <div id="tg-day-wrap" class="hidden" style="margin-top:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            <div id="tg-day-wrap">
               <label for="tg-day" style="margin:0; white-space:nowrap;">Open on</label>
               <input type="date" id="tg-day" class="cell-input" style="width:auto;">
               <span class="subtext" id="tg-day-note">Anyone already on a board that day is left out.</span>
