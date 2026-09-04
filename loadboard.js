@@ -3498,26 +3498,82 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     renderGroupTextProgress();
   }
 
+  // The same person can have separate Atlanta and Preferred Driver records,
+  // so driver_id alone is not a stable identity. Build several conservative
+  // identity keys: exact IDs, individual phone numbers, and name+MC pairs.
+  // Older imported rows with no link use their exact name as the last resort.
+  function normalizedDriverName(value) {
+    return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+  }
+
+  function driverPhoneKeys(value) {
+    return String(value || "")
+      .split(/[\\/,;|]+/)
+      .map((part) => part.replace(/\D/g, ""))
+      .map((digits) => digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits)
+      .filter((digits) => digits.length === 10);
+  }
+
+  function addScheduledDriver(index, row, nameField, phoneField, mcField) {
+    const id = row.driver_id == null ? "" : String(row.driver_id);
+    const linked = id ? findDriver(id) : null;
+    const name = normalizedDriverName((linked && linked.name) || row[nameField]);
+    const mc = String((linked && linked.mc) || row[mcField] || "").trim();
+    const phones = driverPhoneKeys((linked && linked.phone) || row[phoneField]);
+
+    if (id) index.ids.add(id);
+    phones.forEach((phone) => index.phones.add(phone));
+    if (name && mc) index.nameMc.add(`${name}|${mc}`);
+    if (!id && name) index.unlinkedNames.add(name);
+  }
+
+  function driverIsScheduled(driver, index) {
+    if (index.ids.has(String(driver.id))) return true;
+    if (driverPhoneKeys(driver.phone).some((phone) => index.phones.has(phone))) return true;
+    const name = normalizedDriverName(driver.name);
+    const mc = String(driver.mc || "").trim();
+    if (name && mc && index.nameMc.has(`${name}|${mc}`)) return true;
+    return !!name && index.unlinkedNames.has(name);
+  }
+
   // Every driver already on a board for a given day, across all three
   // load tables — a driver booked in Delaware isn't available for an
   // Atlanta shift, so "scheduled" deliberately means scheduled anywhere.
-  // Called-off shifts don't count: that driver's day is free again.
-  async function driverIdsScheduledOn(dateStr) {
-    const scheduled = new Set();
-    if (!supabaseClient || !dateStr) return scheduled;
+  // Called-off Kroger shifts don't count: that driver's day is free again.
+  async function scheduledDriversOn(dateStr) {
+    const index = { ids: new Set(), phones: new Set(), nameMc: new Set(), unlinkedNames: new Set() };
+    if (!supabaseClient || !dateStr) return index;
     const [kroger, houston, mondelez] = await Promise.all([
-      supabaseClient.from(SHIFTS_TABLE).select("driver_id, called_off").eq("shift_date", dateStr).not("driver_id", "is", null),
-      supabaseClient.from("loads_houston").select("driver_id").eq("shift_date", dateStr).not("driver_id", "is", null),
-      supabaseClient.from("mondelez_loads").select("driver_id").eq("shift_date", dateStr).not("driver_id", "is", null),
+      supabaseClient.from(SHIFTS_TABLE)
+        .select("driver_id, driver_name_text, driver_cell_snapshot, mc_snapshot, called_off")
+        .eq("shift_date", dateStr),
+      supabaseClient.from("loads_houston")
+        .select("driver_id, driver_name, driver_phone, mc")
+        .eq("shift_date", dateStr),
+      supabaseClient.from("mondelez_loads")
+        .select("driver_id, driver_name")
+        .eq("shift_date", dateStr),
     ]);
     const firstError = kroger.error || houston.error || mondelez.error;
     // Failing open would text drivers who are already booked, which is
     // worse than not sending — make the caller stop and show why.
     if (firstError) throw new Error(firstError.message || String(firstError));
-    (kroger.data || []).forEach((r) => { if (!r.called_off) scheduled.add(String(r.driver_id)); });
-    (houston.data || []).forEach((r) => scheduled.add(String(r.driver_id)));
-    (mondelez.data || []).forEach((r) => scheduled.add(String(r.driver_id)));
-    return scheduled;
+    (kroger.data || []).forEach((row) => {
+      if (!row.called_off && (row.driver_id != null || String(row.driver_name_text || "").trim())) {
+        addScheduledDriver(index, row, "driver_name_text", "driver_cell_snapshot", "mc_snapshot");
+      }
+    });
+    (houston.data || []).forEach((row) => {
+      if (row.driver_id != null || String(row.driver_name || "").trim()) {
+        addScheduledDriver(index, row, "driver_name", "driver_phone", "mc");
+      }
+    });
+    (mondelez.data || []).forEach((row) => {
+      if (row.driver_id != null || String(row.driver_name || "").trim()) {
+        addScheduledDriver(index, row, "driver_name", "", "");
+      }
+    });
+    return index;
   }
 
   async function startGroupTexting() {
@@ -3541,7 +3597,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (startBtn) { startBtn.disabled = true; startBtn.textContent = "Checking the boards…"; }
       let scheduled;
       try {
-        scheduled = await driverIdsScheduledOn(day);
+        scheduled = await scheduledDriversOn(day);
       } catch (e) {
         errEl.textContent = `Couldn't check who's already scheduled (${e.message}). Nobody was texted.`;
         errEl.classList.remove("hidden");
@@ -3551,7 +3607,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       }
 
       const before = members.length;
-      members = members.filter((d) => !scheduled.has(String(d.id)));
+      members = members.filter((driver) => !driverIsScheduled(driver, scheduled));
       const excluded = before - members.length;
       if (!members.length) {
         errEl.textContent = `Everyone in ${label} (${before}) is already scheduled on ${day}.`;
@@ -5152,7 +5208,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     $("#modal-add-time-slots").classList.add("hidden");
   }
 
-  function submitAddTimeSlots() {
+  async function submitAddTimeSlots() {
     const slotRows = $all(".ats-slot-row", $("#ats-rows"));
     const newRows = [];
     slotRows.forEach((div) => {
@@ -5166,12 +5222,35 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         newRows.push(row);
       }
     });
-    closeAddTimeSlotsModal();
     if (!newRows.length) return;
+
+    // These rows used to exist only in browser memory. Put them on the
+    // visible sheet first so the normal unsaved-row guard can protect them,
+    // then await every INSERT before allowing this action to finish.
     const sheet = getSheet(state.activeLocation, state.activeDate);
-    newRows.forEach((r) => sheet.push(r));
+    newRows.forEach((row) => sheet.push(row));
+    renderBoardTable();
+
+    const submitBtn = $("#ats-submit");
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Saving…"; }
+    setDriverSyncStatus(`Saving ${newRows.length} time slot${newRows.length === 1 ? "" : "s"}…`, "");
+
+    try {
+      await Promise.all(newRows.map((row) => saveShiftNow(row)));
+    } finally {
+      if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = "Add Slots"; }
+    }
+
+    closeAddTimeSlotsModal();
     renderBoardTable();
     scrollQuickAddIntoView();
+
+    const failed = newRows.filter((row) => !row.dbId);
+    if (failed.length) {
+      warnAboutUnsavedRows();
+      return;
+    }
+    setDriverSyncStatus(`${newRows.length} time slot${newRows.length === 1 ? "" : "s"} saved.`, "success");
   }
 
   async function submitAddLoad() {
