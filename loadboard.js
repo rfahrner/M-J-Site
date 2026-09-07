@@ -1932,11 +1932,33 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
   async function loadDatesWithData(locationKey) {
     if (!supabaseClient) return;
-    const { data, error } = await supabaseClient
-      .from(SHIFTS_TABLE).select("shift_date")
-      .eq("location", locationKey).gte("shift_date", state.minDate).lte("shift_date", state.maxDate);
-    if (error) { console.error("Failed to load date-availability info:", error); return; }
-    state.datesWithData = new Set((data || []).map((r) => r.shift_date));
+
+    // Atlanta has far more than Supabase/PostgREST's 1,000-row response
+    // limit. Page through the same date-only query so the calendar receives
+    // every shift date instead of an arbitrary first slice.
+    const PAGE_SIZE = 1000;
+    const dates = new Set();
+    let from = 0;
+    while (true) {
+      const { data, error } = await supabaseClient
+        .from(SHIFTS_TABLE)
+        .select("shift_date")
+        .eq("location", locationKey)
+        .gte("shift_date", state.minDate)
+        .lte("shift_date", state.maxDate)
+        .order("shift_date", { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
+      if (error) { console.error("Failed to load date-availability info:", error); return; }
+      (data || []).forEach((row) => dates.add(row.shift_date));
+      if (!data || data.length < PAGE_SIZE) break;
+      from += PAGE_SIZE;
+    }
+
+    state.datesWithData = dates;
+    const dropdown = $("#date-dropdown");
+    if (dropdown && !dropdown.classList.contains("hidden")) {
+      renderCalendarGrid(state.datesWithData);
+    }
   }
 
   let calendarViewMonth = null; // { year, month } — which month the open popup is showing
