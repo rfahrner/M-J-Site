@@ -1,5 +1,6 @@
 /* ---------------- board alerts: bottom-right notification panel ---------------- */
 import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, parseHHMM, AVG_MPH, minsToClock, escapeHtml, $, openSendTextModal, isAccountingUser, isAdminUser, signOut, scrollToAndOutlineShiftRow} from './loadboard.js';
+import './paperwork-load-integration.js';
   const ALL_ALERT_LOCATIONS = ["atlanta", "buildingc", "delaware"];
   export const IDLE_THRESHOLD_MIN = 45; // Stage 4: 45 min after shift start, no dispatch yet -- repeats every 45 min after that
   export const PRE_SHIFT_TEXT_LEAD_MIN = 60; // Stage 1: pre-shift ETA text needed 60 min before shift start
@@ -477,6 +478,7 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
     { label: "Carlstar", comingSoon: true },
     { label: "Global Pallets", comingSoon: true },
     { label: "LTL", comingSoon: true },
+    { label: "Paperwork", href: "paperwork.html" },
     { label: "Driver List", href: "driverlist.html" },
     { label: "Accounting", href: "accounting.html", visible: () => isAccountingUser() },
     {
@@ -487,7 +489,6 @@ import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, p
         { label: "Location Analytics", href: "location-analytics.html", visible: () => isAdminUser() },
       ],
     },
-    { label: "Archive", href: "archive.html", visible: () => isAdminUser() },
   ];
 
   let navDropdownCssInjected = false;

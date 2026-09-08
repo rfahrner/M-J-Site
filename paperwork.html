@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Paperwork — DL Transport Dispatch</title>
+  <link rel="stylesheet" href="loadboard.css">
+  <style>
+    body { overflow:auto; }
+    .paperwork-wrap { max-width:1440px; margin:52px auto 0; padding:22px 20px 44px; }
+    .paperwork-toolbar { display:flex; gap:12px; align-items:flex-end; justify-content:space-between; flex-wrap:wrap; margin-bottom:14px; }
+    .paperwork-toolbar h1 { margin:0 0 4px; font-size:24px; }
+    .paperwork-filters { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; }
+    .paperwork-filters label { display:block; font-size:11px; font-weight:700; color:#64748b; margin-bottom:4px; text-transform:uppercase; letter-spacing:.04em; }
+    .paperwork-filters input, .paperwork-filters select { height:34px; border:1px solid var(--line); border-radius:6px; padding:0 9px; background:#fff; min-width:150px; }
+    .paperwork-summary { display:flex; gap:9px; flex-wrap:wrap; margin:0 0 14px; }
+    .paperwork-pill { background:#fff; border:1px solid var(--line); border-radius:999px; padding:6px 10px; color:#475569; font-size:12px; }
+    .paperwork-table-wrap { background:#fff; border:1px solid var(--line); border-radius:10px; overflow:auto; }
+    .paperwork-table { width:100%; border-collapse:collapse; min-width:980px; }
+    .paperwork-table th { position:sticky; top:0; z-index:1; text-align:left; background:#eef1f6; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:#475569; padding:9px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
+    .paperwork-table td { padding:10px; border-bottom:1px solid #edf0f4; vertical-align:middle; }
+    .paperwork-table tr:last-child td { border-bottom:0; }
+    .paperwork-table tr.needs-review { background:#fff9e6; }
+    .paperwork-table tr.archived-match { background:#f8f3ff; }
+    .status-badge { display:inline-flex; align-items:center; border-radius:999px; padding:4px 8px; font-size:11px; font-weight:800; white-space:nowrap; }
+    .status-attached { background:#dcf3e4; color:#17653a; }
+    .status-review { background:#fdf3d0; color:#765900; }
+    .status-archived { background:#eee5ff; color:#5b3195; }
+    .paperwork-actions { display:flex; gap:6px; flex-wrap:wrap; }
+    .paperwork-actions .btn { padding:5px 9px; font-size:12px; }
+    .btn-danger-lite { border-color:#efb4b0!important; color:#9f2720!important; background:#fff!important; }
+    .paperwork-empty { padding:38px 18px; text-align:center; color:#64748b; }
+    .paperwork-status { min-height:18px; margin:8px 0; color:#475569; font-size:12px; }
+    .paperwork-status.error { color:#b42318; }
+    .pw-modal-backdrop { position:fixed; inset:0; z-index:500; display:flex; align-items:center; justify-content:center; padding:18px; background:rgba(11,18,32,.55); }
+    .pw-modal-backdrop.hidden { display:none; }
+    .pw-modal { width:min(980px,100%); max-height:92vh; overflow:auto; background:#fff; border-radius:12px; box-shadow:0 22px 60px rgba(0,0,0,.26); padding:20px; }
+    .pw-modal.small { width:min(620px,100%); }
+    .pw-modal-head { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:14px; }
+    .pw-modal-head h2 { margin:0 0 4px; font-size:20px; }
+    .pw-close { border:0; background:transparent; font-size:24px; line-height:1; padding:0 4px; color:#475569; }
+    .pw-meta-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:9px; margin-bottom:14px; }
+    .pw-meta { border:1px solid var(--line); border-radius:8px; padding:9px; background:#fafbfc; }
+    .pw-meta .k { font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:#64748b; font-weight:700; }
+    .pw-meta .v { margin-top:3px; font-size:13px; font-weight:700; overflow-wrap:anywhere; }
+    .pw-images { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:12px; }
+    .pw-image-card { border:1px solid var(--line); border-radius:9px; padding:9px; background:#fff; }
+    .pw-image-card img { width:100%; height:240px; object-fit:contain; background:#eef1f6; border-radius:6px; cursor:pointer; }
+    .pw-image-name { margin-top:6px; font-size:11px; color:#64748b; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .pw-image-note { width:100%; min-height:62px; resize:vertical; border:1px solid var(--line); border-radius:6px; padding:7px; margin-top:7px; font:inherit; }
+    .pw-section { margin-top:18px; }
+    .pw-section h3 { font-size:14px; margin:0 0 8px; }
+    .pw-note-row { display:flex; gap:8px; }
+    .pw-note-row textarea { flex:1; min-height:68px; resize:vertical; border:1px solid var(--line); border-radius:6px; padding:8px; font:inherit; }
+    .pw-note-list { margin-top:8px; display:flex; flex-direction:column; gap:6px; }
+    .pw-note-item { border-left:3px solid #aab4c6; padding:5px 8px; background:#f8fafc; }
+    .pw-note-item .meta { color:#64748b; font-size:10px; margin-top:3px; }
+    .reattach-search { display:flex; gap:8px; margin:8px 0 12px; }
+    .reattach-search input { flex:1; height:38px; border:1px solid var(--line); border-radius:6px; padding:0 10px; font-size:14px; }
+    .candidate-list { display:flex; flex-direction:column; gap:7px; }
+    .candidate { width:100%; text-align:left; border:1px solid var(--line); border-radius:8px; background:#fff; padding:10px 12px; }
+    .candidate:hover { border-color:#7f91ad; background:#f8fafc; }
+    .candidate strong { display:block; margin-bottom:3px; }
+    .candidate .sub { color:#64748b; font-size:12px; }
+    .image-lightbox { position:fixed; inset:0; z-index:700; display:flex; align-items:center; justify-content:center; padding:20px; background:rgba(0,0,0,.88); }
+    .image-lightbox.hidden { display:none; }
+    .image-lightbox img { max-width:96vw; max-height:94vh; object-fit:contain; }
+    .image-lightbox button { position:fixed; top:14px; right:18px; border:0; background:rgba(255,255,255,.15); color:#fff; width:42px; height:42px; border-radius:999px; font-size:25px; }
+    @media(max-width:760px) {
+      .pw-meta-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .pw-images { grid-template-columns:1fr; }
+      .pw-image-card img { height:auto; max-height:65vh; }
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand"><div class="brand-mark"></div><span>Dispatch</span></div>
+    <div class="tabs" id="tabs"></div>
+  </div>
+
+  <main class="paperwork-wrap">
+    <div class="paperwork-toolbar">
+      <div>
+        <h1>Paperwork Inbox</h1>
+        <div class="subtext">Trip sheets submitted from M-J-App. The sending phone number is retained exactly as submitted.</div>
+      </div>
+      <div class="paperwork-filters">
+        <div>
+          <label for="pw-status-filter">Status</label>
+          <select id="pw-status-filter">
+            <option value="active">All active</option>
+            <option value="needs_review">Needs review</option>
+            <option value="attached">Attached</option>
+            <option value="archived_match">Archived match</option>
+          </select>
+        </div>
+        <div>
+          <label for="pw-search">Search</label>
+          <input id="pw-search" type="search" placeholder="Pro # or phone">
+        </div>
+        <button class="btn btn-ghost" id="pw-refresh" type="button">Refresh</button>
+      </div>
+    </div>
+
+    <div class="paperwork-summary" id="pw-summary"></div>
+    <div class="paperwork-status" id="pw-status"></div>
+
+    <div class="paperwork-table-wrap">
+      <table class="paperwork-table">
+        <thead>
+          <tr>
+            <th>Received</th>
+            <th>Sent From</th>
+            <th>Entered Pro #</th>
+            <th>Images</th>
+            <th>Status</th>
+            <th>Attached To</th>
+            <th>Note</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="pw-body"></tbody>
+      </table>
+      <div class="paperwork-empty hidden" id="pw-empty">No paperwork matches this view.</div>
+    </div>
+  </main>
+
+  <div class="pw-modal-backdrop hidden" id="pw-view-backdrop">
+    <div class="pw-modal" role="dialog" aria-modal="true" aria-labelledby="pw-view-title">
+      <div class="pw-modal-head">
+        <div><h2 id="pw-view-title">Paperwork</h2><div class="subtext" id="pw-view-subtitle"></div></div>
+        <button type="button" class="pw-close" data-close="pw-view-backdrop">×</button>
+      </div>
+      <div class="pw-meta-grid" id="pw-meta-grid"></div>
+      <div class="pw-images" id="pw-images"></div>
+      <div class="pw-section">
+        <h3>Office Notes</h3>
+        <div class="pw-note-row">
+          <textarea id="pw-new-note" maxlength="2000" placeholder="Leave a note about this submission…"></textarea>
+          <button class="btn" id="pw-add-note" type="button">Add Note</button>
+        </div>
+        <div class="pw-note-list" id="pw-note-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pw-modal-backdrop hidden" id="pw-reattach-backdrop">
+    <div class="pw-modal small" role="dialog" aria-modal="true" aria-labelledby="pw-reattach-title">
+      <div class="pw-modal-head">
+        <div><h2 id="pw-reattach-title">Attach to Another Load</h2><div class="subtext">Search by Pro / Aljex number, then choose the exact load.</div></div>
+        <button type="button" class="pw-close" data-close="pw-reattach-backdrop">×</button>
+      </div>
+      <div class="reattach-search">
+        <input id="pw-reattach-pro" inputmode="numeric" placeholder="Enter Pro #">
+        <button class="btn" id="pw-find-loads" type="button">Find Load</button>
+      </div>
+      <div class="paperwork-status" id="pw-reattach-status"></div>
+      <div class="candidate-list" id="pw-candidates"></div>
+    </div>
+  </div>
+
+  <div class="image-lightbox hidden" id="pw-lightbox">
+    <button type="button" id="pw-lightbox-close">×</button>
+    <img id="pw-lightbox-image" alt="Trip sheet">
+  </div>
+
+  <script src="supabase.min.js"></script>
+  <script type="module" src="paperwork.js"></script>
+</body>
+</html>
