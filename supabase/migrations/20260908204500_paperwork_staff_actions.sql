@@ -22,7 +22,7 @@ declare
 begin
   if v_uid is null then raise exception 'Authentication required'; end if;
   select public.current_app_role() into v_role;
-  if v_role is distinct from all (array['dispatcher','accounting','admin','it']::text[]) then
+  if v_role is null or not (v_role = any (array['dispatcher','accounting','admin','it']::text[])) then
     raise exception 'Internal role required';
   end if;
 
@@ -114,7 +114,7 @@ declare
 begin
   if v_uid is null then raise exception 'Authentication required'; end if;
   select public.current_app_role() into v_role;
-  if v_role is distinct from all (array['dispatcher','accounting','admin','it']::text[]) then
+  if v_role is null or not (v_role = any (array['dispatcher','accounting','admin','it']::text[])) then
     raise exception 'Internal role required';
   end if;
 
