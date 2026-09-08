@@ -35,13 +35,6 @@ function setReattachStatus(message = "", isError = false) {
   el.classList.toggle("error", !!isError);
 }
 
-function formatPhone(phone) {
-  const digits = String(phone || "").replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
-  return digits.length === 10
-    ? `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`
-    : String(phone || "—");
-}
-
 function formatReceived(value) {
   if (!value) return "—";
   const date = new Date(value);
@@ -157,7 +150,6 @@ function filteredRows() {
     if (status !== "active" && row.status !== status) return false;
     if (!query) return true;
     return String(row.pro_number || "").toLowerCase().includes(query)
-      || String(row.sender_phone || "").replace(/\D/g, "").includes(query.replace(/\D/g, ""))
       || String(row.matched_load_number || "").toLowerCase().includes(query);
   });
 }
@@ -185,15 +177,12 @@ function renderTable() {
   body.innerHTML = rows.map((row) => {
     const count = (imagesBySubmission.get(row.id) || []).length;
     const rowClass = row.status === "needs_review" ? "needs-review" : row.status === "archived_match" ? "archived-match" : "";
-    const note = row.note ? (row.note.length > 80 ? `${row.note.slice(0, 80)}…` : row.note) : "—";
     return `<tr class="${rowClass}">
       <td>${esc(formatReceived(row.submitted_at))}</td>
-      <td><strong>${esc(formatPhone(row.sender_phone))}</strong></td>
       <td><strong>${esc(row.pro_number)}</strong></td>
       <td>${count}</td>
       <td>${statusMarkup(row)}</td>
       <td>${esc(attachmentLabel(row))}</td>
-      <td title="${esc(row.note || "")}">${esc(note)}</td>
       <td>
         <div class="paperwork-actions">
           <button class="btn btn-ghost" type="button" data-view="${row.id}">View</button>
@@ -242,9 +231,8 @@ async function openView(submissionId) {
   selectedSubmissionId = submissionId;
   byId("pw-view-backdrop").classList.remove("hidden");
   byId("pw-view-title").textContent = `Paperwork — Pro ${row.pro_number}`;
-  byId("pw-view-subtitle").textContent = `Received ${formatReceived(row.submitted_at)} from ${formatPhone(row.sender_phone)}`;
+  byId("pw-view-subtitle").textContent = `Received ${formatReceived(row.submitted_at)}`;
   byId("pw-meta-grid").innerHTML = [
-    metaCard("Sent From", formatPhone(row.sender_phone)),
     metaCard("Entered Pro #", row.pro_number),
     metaCard("Status", row.status.replaceAll("_", " ")),
     metaCard("Attached To", attachmentLabel(row)),
@@ -426,7 +414,7 @@ async function assignCandidate(sourceTable, sourceId) {
 async function softDelete(submissionId) {
   const row = submissions.find((item) => item.id === submissionId);
   if (!row) return;
-  if (!confirm(`Remove the paperwork received from ${formatPhone(row.sender_phone)} for Pro ${row.pro_number} from the inbox?\n\nThe original images will be retained.`)) return;
+  if (!confirm(`Remove the paperwork for Pro ${row.pro_number} from the inbox?\n\nThe original images will be retained.`)) return;
   try {
     const { error } = await client.rpc("soft_delete_paperwork_submission", {
       p_submission_id: submissionId,
