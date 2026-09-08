@@ -4,9 +4,11 @@ import { createClient } from 'npm:@supabase/supabase-js@2.110.7';
 const BUCKET = 'paperwork-submissions';
 const MAX_IMAGES = 12;
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
-const MAX_NOTE_LENGTH = 500;
-const RATE_WINDOW_MS = 10 * 60 * 1000;
-const RATE_MAX_SUBMISSIONS = 20;
+const MAX_TOTAL_IMAGE_BYTES = 60 * 1024 * 1024;
+const INSTALL_RATE_WINDOW_SECONDS = 10 * 60;
+const INSTALL_RATE_MAX = 20;
+const GLOBAL_RATE_WINDOW_SECONDS = 10 * 60;
+const GLOBAL_RATE_MAX = 2000;
 const ALLOWED_MIME_TYPES = new Set([
   'image/jpeg',
   'image/png',
@@ -29,7 +31,6 @@ function namedKey(envName: string, legacyName: string): string {
       const parsed = JSON.parse(raw) as Record<string, string>;
       if (parsed.default) return parsed.default;
     } catch {
-      // Local development may provide a plain value instead of a JSON map.
       if (raw.trim()) return raw.trim();
     }
   }
@@ -52,6 +53,12 @@ function extensionFor(file: File): string {
   }
 }
 
+async function sha256Hex(value: string): Promise<string> {
+  const input = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest('SHA-256', input);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 type MatchCandidate = {
   sourceTable: string;
   sourceId: number;
@@ -63,9 +70,6 @@ type MatchCandidate = {
 async function findCandidates(admin: ReturnType<typeof createClient>, proNumber: string): Promise<MatchCandidate[]> {
   const candidates = new Map<string, MatchCandidate>();
 
-  // Direct loads_shifts lookup checks BOTH identifiers. analytics_load_facts_all
-  // intentionally coalesces these fields and therefore cannot cover every
-  // historical case by itself.
   const { data: directRows, error: directError } = await admin
     .from('loads_shifts')
     .select('id,shift_date,pro_number,aljex_load_number')
@@ -83,8 +87,6 @@ async function findCandidates(admin: ReturnType<typeof createClient>, proNumber:
     });
   }
 
-  // This view covers live and archived load facts across locations. It is also
-  // what lets a late upload be recognized after the operational row was purged.
   const { data: factRows, error: factError } = await admin
     .from('analytics_load_facts_all')
     .select('source_table,original_id,load_number,shift_date,is_archived')
@@ -108,6 +110,21 @@ async function findCandidates(admin: ReturnType<typeof createClient>, proNumber:
   );
 }
 
+async function consumeRateLimit(
+  admin: ReturnType<typeof createClient>,
+  keyHash: string,
+  windowSeconds: number,
+  maxSubmissions: number,
+): Promise<boolean> {
+  const { data, error } = await admin.rpc('consume_paperwork_rate_limit', {
+    p_key_hash: keyHash,
+    p_window_seconds: windowSeconds,
+    p_max_submissions: maxSubmissions,
+  });
+  if (error) throw error;
+  return data === true;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
 
@@ -115,61 +132,51 @@ Deno.serve(async (req: Request) => {
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     if (!supabaseUrl) throw new Error('Missing SUPABASE_URL');
 
-    const publishableKey = namedKey('SUPABASE_PUBLISHABLE_KEYS', 'SUPABASE_ANON_KEY');
     const secretKey = namedKey('SUPABASE_SECRET_KEYS', 'SUPABASE_SERVICE_ROLE_KEY');
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) return json({ error: 'Phone verification required.' }, 401);
-
-    const accessToken = authHeader.slice('Bearer '.length).trim();
-    const authClient = createClient(supabaseUrl, publishableKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
     const admin = createClient(supabaseUrl, secretKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
-    const {
-      data: { user },
-      error: userError,
-    } = await authClient.auth.getUser(accessToken);
+    const installId = (req.headers.get('x-mj-install-id') || '').trim();
+    if (!/^[A-Za-z0-9._:-]{16,160}$/.test(installId)) {
+      return json({ error: 'This app installation could not be identified. Restart the app and try again.' }, 400);
+    }
 
-    if (userError || !user?.id || !user.phone) {
-      return json({ error: 'Phone verification required.' }, 401);
+    const installHash = await sha256Hex(`install:${installId}`);
+    const [installAllowed, globalAllowed] = await Promise.all([
+      consumeRateLimit(admin, installHash, INSTALL_RATE_WINDOW_SECONDS, INSTALL_RATE_MAX),
+      consumeRateLimit(admin, await sha256Hex('paperwork-global-v1'), GLOBAL_RATE_WINDOW_SECONDS, GLOBAL_RATE_MAX),
+    ]);
+    if (!installAllowed || !globalAllowed) {
+      return json({ error: 'Too many submissions in a short period. Try again shortly.' }, 429);
     }
 
     const form = await req.formData();
     const proNumber = String(form.get('proNumber') ?? '').trim();
-    const note = String(form.get('note') ?? '').trim();
     const images = form.getAll('images').filter((value): value is File => value instanceof File);
 
     if (!/^\d{1,20}$/.test(proNumber)) {
       return json({ error: 'Enter a valid Aljex / Pro number.' }, 400);
     }
-    if (note.length > MAX_NOTE_LENGTH) {
-      return json({ error: `Notes must be ${MAX_NOTE_LENGTH} characters or fewer.` }, 400);
-    }
     if (images.length < 1 || images.length > MAX_IMAGES) {
       return json({ error: `Submit between 1 and ${MAX_IMAGES} images.` }, 400);
     }
 
+    let totalImageBytes = 0;
     for (const image of images) {
       if (!ALLOWED_MIME_TYPES.has(image.type)) {
         return json({ error: `Unsupported image type: ${image.type || 'unknown'}.` }, 400);
       }
+      if (image.size < 1) {
+        return json({ error: `${image.name || 'An image'} is empty.` }, 400);
+      }
       if (image.size > MAX_IMAGE_BYTES) {
         return json({ error: `${image.name || 'An image'} is larger than 15 MB.` }, 400);
       }
+      totalImageBytes += image.size;
     }
-
-    const rateStart = new Date(Date.now() - RATE_WINDOW_MS).toISOString();
-    const { count: recentCount, error: rateError } = await admin
-      .from('paperwork_submissions')
-      .select('id', { count: 'exact', head: true })
-      .eq('sender_auth_user_id', user.id)
-      .gte('submitted_at', rateStart);
-    if (rateError) throw rateError;
-    if ((recentCount ?? 0) >= RATE_MAX_SUBMISSIONS) {
-      return json({ error: 'Too many submissions in a short period. Try again shortly.' }, 429);
+    if (totalImageBytes > MAX_TOTAL_IMAGE_BYTES) {
+      return json({ error: 'This submission is too large. Send fewer photos and try again.' }, 400);
     }
 
     const candidates = await findCandidates(admin, proNumber);
@@ -194,10 +201,7 @@ Deno.serve(async (req: Request) => {
     const submittedAt = new Date().toISOString();
     const { error: submissionError } = await admin.from('paperwork_submissions').insert({
       id: submissionId,
-      sender_auth_user_id: user.id,
-      sender_phone: user.phone,
       pro_number: proNumber,
-      note: note || null,
       status,
       match_reason: matchReason,
       matched_source_table: matched?.sourceTable ?? null,
@@ -254,10 +258,8 @@ Deno.serve(async (req: Request) => {
     return json({
       submissionId,
       receivedAt: submittedAt,
-      status: status === 'archived_match' ? 'needs_review' : status,
-      message: status === 'attached'
-        ? 'Paperwork received and matched.'
-        : 'Paperwork received. The office will review the load match.',
+      status: 'received',
+      message: 'Paperwork received.',
     }, 201);
   } catch (error) {
     console.error('paperwork-submit failed', error);
