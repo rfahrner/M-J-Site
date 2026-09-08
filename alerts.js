@@ -6,7 +6,7 @@ import './paperwork-load-integration.js';
   export const PRE_SHIFT_TEXT_LEAD_MIN = 60; // Stage 1: pre-shift ETA text needed 60 min before shift start
   export const PRE_SHIFT_CALL_FOLLOWUP_MIN = 30; // Stage 2: call nudge once we're inside 30 min of shift start with no ETA
   export const PRE_SHIFT_ESCALATION_MIN = 15; // Stage 3: driver hasn't confirmed at all, inside 15 min of shift start with no ETA
-  export const LAST_STOP_RETURN_FOLLOWUP_MIN = 45; // Stage 6 repeat interval: once Return ETA to DC's time has arrived, re-check every 45 min after that
+  export const LAST_STOP_RETURN_FOLLOWUP_MIN = 45; // Stage 6 repeat interval: once Return ETA to DC's time has arrived, re-check every 45 min until the trip's marked complete
   export const AT_DC_FOLLOWUP_MIN = 45; // repeat interval for "still waiting at the DC, not yet dispatched on their next load"
   const PAPERWORK_FOLLOWUP_MIN = 15; // reach out within 15 min if a new route starts before the last one's paperwork is in
   let boardAlerts = []; // current alerts, each with a stable key + firstSeenAt timestamp
@@ -15,13 +15,22 @@ import './paperwork-load-integration.js';
   let alertPanelExpanded = false;
   let alertPanelHasUnread = false;
   export function minsSinceMidnightNow() {
+    // Every alert threshold and the Next Call Time column are all built on
+    // this one function -- it needs to reflect Atlanta's actual clock time,
+    // not whatever timezone the person viewing the board happens to be in.
+    // A dispatcher checking in from a different timezone (or a browser/
+    // system clock that's just off) would otherwise throw every threshold
+    // in this file off by however many hours that difference is.
     const parts = new Intl.DateTimeFormat("en-US", {
       timeZone: "America/New_York", hour: "numeric", minute: "numeric", hour12: false,
     }).formatToParts(new Date());
-    const hour = Number(parts.find((p) => p.type === "hour").value) % 24;
+    const hour = Number(parts.find((p) => p.type === "hour").value) % 24; // Intl can return "24" for midnight
     const minute = Number(parts.find((p) => p.type === "minute").value);
     return hour * 60 + minute;
   }
+  // Same idea, but for an arbitrary timestamp instead of always "now" --
+  // needed to compare a trip's completed_at against its return_eta_to_dc
+  // on the same Atlanta-local clock, for the "at DC" alert below.
   function minsSinceMidnightAtTimestamp(isoString) {
     if (!isoString) return null;
     const parts = new Intl.DateTimeFormat("en-US", {
@@ -41,9 +50,13 @@ import './paperwork-load-integration.js';
   }
   export async function scanForBoardAlerts() {
     if (!supabaseClient) return [];
+    // Alerts are exclusive to whichever board tab is currently open --
+    // Atlanta only shows Atlanta's alerts, not Delaware's or Building C's,
+    // and pages outside these three (Houston, Mondelez, Driver List) don't
+    // show any of these at all, since none of this applies to them.
     if (!ALL_ALERT_LOCATIONS.includes(state.activeLocation)) return [];
     const thisLocation = [state.activeLocation];
-    const todayKey = dateKey(new Date());
+    const todayKey = dateKey(new Date()); // existing helper — local YYYY-MM-DD
     const { data: shifts, error: shiftErr } = await supabaseClient
       .from(SHIFTS_TABLE).select("*").in("location", thisLocation).eq("shift_date", todayKey);
     if (shiftErr || !shifts || !shifts.length) return [];
@@ -51,6 +64,11 @@ import './paperwork-load-integration.js';
     const { data: trips } = await supabaseClient.from(TRIPS_TABLE).select("*").in("shift_id", shiftIds);
     const tripsByShift = {};
     (trips || []).forEach((t) => { (tripsByShift[t.shift_id] = tripsByShift[t.shift_id] || []).push(t); });
+    // trip_stops -- used by the missing-paperwork rule below to tell
+    // whether an open trip has any REAL in/out times recorded yet. Has to
+    // check actual time_in/time_out values, not just row existence -- a
+    // blank placeholder row gets created as soon as a stop count is set,
+    // before anyone's typed an actual time into it.
     const allTripIds = (trips || []).map((t) => t.id);
     let stopsByTrip = {};
     if (allTripIds.length) {
@@ -59,20 +77,28 @@ import './paperwork-load-integration.js';
     }
     const nowMin = minsSinceMidnightNow();
     const alerts = [];
-    const preShiftTextNeeded = [];
+    const preShiftTextNeeded = []; // collected across all shifts, then grouped by shift time below
     for (const s of shifts) {
-      if (s.shift_complete) continue;
+      if (s.shift_complete) continue; // finished loads don't need attention
       const rowTrips = (tripsByShift[s.id] || []).sort((a, b) => a.trip_number - b.trip_number);
       const hasRealTrip = rowTrips.some((t) => (t.route_id || "").trim() || (t.trip_id || "").trim());
       const label = s.pro_number || s.driver_name_text || `Load on ${s.location}`;
       const driverName = driverNameForShift(s);
       const driverPhone = driverPhoneForShift(s);
       const shiftStartMin = parseHHMM(s.shift_start);
+      // ---- Pre-shift ETA cascade (Stages 1-3) ----
+      // Gated on eta_shift_report being blank AND the driver not already
+      // having a real dispatched trip -- if they've been dispatched, that's
+      // strong proof they showed up and this is confirmed in every way that
+      // actually matters, even if nobody went back and manually filled in
+      // the ETA field itself. Tracking moves on to the next stage instead
+      // of continuing to ask a question that's already been answered.
       const hasEta = !!(s.eta_shift_report || "").trim();
       if (shiftStartMin != null && !hasEta && !hasRealTrip) {
         const minsUntilShift = shiftStartMin - nowMin;
         const clockLabel = minsToClock(shiftStartMin);
         if (minsUntilShift <= PRE_SHIFT_ESCALATION_MIN && minsUntilShift > -180) {
+          // Stage 3: driver hasn't confirmed their shift at all
           alerts.push({
             key: `preshift-escalate-${s.id}`, type: "preshift_escalate", location: s.location, shiftDbId: s.id,
             message: `${driverName} (${label}) — has not confirmed their ${clockLabel} shift today`,
@@ -80,15 +106,23 @@ import './paperwork-load-integration.js';
             actionMessage: `This is D&L Transportation, ${driverName} — we still haven't heard from you about your ${clockLabel} shift today. Please call or text us right away.`,
           });
         } else if (minsUntilShift <= PRE_SHIFT_CALL_FOLLOWUP_MIN && minsUntilShift > -180) {
+          // Stage 2: no ETA yet, prompt a call (no text button -- a text already went out in stage 1)
           alerts.push({
             key: `preshift-call-${s.id}`, type: "call_followup", location: s.location, shiftDbId: s.id,
             message: `${driverName} (${label}) — no ETA yet for ${clockLabel} shift, please call`,
             recipients: [],
           });
         } else if (minsUntilShift <= PRE_SHIFT_TEXT_LEAD_MIN && minsUntilShift > -180) {
+          // Stage 1: initial pre-shift ETA text, collected and grouped by shift time below
           preShiftTextNeeded.push({ shiftStartMin, driverName, driverPhone, label, shiftDbId: s.id });
         }
       }
+      // ---- Stage 4: dispatch check, 45 min after shift start, repeating ----
+      // Only starts once the ETA is actually confirmed -- if we're still
+      // waiting to hear from the driver at all, stages 1-3 above are the
+      // relevant ones, not this. Re-fires (re-triggers the unread/blink
+      // state) every IDLE_THRESHOLD_MIN by rolling a "tier" into the key --
+      // a new tier is a new key, which the panel treats as a fresh alert.
       if (shiftStartMin != null && !hasRealTrip && hasEta) {
         const idleFor = nowMin - shiftStartMin;
         if (idleFor >= IDLE_THRESHOLD_MIN) {
@@ -101,6 +135,8 @@ import './paperwork-load-integration.js';
           });
         }
       }
+      // Rule: missing paperwork -- a later trip has started while an
+      // earlier trip is still open with no stop times recorded at all.
       for (let i = 0; i < rowTrips.length; i++) {
         const earlier = rowTrips[i];
         const earlierOpen = !earlier.minimized && !earlier.complete && ((earlier.route_id || "").trim() || (earlier.trip_id || "").trim());
@@ -122,10 +158,14 @@ import './paperwork-load-integration.js';
           });
         }
       }
+      // Rules: missing dispatch time, and the Stage 5/6 last-stop cascade,
+      // per active (non-minimized, non-complete) trip. Each trip is its own
+      // independent cycle, so a driver starting a new route naturally
+      // starts a fresh cycle for that trip without any extra bookkeeping.
       for (const t of rowTrips) {
         if (t.minimized || t.complete) continue;
         const hasRoute = (t.route_id || "").trim() || (t.trip_id || "").trim();
-        if (!hasRoute) continue;
+        if (!hasRoute) continue; // not dispatched yet -- Stage 4 above covers that case
         const tripLabel = t.trip_id || t.route_id;
         if (!t.dispatch_time) {
           alerts.push({
@@ -133,13 +173,19 @@ import './paperwork-load-integration.js';
             message: `${driverName} (${label}, ${tripLabel}) — no dispatch time entered, can't calculate ETA`,
             recipients: [],
           });
-          continue;
+          continue; // no dispatch time means last-stop timing can't be evaluated either
         }
+        // if a later trip's already been dispatched, this trip's cycle is
+        // done regardless of what stage it was on -- the next trip's own
+        // cycle (checked independently, this same loop) takes over
         const laterDispatched = rowTrips.some((t2) => t2.trip_number > t.trip_number && ((t2.route_id || "").trim() || (t2.trip_id || "").trim()));
         if (laterDispatched) continue;
         const lastStopMin = parseHHMM(t.last_stop_depart);
         const returnEtaMin = parseHHMM(t.return_eta_to_dc);
         if (lastStopMin != null && returnEtaMin == null && nowMin >= lastStopMin) {
+          // Stage 5: last-stop-depart time has arrived, no return ETA yet --
+          // this ONLY asks whether the driver made it and what their ETA
+          // back to the DC is. Paperwork/drop-spot isn't part of this one.
           alerts.push({
             key: `laststop-${t.id}`, type: "last_stop", location: s.location, shiftDbId: s.id,
             message: `${driverName} (${label}, ${tripLabel}) — should be at their last stop, let's get an ETA to the DC`,
@@ -147,6 +193,10 @@ import './paperwork-load-integration.js';
             actionMessage: `This is D&L transportation, ${driverName}. Have you made it to your last stop? What's your ETA back to the DC?`,
           });
         } else if (returnEtaMin != null && nowMin >= returnEtaMin) {
+          // Stage 6: we HAVE a return ETA and that time has arrived --
+          // NOW is when paperwork and drop-spot location get asked for.
+          // Repeats every LAST_STOP_RETURN_FOLLOWUP_MIN until the trip's
+          // marked complete (or a later trip gets dispatched, caught above).
           const sinceReturnEta = nowMin - returnEtaMin;
           const tier = Math.floor(sinceReturnEta / LAST_STOP_RETURN_FOLLOWUP_MIN);
           alerts.push({
@@ -157,6 +207,11 @@ import './paperwork-load-integration.js';
           });
         }
       }
+      // Stage 7: driver waiting at the DC between trips -- every trip on
+      // this shift is closed out, but the shift itself isn't complete,
+      // meaning they're sitting idle waiting on their next dispatch.
+      // Repeats every AT_DC_FOLLOWUP_MIN, same tiered-key trick as the
+      // other repeating alerts above.
       if (!s.shift_complete && hasRealTrip) {
         const allDone = rowTrips.every((t) => t.minimized || !String(t.route_id || t.trip_id || "").trim());
         if (allDone) {
@@ -184,6 +239,8 @@ import './paperwork-load-integration.js';
         }
       }
     }
+    // Group pre-shift-text-needed drivers by shift time -- same time means
+    // the same message text, so one alert with one button covers all of them.
     const byShiftTime = {};
     preShiftTextNeeded.forEach((d) => { (byShiftTime[d.shiftStartMin] = byShiftTime[d.shiftStartMin] || []).push(d); });
     Object.entries(byShiftTime).forEach(([shiftStartMin, list]) => {
@@ -196,7 +253,7 @@ import './paperwork-load-integration.js';
         message: `${list.length > 1 ? `${list.length} drivers` : names} due for a pre-shift check-in text — ${clockLabel} shift${list.length > 1 ? "s" : ""} (${names})`,
         recipients,
         actionMessage: `This is D&L Transportation, could we have an ETA for your ${clockLabel} kroger shift`,
-        markShiftIdsOnSent: withPhone.map((d) => d.shiftDbId),
+        markShiftIdsOnSent: withPhone.map((d) => d.shiftDbId), // Pre Shift Text Sent gets marked automatically once this actually sends
       });
     });
     return alerts;
@@ -211,7 +268,7 @@ import './paperwork-load-integration.js';
   }
   export function saveAlertWidgetPrefs(patch) {
     const prefs = { ...loadAlertWidgetPrefs(), ...patch };
-    try { localStorage.setItem("dl-alert-widget-prefs", JSON.stringify(prefs)); } catch (e) { }
+    try { localStorage.setItem("dl-alert-widget-prefs", JSON.stringify(prefs)); } catch (e) { /* ignore quota errors */ }
   }
   export function renderAlertPanel() {
     const widget = $("#alert-widget");
@@ -227,6 +284,7 @@ import './paperwork-load-integration.js';
       return;
     }
     const ICONS = { idle: "⏱", overdue_return: "↩", missing_eta: "❓", preshift_text: "📋", preshift_escalate: "🚨", call_followup: "📞", missing_paperwork: "📄", last_stop: "🏁", at_dc_waiting: "🅿️" };
+    // newest first
     const sorted = [...boardAlerts].sort((a, b) => alertFirstSeenAt[b.key] - alertFirstSeenAt[a.key]);
     body.innerHTML = sorted.map((a) => {
       const targetIds = a.markShiftIdsOnSent && a.markShiftIdsOnSent.length ? a.markShiftIdsOnSent : (a.shiftDbId != null ? [a.shiftDbId] : []);
@@ -252,9 +310,9 @@ import './paperwork-load-integration.js';
     const nextFirstSeen = {};
     fresh.forEach((a) => {
       if (alertFirstSeenAt[a.key]) {
-        nextFirstSeen[a.key] = alertFirstSeenAt[a.key];
+        nextFirstSeen[a.key] = alertFirstSeenAt[a.key]; // keep original timestamp
       } else {
-        nextFirstSeen[a.key] = now;
+        nextFirstSeen[a.key] = now; // genuinely new — timestamp it now, trigger the blink
         sawNew = true;
       }
     });
@@ -290,7 +348,7 @@ import './paperwork-load-integration.js';
   export function wireAlertWidgetDrag(widget, header) {
     let dragging = false, moved = false, startX = 0, startY = 0, origLeft = 0, origTop = 0;
     header.addEventListener("mousedown", (e) => {
-      if (e.target.closest(".alert-widget-btn")) return;
+      if (e.target.closest(".alert-widget-btn")) return; // don't start a drag from the min/close buttons
       dragging = true;
       moved = false;
       const rect = widget.getBoundingClientRect();
@@ -306,7 +364,7 @@ import './paperwork-load-integration.js';
       if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
       if (!moved) return;
       const maxLeft = window.innerWidth - widget.offsetWidth - 4;
-      const maxTop = window.innerHeight - 40;
+      const maxTop = window.innerHeight - 40; // keep at least the header on-screen
       const left = Math.min(Math.max(4, origLeft + dx), Math.max(4, maxLeft));
       const top = Math.min(Math.max(4, origTop + dy), Math.max(4, maxTop));
       applyAlertWidgetPosition(widget, { left, top });
@@ -318,7 +376,7 @@ import './paperwork-load-integration.js';
         const rect = widget.getBoundingClientRect();
         saveAlertWidgetPrefs({ left: rect.left, top: rect.top });
       } else {
-        toggleAlertPanel();
+        toggleAlertPanel(); // it was a click, not a drag — behave like clicking the header always has
       }
     });
   }
@@ -358,6 +416,8 @@ import './paperwork-load-integration.js';
     $("#alert-widget-close").addEventListener("click", (e) => { e.stopPropagation(); closeAlertWidget(); });
     reopenBtn.addEventListener("click", reopenAlertWidget);
     wireAlertWidgetDrag(el, $("#alert-widget-header"));
+    // Delegated -- alert items are re-rendered wholesale on every scan, so
+    // listeners attached directly to them would be lost each time.
     el.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-alert-action-key]");
       if (btn) {
@@ -369,6 +429,8 @@ import './paperwork-load-integration.js';
         }
         return;
       }
+      // clicking the alert itself (not its Text button) jumps to and
+      // outlines the row it's about, instead of navigating anywhere
       const item = e.target.closest("[data-alert-jump-ids]");
       if (item) {
         const ids = item.dataset.alertJumpIds.split(",").map(Number).filter((n) => !isNaN(n));
@@ -376,6 +438,15 @@ import './paperwork-load-integration.js';
       }
     });
   }
+  // Nav structure — top-level items in order. Plain data, easy to
+  // hand-edit: reorder items, add/remove children, flip comingSoon on
+  // or off. The rendering logic below doesn't need to change for any
+  // of that.
+  //   - No "children" + has "href": simple link.
+  //   - "children": hover dropdown. Clicking the parent label itself
+  //     (not a dropdown item) goes to the FIRST child's href.
+  //   - "comingSoon: true": shown but not clickable.
+  //   - "visible": optional function: () => boolean. Omit to always show.
   const NAV_STRUCTURE = [
     {
       label: "Kroger",
@@ -448,6 +519,9 @@ import './paperwork-load-integration.js';
     document.head.appendChild(style);
   }
 
+  // A dropdown child is "active" if its file matches the current page
+  // AND (for Mondelez children specifically) its ?loc= param matches
+  // what's actually in the URL right now.
   function isNavChildActive(child, curFile, curLocParam) {
     const [childFile, childQuery] = child.href.split("?");
     if (childFile !== curFile) return false;
@@ -456,6 +530,17 @@ import './paperwork-load-integration.js';
     return childParams.get("loc") === curLocParam;
   }
 
+  // The dropdown menu is appended directly to <body>, deliberately NOT
+  // nested inside #tabs/.topbar. #tabs has overflow-x:auto for its own
+  // legitimate reason (horizontal scroll when there are many top-level
+  // items) — but per the CSS spec, setting overflow on just one axis
+  // forces the other axis to also compute as "auto" rather than
+  // "visible," even though overflow-y was never explicitly set. That
+  // silently clipped a nested dropdown to the topbar's own 52px height,
+  // which is exactly what "makes me scroll down to see the options" was.
+  // A portal element outside that container entirely sidesteps the
+  // problem rather than fighting a CSS rule that can't be overridden
+  // from the child's side.
   let navHideTimer = null;
   function getOrCreateNavPortal() {
     let portal = document.getElementById("nav-dropdown-portal");
@@ -472,7 +557,7 @@ import './paperwork-load-integration.js';
     navHideTimer = setTimeout(() => {
       const portal = document.getElementById("nav-dropdown-portal");
       if (portal) portal.style.display = "none";
-    }, 150);
+    }, 150); // short grace period so moving the mouse from the trigger down into the menu doesn't flicker-close it
   }
   function showNavPortalFor(triggerEl, children, cur, curLocParam) {
     if (navHideTimer) clearTimeout(navHideTimer);
@@ -488,14 +573,21 @@ import './paperwork-load-integration.js';
     const tabsEl = $("#tabs");
     if (!tabsEl) return;
     ensureNavDropdownCss();
+    // Highlight from the real URL rather than currentFile(): currentFile()
+    // falls back to "index.html" for anything missing from PAGE_MAP, and
+    // index.html is Kroger's first child — so any unregistered page (or a
+    // stale cached loadboard.js) shaded the Kroger tab as if you were on
+    // Atlanta. Nothing should be highlighted when nothing matches.
     const cur = location.pathname.split("/").pop() || "index.html";
     const curLocParam = new URLSearchParams(window.location.search).get("loc");
 
     tabsEl.innerHTML = NAV_STRUCTURE.map((item, idx) => {
       if (item.visible && !item.visible()) return "";
+
       if (item.comingSoon) {
         return `<span class="tab-btn-disabled" title="Coming soon">${escapeHtml(item.label)}</span>`;
       }
+
       if (item.children) {
         const visibleChildren = item.children.filter((c) => !c.visible || c.visible());
         if (!visibleChildren.length) return "";
@@ -503,6 +595,7 @@ import './paperwork-load-integration.js';
         const isActiveParent = visibleChildren.some((c) => isNavChildActive(c, cur, curLocParam));
         return `<a class="tab-btn${isActiveParent ? " active" : ""}" href="${escapeHtml(first.href)}" data-nav-dropdown-idx="${idx}">${escapeHtml(item.label)}</a>`;
       }
+
       return `<a class="tab-btn${item.href === cur ? " active" : ""}" href="${escapeHtml(item.href)}">${escapeHtml(item.label)}</a>`;
     }).join("") + `<button type="button" class="tab-btn" id="nav-logout" style="margin-left:auto;">Log Out</button>`;
 
