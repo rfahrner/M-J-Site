@@ -16,7 +16,7 @@
     .paperwork-summary { display:flex; gap:9px; flex-wrap:wrap; margin:0 0 14px; }
     .paperwork-pill { background:#fff; border:1px solid var(--line); border-radius:999px; padding:6px 10px; color:#475569; font-size:12px; }
     .paperwork-table-wrap { background:#fff; border:1px solid var(--line); border-radius:10px; overflow:auto; }
-    .paperwork-table { width:100%; border-collapse:collapse; min-width:980px; }
+    .paperwork-table { width:100%; border-collapse:collapse; min-width:820px; }
     .paperwork-table th { position:sticky; top:0; z-index:1; text-align:left; background:#eef1f6; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:#475569; padding:9px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
     .paperwork-table td { padding:10px; border-bottom:1px solid #edf0f4; vertical-align:middle; }
     .paperwork-table tr:last-child td { border-bottom:0; }
@@ -39,7 +39,7 @@
     .pw-modal-head { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:14px; }
     .pw-modal-head h2 { margin:0 0 4px; font-size:20px; }
     .pw-close { border:0; background:transparent; font-size:24px; line-height:1; padding:0 4px; color:#475569; }
-    .pw-meta-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:9px; margin-bottom:14px; }
+    .pw-meta-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; margin-bottom:14px; }
     .pw-meta { border:1px solid var(--line); border-radius:8px; padding:9px; background:#fafbfc; }
     .pw-meta .k { font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:#64748b; font-weight:700; }
     .pw-meta .v { margin-top:3px; font-size:13px; font-weight:700; overflow-wrap:anywhere; }
@@ -67,7 +67,7 @@
     .image-lightbox img { max-width:96vw; max-height:94vh; object-fit:contain; }
     .image-lightbox button { position:fixed; top:14px; right:18px; border:0; background:rgba(255,255,255,.15); color:#fff; width:42px; height:42px; border-radius:999px; font-size:25px; }
     @media(max-width:760px) {
-      .pw-meta-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .pw-meta-grid { grid-template-columns:1fr; }
       .pw-images { grid-template-columns:1fr; }
       .pw-image-card img { height:auto; max-height:65vh; }
     }
@@ -83,7 +83,7 @@
     <div class="paperwork-toolbar">
       <div>
         <h1>Paperwork Inbox</h1>
-        <div class="subtext">Trip sheets submitted from M-J-App. The sending phone number is retained exactly as submitted.</div>
+        <div class="subtext">Trip sheets submitted from M-J-App. Submissions are matched by Pro number.</div>
       </div>
       <div class="paperwork-filters">
         <div>
@@ -97,7 +97,7 @@
         </div>
         <div>
           <label for="pw-search">Search</label>
-          <input id="pw-search" type="search" placeholder="Pro # or phone">
+          <input id="pw-search" type="search" placeholder="Pro # or attached load">
         </div>
         <button class="btn btn-ghost" id="pw-refresh" type="button">Refresh</button>
       </div>
@@ -111,12 +111,10 @@
         <thead>
           <tr>
             <th>Received</th>
-            <th>Sent From</th>
             <th>Entered Pro #</th>
             <th>Images</th>
             <th>Status</th>
             <th>Attached To</th>
-            <th>Note</th>
             <th>Actions</th>
           </tr>
         </thead>

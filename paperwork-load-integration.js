@@ -95,7 +95,7 @@ async function loadMobilePaperwork(shiftId) {
   if (!c) return [];
   const { data: submissions, error: subError } = await c
     .from("paperwork_submissions")
-    .select("id, sender_phone, pro_number, submitted_at, status, note")
+    .select("id, pro_number, submitted_at, status")
     .eq("matched_shift_id", shiftId)
     .is("deleted_at", null)
     .order("submitted_at", { ascending: true });
@@ -131,12 +131,6 @@ async function loadMobilePaperwork(shiftId) {
   }));
 }
 
-function phoneLabel(value) {
-  const digits = normalizeNumber(value).replace(/^1(?=\d{10}$)/, "");
-  if (digits.length !== 10) return value || "unknown number";
-  return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
-}
-
 function submissionHtml(submission) {
   const when = submission.submitted_at ? new Date(submission.submitted_at).toLocaleString() : "Unknown time";
   const images = submission.images.length
@@ -149,11 +143,9 @@ function submissionHtml(submission) {
     <div class="mjapp-paperwork-submission">
       <div class="mjapp-paperwork-meta">
         <strong>Received ${esc(when)}</strong>
-        <span>Sent from ${esc(phoneLabel(submission.sender_phone))}</span>
         <span>Entered Pro # ${esc(submission.pro_number || "—")}</span>
       </div>
       <div class="mjapp-paperwork-images">${images}</div>
-      ${submission.note ? `<div class="calc-note" style="margin-top:7px;">Sender note: ${esc(submission.note)}</div>` : ""}
     </div>`;
 }
 
@@ -178,7 +170,7 @@ async function renderIntoImagesTab() {
   const body = document.getElementById("ld-tab-content");
   const modal = document.getElementById("modal-load-details");
   if (!body || !modal || modal.classList.contains("hidden")) return;
-  if (!document.getElementById("ld-file-input")) return; // Trip Sheet Images tab is not active.
+  if (!document.getElementById("ld-file-input")) return;
   if (document.getElementById("mjapp-paperwork-section")) return;
 
   ensureStyles();

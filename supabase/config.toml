@@ -1,2 +1,2 @@
 [functions.paperwork-submit]
-verify_jwt = true
+verify_jwt = false
