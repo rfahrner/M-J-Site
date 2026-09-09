@@ -11,7 +11,6 @@ const GLOBAL_RATE_WINDOW_SECONDS = 10 * 60;
 const GLOBAL_RATE_MAX = 2000;
 const RECEIPT_RATE_MAX = 60;
 const GLOBAL_RECEIPT_RATE_MAX = 10000;
-const STALE_INTAKE_MS = 10 * 60 * 1000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ALLOWED_MIME_TYPES = new Set([
   'image/jpeg',
@@ -73,6 +72,12 @@ type MatchCandidate = {
 
 type ExistingSubmission = {
   id: string;
+  pro_number: string;
+  status: string;
+  match_reason: string;
+  matched_source_table: string | null;
+  matched_source_id: number | null;
+  matched_load_number: string | null;
   submitted_at: string;
 };
 
@@ -134,57 +139,26 @@ async function consumeRateLimit(
   return data === true;
 }
 
-async function cleanupStaleSubmission(
+async function getExistingSubmission(
   admin: ReturnType<typeof createClient>,
   submissionId: string,
-): Promise<void> {
-  const paths = new Set<string>();
-
-  const { data: imageRows, error: imageError } = await admin
-    .from('paperwork_images')
-    .select('storage_path')
-    .eq('submission_id', submissionId);
-  if (imageError) throw imageError;
-  for (const row of imageRows ?? []) {
-    if (row.storage_path) paths.add(String(row.storage_path));
-  }
-
-  // Also inspect the submission prefix so a hard runtime interruption between
-  // Storage upload and paperwork_images insert cannot leave an orphan behind.
-  const { data: objects, error: listError } = await admin.storage
-    .from(BUCKET)
-    .list(submissionId, { limit: 100 });
-  if (!listError) {
-    for (const object of objects ?? []) {
-      if (object.name) paths.add(`${submissionId}/${object.name}`);
-    }
-  }
-
-  if (paths.size) {
-    const { error: removeError } = await admin.storage.from(BUCKET).remove([...paths]);
-    if (removeError) throw removeError;
-  }
-
-  const { error: deleteError } = await admin
+): Promise<ExistingSubmission | null> {
+  const { data, error } = await admin
     .from('paperwork_submissions')
-    .delete()
-    .eq('id', submissionId);
-  if (deleteError) throw deleteError;
+    .select('id,pro_number,status,match_reason,matched_source_table,matched_source_id,matched_load_number,submitted_at')
+    .eq('id', submissionId)
+    .maybeSingle();
+  if (error) throw error;
+  return data as ExistingSubmission | null;
 }
 
 async function existingSubmissionResponse(
   admin: ReturnType<typeof createClient>,
   submissionId: string,
 ): Promise<Response | null> {
-  const { data, error } = await admin
-    .from('paperwork_submissions')
-    .select('id,submitted_at')
-    .eq('id', submissionId)
-    .maybeSingle();
-  if (error) throw error;
-  if (!data) return null;
+  const existing = await getExistingSubmission(admin, submissionId);
+  if (!existing) return null;
 
-  const existing = data as ExistingSubmission;
   const { data: completedEvents, error: eventError } = await admin
     .from('paperwork_submission_events')
     .select('id')
@@ -202,18 +176,74 @@ async function existingSubmissionResponse(
     }, 200);
   }
 
-  const submittedAtMs = new Date(existing.submitted_at).getTime();
-  const ageMs = Number.isFinite(submittedAtMs) ? Date.now() - submittedAtMs : 0;
-  if (ageMs < STALE_INTAKE_MS) {
-    return json(
-      { error: 'This paperwork is still being saved. Wait a moment and tap Retry Submission again.' },
-      409,
-      { 'Retry-After': '3' },
-    );
-  }
+  // Never clean up or replace an intake just because it is old or incomplete.
+  // Anything that reached D&L is retained. New mobile retries use a new UUID and
+  // are recorded as additional paperwork linked back to this attempt.
+  return json(
+    {
+      error: 'D&L received part of this submission, but the receipt was not completed. Nothing was deleted. Send Retry Submission to add another preserved copy.',
+    },
+    409,
+  );
+}
 
-  await cleanupStaleSubmission(admin, submissionId);
-  return null;
+function retryNote(params: {
+  submissionId: string;
+  retryOfSubmissionId: string;
+  retryNumber: number;
+  previous: ExistingSubmission | null;
+  proNumber: string;
+  imageCount: number;
+  submittedAt: string;
+  status: string;
+  matchReason: string;
+  matched: MatchCandidate | null;
+}): string {
+  const previousDetails = params.previous
+    ? [
+        'Previous server record found: YES',
+        `Previous received: ${params.previous.submitted_at}`,
+        `Previous Pro: ${params.previous.pro_number}`,
+        `Previous status: ${params.previous.status} (${params.previous.match_reason})`,
+        `Previous attached to: ${params.previous.matched_source_table ?? 'none'}${params.previous.matched_source_id != null ? ` #${params.previous.matched_source_id}` : ''}${params.previous.matched_load_number ? ` / load ${params.previous.matched_load_number}` : ''}`,
+      ]
+    : ['Previous server record found: NO (the earlier phone attempt may not have reached the server).'];
+
+  const currentMatch = params.matched
+    ? `${params.status} (${params.matchReason}) -> ${params.matched.sourceTable} #${params.matched.sourceId} / load ${params.matched.loadNumber}${params.matched.isArchived ? ' [archived]' : ''}`
+    : `${params.status} (${params.matchReason})`;
+
+  return [
+    'MOBILE RETRY / ADDITIONAL PAPERWORK',
+    'This submission was added after an earlier mobile send did not have a confirmed receipt.',
+    'ADDITIVE ONLY: no earlier submission, image, note, attachment, or stored file was overwritten or deleted.',
+    `Retry attempt: #${params.retryNumber}`,
+    `Current submission ID: ${params.submissionId}`,
+    `Previous client submission ID: ${params.retryOfSubmissionId}`,
+    ...previousDetails,
+    `Current received: ${params.submittedAt}`,
+    `Current Pro: ${params.proNumber}`,
+    `Images received in this addition: ${params.imageCount}`,
+    `Current match result: ${currentMatch}`,
+  ].join('\n');
+}
+
+function previousRetryNote(params: {
+  newSubmissionId: string;
+  retryNumber: number;
+  proNumber: string;
+  imageCount: number;
+  submittedAt: string;
+}): string {
+  return [
+    'LATER MOBILE RETRY / ADDITION RECEIVED',
+    `A later retry was stored as separate submission ${params.newSubmissionId}.`,
+    `Retry attempt: #${params.retryNumber}`,
+    `Received: ${params.submittedAt}`,
+    `Pro: ${params.proNumber}`,
+    `Images in later addition: ${params.imageCount}`,
+    'This earlier submission was left unchanged. Nothing on this record was overwritten or deleted.',
+  ].join('\n');
 }
 
 Deno.serve(async (req: Request) => {
@@ -235,7 +265,26 @@ Deno.serve(async (req: Request) => {
 
     const requestedSubmissionId = (req.headers.get('x-mj-submission-id') || '').trim();
     if (requestedSubmissionId && !UUID_RE.test(requestedSubmissionId)) {
-      return json({ error: 'This saved paperwork retry is invalid. Start a new submission and try again.' }, 400);
+      return json({ error: 'This saved paperwork submission ID is invalid. Start a new submission and try again.' }, 400);
+    }
+
+    const retryOfSubmissionId = (req.headers.get('x-mj-retry-of') || '').trim();
+    if (retryOfSubmissionId && !UUID_RE.test(retryOfSubmissionId)) {
+      return json({ error: 'This retry reference is invalid. Start a new submission and try again.' }, 400);
+    }
+
+    const retryNumberRaw = (req.headers.get('x-mj-retry-number') || '').trim();
+    let retryNumber = 1;
+    if (retryOfSubmissionId) {
+      if (!/^\d{1,3}$/.test(retryNumberRaw)) {
+        return json({ error: 'This retry number is invalid. Start a new submission and try again.' }, 400);
+      }
+      retryNumber = Number(retryNumberRaw);
+      if (retryNumber < 2 || retryNumber > 999) {
+        return json({ error: 'This retry number is invalid. Start a new submission and try again.' }, 400);
+      }
+    } else if (retryNumberRaw) {
+      return json({ error: 'A retry number cannot be supplied without a prior submission reference.' }, 400);
     }
 
     const receiptProbe = req.headers.get('x-mj-receipt-check') === '1';
@@ -244,11 +293,13 @@ Deno.serve(async (req: Request) => {
     }
 
     const submissionId = requestedSubmissionId || crypto.randomUUID();
+    if (retryOfSubmissionId && retryOfSubmissionId === submissionId) {
+      return json({ error: 'A retry must use a new submission ID so earlier paperwork remains unchanged.' }, 400);
+    }
 
     if (receiptProbe) {
-      // Receipt probes are deliberately separate from submission limits. They
-      // carry no paperwork and return no Pro/load/driver details, but still get
-      // their own abuse throttle because this is a public zero-login endpoint.
+      // Kept temporarily for compatibility with pre-additive mobile builds. New
+      // app versions do not use this path for user-triggered retries.
       const installHash = await sha256Hex(`receipt:${installId}`);
       const [installAllowed, globalAllowed] = await Promise.all([
         consumeRateLimit(admin, installHash, INSTALL_RATE_WINDOW_SECONDS, RECEIPT_RATE_MAX),
@@ -260,15 +311,12 @@ Deno.serve(async (req: Request) => {
 
       const existingResponse = await existingSubmissionResponse(admin, submissionId);
       if (existingResponse) return existingResponse;
-
-      // No completed or active intake exists for this UUID. The mobile app may
-      // safely continue with the normal full upload using the SAME UUID.
       return json({ status: 'not_found' }, 404);
     }
 
-    // Backward-compatible full retry fast path. Older idempotent app versions
-    // may resend multipart data directly; acknowledge an existing result before
-    // parsing that multipart body.
+    // The same UUID is still idempotent inside one network attempt. A user-
+    // triggered retry is different: the mobile app supplies a fresh UUID plus
+    // X-MJ-Retry-Of so the new copy is additive rather than replacing anything.
     if (requestedSubmissionId) {
       const existingResponse = await existingSubmissionResponse(admin, submissionId);
       if (existingResponse) return existingResponse;
@@ -311,6 +359,10 @@ Deno.serve(async (req: Request) => {
       return json({ error: 'Too many submissions in a short period. Try again shortly.' }, 429);
     }
 
+    const previousSubmission = retryOfSubmissionId
+      ? await getExistingSubmission(admin, retryOfSubmissionId)
+      : null;
+
     const candidates = await findCandidates(admin, proNumber);
     let status: 'attached' | 'needs_review' | 'archived_match' = 'needs_review';
     let matchReason: 'exact_unique' | 'no_match' | 'ambiguous' | 'archived_unique' = 'no_match';
@@ -343,8 +395,6 @@ Deno.serve(async (req: Request) => {
       submitted_at: submittedAt,
     });
     if (submissionError) {
-      // A simultaneous retry may race the first request to the insert. Resolve
-      // the winner through the normal idempotency path instead of returning 500.
       if (requestedSubmissionId && String((submissionError as { code?: string }).code || '') === '23505') {
         const existingResponse = await existingSubmissionResponse(admin, submissionId);
         if (existingResponse) return existingResponse;
@@ -352,7 +402,21 @@ Deno.serve(async (req: Request) => {
       throw submissionError;
     }
 
+    // Record immediately that the phone attempted this exact UUID. This event
+    // does not count as a completed receipt, but it gives staff an audit trail
+    // even if image processing later stops unexpectedly.
+    await admin.from('paperwork_submission_events').insert({
+      submission_id: submissionId,
+      event_type: 'submitted',
+      event_note: retryOfSubmissionId
+        ? `mobile_retry_addition; retry_of=${retryOfSubmissionId}; retry_number=${retryNumber}`
+        : 'mobile_submission',
+    });
+
     const uploadedPaths: string[] = [];
+    let indexedImageCount = 0;
+    let failureStage = 'starting image intake';
+
     try {
       for (let index = 0; index < images.length; index += 1) {
         const image = images[index];
@@ -360,12 +424,14 @@ Deno.serve(async (req: Request) => {
         const path = `${submissionId}/${String(index + 1).padStart(2, '0')}-${imageId}.${extensionFor(image)}`;
         const bytes = await image.arrayBuffer();
 
+        failureStage = `uploading image ${index + 1} of ${images.length}`;
         const { error: uploadError } = await admin.storage
           .from(BUCKET)
           .upload(path, bytes, { contentType: image.type, upsert: false });
         if (uploadError) throw uploadError;
         uploadedPaths.push(path);
 
+        failureStage = `recording image ${index + 1} of ${images.length}`;
         const { error: imageError } = await admin.from('paperwork_images').insert({
           id: imageId,
           submission_id: submissionId,
@@ -377,20 +443,94 @@ Deno.serve(async (req: Request) => {
           sort_order: index,
         });
         if (imageError) throw imageError;
+        indexedImageCount += 1;
       }
 
+      if (retryOfSubmissionId) {
+        failureStage = 'recording retry audit notes';
+        const currentNote = retryNote({
+          submissionId,
+          retryOfSubmissionId,
+          retryNumber,
+          previous: previousSubmission,
+          proNumber,
+          imageCount: images.length,
+          submittedAt,
+          status,
+          matchReason,
+          matched,
+        });
+        const { error: currentNoteError } = await admin.from('paperwork_notes').insert({
+          submission_id: submissionId,
+          note_text: currentNote,
+        });
+        if (currentNoteError) throw currentNoteError;
+
+        if (previousSubmission) {
+          const { error: previousNoteError } = await admin.from('paperwork_notes').insert({
+            submission_id: retryOfSubmissionId,
+            note_text: previousRetryNote({
+              newSubmissionId: submissionId,
+              retryNumber,
+              proNumber,
+              imageCount: images.length,
+              submittedAt,
+            }),
+          });
+          if (previousNoteError) throw previousNoteError;
+        }
+      }
+
+      failureStage = 'finalizing submission audit event';
       const eventType = status === 'attached' ? 'auto_attached' : status === 'archived_match' ? 'archived_matched' : 'needs_review';
       const { error: eventError } = await admin.from('paperwork_submission_events').insert({
         submission_id: submissionId,
         event_type: eventType,
         to_source_table: matched?.sourceTable ?? null,
         to_source_id: matched?.sourceId ?? null,
-        event_note: matchReason,
+        event_note: retryOfSubmissionId
+          ? `${matchReason}; additive_retry_of=${retryOfSubmissionId}; retry_number=${retryNumber}`
+          : matchReason,
       });
       if (eventError) throw eventError;
     } catch (error) {
-      if (uploadedPaths.length) await admin.storage.from(BUCKET).remove(uploadedPaths);
-      await admin.from('paperwork_submissions').delete().eq('id', submissionId);
+      // Non-destructive intake rule: NEVER remove uploaded objects and NEVER
+      // delete the submission because a later step failed. Preserve every byte
+      // and row that reached D&L, mark it for office review, and let a mobile
+      // retry arrive as a separate linked submission.
+      console.error('paperwork intake incomplete', {
+        submissionId,
+        failureStage,
+        uploadedObjects: uploadedPaths.length,
+        indexedImages: indexedImageCount,
+        error,
+      });
+
+      await admin.from('paperwork_submissions').update({
+        status: 'needs_review',
+        match_reason: 'pending',
+      }).eq('id', submissionId);
+
+      const preservedPaths = uploadedPaths.length
+        ? uploadedPaths.join(', ')
+        : 'none';
+      await admin.from('paperwork_notes').insert({
+        submission_id: submissionId,
+        note_text: [
+          'INCOMPLETE MOBILE INTAKE — CONTENT PRESERVED',
+          'The phone did not receive a completed receipt. D&L intentionally kept everything that reached the server; nothing was rolled back, overwritten, or deleted.',
+          `Submission ID: ${submissionId}`,
+          `Pro: ${proNumber}`,
+          `Expected images: ${images.length}`,
+          `Uploaded storage objects preserved: ${uploadedPaths.length}`,
+          `Image records completed: ${indexedImageCount}`,
+          `Failure stage: ${failureStage}`,
+          `Preserved storage paths: ${preservedPaths}`,
+          retryOfSubmissionId ? `This was retry #${retryNumber} of client submission ${retryOfSubmissionId}.` : 'This was the original phone attempt.',
+          'If the driver retries, the retry is stored as a NEW additive submission and linked by automatic notes. This record remains unchanged.',
+        ].join('\n').slice(0, 2000),
+      });
+
       throw error;
     }
 
