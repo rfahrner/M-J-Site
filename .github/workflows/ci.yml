@@ -32,8 +32,20 @@ jobs:
       - name: Audit dependencies
         run: npm audit --audit-level=high
 
+      - name: Validate driver PWA scripts
+        run: |
+          node --check public/driver/app.js
+          node --check public/driver/sw.js
+
       - name: Build site
         run: npm run build
+
+      - name: Verify driver PWA is published by the build
+        run: |
+          test -f dist/driver/index.html
+          test -f dist/driver/app.js
+          test -f dist/driver/sw.js
+          test -f dist/driver/manifest.webmanifest
 
       - name: Setup Deno
         uses: denoland/setup-deno@v2
@@ -56,3 +68,6 @@ jobs:
 
       - name: Type-check paperwork Edge Function
         run: deno check --node-modules-dir=auto supabase/functions/paperwork-submit/.ci-check.ts
+
+      - name: Type-check driver PWA gateway
+        run: deno check --node-modules-dir=auto supabase/functions/paperwork-pwa-submit/index.ts
