@@ -34,3 +34,11 @@ jobs:
 
       - name: Build site
         run: npm run build
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Type-check paperwork Edge Function
+        run: deno check supabase/functions/paperwork-submit/index.ts
