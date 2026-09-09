@@ -1,3 +1,5 @@
+import "./email-list.js";
+
 /* Mobile-app paperwork integration for the existing Load Details modal.
    This module is loaded by alerts.js on the normal M-J Site pages.
    It intentionally leaves the legacy trip-sheet upload flow in loadboard.js
