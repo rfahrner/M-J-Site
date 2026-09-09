@@ -9,7 +9,7 @@ const INSTALL_RATE_WINDOW_SECONDS = 10 * 60;
 const INSTALL_RATE_MAX = 20;
 const GLOBAL_RATE_WINDOW_SECONDS = 10 * 60;
 const GLOBAL_RATE_MAX = 2000;
-const STALE_INTAKE_MS = 5 * 60 * 1000;
+const STALE_INTAKE_MS = 10 * 60 * 1000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ALLOWED_MIME_TYPES = new Set([
   'image/jpeg',
@@ -71,7 +71,6 @@ type MatchCandidate = {
 
 type ExistingSubmission = {
   id: string;
-  pro_number: string;
   submitted_at: string;
 };
 
@@ -174,21 +173,16 @@ async function cleanupStaleSubmission(
 async function existingSubmissionResponse(
   admin: ReturnType<typeof createClient>,
   submissionId: string,
-  proNumber: string,
 ): Promise<Response | null> {
   const { data, error } = await admin
     .from('paperwork_submissions')
-    .select('id,pro_number,submitted_at')
+    .select('id,submitted_at')
     .eq('id', submissionId)
     .maybeSingle();
   if (error) throw error;
   if (!data) return null;
 
   const existing = data as ExistingSubmission;
-  if (String(existing.pro_number) !== proNumber) {
-    return json({ error: 'This saved retry belongs to a different Pro number. Change the form and submit again.' }, 409);
-  }
-
   const { data: completedEvents, error: eventError } = await admin
     .from('paperwork_submission_events')
     .select('id')
@@ -243,6 +237,14 @@ Deno.serve(async (req: Request) => {
     }
     const submissionId = requestedSubmissionId || crypto.randomUUID();
 
+    // Retry lookup happens before multipart parsing. A completed retry can be
+    // acknowledged immediately, so the client does not have to retransmit all
+    // of its photos just to recover a receipt that was lost on the first call.
+    if (requestedSubmissionId) {
+      const existingResponse = await existingSubmissionResponse(admin, submissionId);
+      if (existingResponse) return existingResponse;
+    }
+
     const form = await req.formData();
     const proNumber = String(form.get('proNumber') ?? '').trim();
     const images = form.getAll('images').filter((value): value is File => value instanceof File);
@@ -269,14 +271,6 @@ Deno.serve(async (req: Request) => {
     }
     if (totalImageBytes > MAX_TOTAL_IMAGE_BYTES) {
       return json({ error: 'This submission is too large. Send fewer photos and try again.' }, 400);
-    }
-
-    // A retry uses the same UUID. If that logical submission already finished,
-    // return its receipt without creating a second database row or consuming a
-    // second rate-limit slot. In-progress retries are told to wait briefly.
-    if (requestedSubmissionId) {
-      const existingResponse = await existingSubmissionResponse(admin, submissionId, proNumber);
-      if (existingResponse) return existingResponse;
     }
 
     const installHash = await sha256Hex(`install:${installId}`);
@@ -323,7 +317,7 @@ Deno.serve(async (req: Request) => {
       // A simultaneous retry may race the first request to the insert. Resolve
       // the winner through the normal idempotency path instead of returning 500.
       if (requestedSubmissionId && String((submissionError as { code?: string }).code || '') === '23505') {
-        const existingResponse = await existingSubmissionResponse(admin, submissionId, proNumber);
+        const existingResponse = await existingSubmissionResponse(admin, submissionId);
         if (existingResponse) return existingResponse;
       }
       throw submissionError;
