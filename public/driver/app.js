@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const API_URL = 'https://ygsapysqzwrpcimgvaqx.supabase.co/functions/v1/paperwork-submit';
+  const API_URL = 'https://ygsapysqzwrpcimgvaqx.supabase.co/functions/v1/paperwork-pwa-submit';
   const PRIVACY_URL = '../privacy.html';
   const MAX_IMAGES = 12;
   const MAX_PRO_DIGITS = 20;
@@ -50,7 +50,6 @@
   let attempted = false;
   let processing = false;
   let submitting = false;
-  let restored = false;
   let saveTimer = null;
   const previewUrls = new Map();
 
@@ -178,9 +177,8 @@
       attemptNumber = Number.isInteger(draft.attemptNumber) && draft.attemptNumber >= 0 ? draft.attemptNumber : 0;
       attempted = Boolean(draft.attempted);
       images = Array.isArray(draft.images) ? draft.images.map(deserializeImage).filter(Boolean) : [];
-      restored = Boolean(proInput.value || images.length || attempted);
 
-      if (restored) {
+      if (proInput.value || images.length || attempted) {
         restoredText.textContent = attempted
           ? `A previous send did not get a confirmed receipt. Attempt #${attemptNumber || 1} is preserved, and Retry will add another linked copy without replacing it.`
           : 'Your Pro number and photos were kept on this device. You can continue the submission.';
@@ -291,7 +289,6 @@
           failed += 1;
         }
       }
-      restored = false;
       setHidden(restoredCard, true);
       setHidden(successCard, true);
       if (failed) {
@@ -329,7 +326,6 @@
 
       const wrap = document.createElement('div');
       wrap.className = 'preview-wrap';
-
       const img = document.createElement('img');
       img.className = 'preview';
       img.src = url;
@@ -352,7 +348,6 @@
         });
         wrap.appendChild(remove);
       }
-
       previewStrip.appendChild(wrap);
     });
   }
@@ -361,20 +356,15 @@
     return /^\d{1,20}$/.test(proInput.value.trim());
   }
 
-  function updateNetworkUi() {
-    setHidden(offlineCard, navigator.onLine);
-  }
-
   function updateUi() {
     const offline = !navigator.onLine;
-    updateNetworkUi();
+    setHidden(offlineCard, !offline);
 
     const locked = attempted || submitting;
     proInput.disabled = locked;
     cameraButton.disabled = locked || processing || images.length >= MAX_IMAGES;
     libraryButton.disabled = locked || processing || images.length >= MAX_IMAGES;
     setHidden(processingRow, !processing);
-
     imageCount.textContent = `${images.length} / ${MAX_IMAGES} ${images.length === 1 ? 'image' : 'images'}${attempted ? ' · locked for retry' : ''}`;
 
     const canSubmit = !offline && !processing && !submitting && validPro() && images.length > 0;
@@ -410,9 +400,7 @@
   async function sendSubmission(currentSubmissionId, retryOf, currentAttemptNumber) {
     const body = new FormData();
     body.append('proNumber', proInput.value.trim());
-    images.forEach((item, index) => {
-      body.append('images', item.file, item.file.name || `trip-sheet-${index + 1}.jpg`);
-    });
+    images.forEach((item, index) => body.append('images', item.file, item.file.name || `trip-sheet-${index + 1}.jpg`));
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
@@ -488,7 +476,6 @@
       submissionId = crypto.randomUUID();
       attemptNumber = 0;
       attempted = false;
-      restored = false;
       setHidden(restoredCard, true);
       setHidden(retryCard, true);
       setHidden(attemptControls, true);
@@ -518,7 +505,6 @@
     submissionId = crypto.randomUUID();
     attemptNumber = 0;
     attempted = false;
-    restored = false;
     setHidden(restoredCard, true);
     setHidden(successCard, true);
     setHidden(uploadStatus, true);
@@ -567,10 +553,7 @@
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('./sw.js').catch((error) => console.warn('Service worker registration failed', error));
     }
-
-    if (navigator.storage && navigator.storage.persist) {
-      navigator.storage.persist().catch(() => false);
-    }
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => false);
 
     configureInstallUi();
     await restoreDraft();
@@ -580,7 +563,6 @@
     proInput.addEventListener('input', () => {
       if (attempted) return;
       proInput.value = proInput.value.replace(/\D/g, '').slice(0, MAX_PRO_DIGITS);
-      restored = false;
       setHidden(restoredCard, true);
       setHidden(successCard, true);
       scheduleSave();
@@ -594,7 +576,6 @@
     submitButton.addEventListener('click', submit);
     discardButton.addEventListener('click', discardLocalRetry);
     closeInstallDialog.addEventListener('click', () => installDialog.close());
-
     installButton.addEventListener('click', () => {
       if (deferredInstallPrompt) void requestInstall();
     });
