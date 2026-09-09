@@ -9,6 +9,8 @@ const INSTALL_RATE_WINDOW_SECONDS = 10 * 60;
 const INSTALL_RATE_MAX = 20;
 const GLOBAL_RATE_WINDOW_SECONDS = 10 * 60;
 const GLOBAL_RATE_MAX = 2000;
+const RECEIPT_RATE_MAX = 60;
+const GLOBAL_RECEIPT_RATE_MAX = 10000;
 const STALE_INTAKE_MS = 10 * 60 * 1000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ALLOWED_MIME_TYPES = new Set([
@@ -204,7 +206,7 @@ async function existingSubmissionResponse(
   const ageMs = Number.isFinite(submittedAtMs) ? Date.now() - submittedAtMs : 0;
   if (ageMs < STALE_INTAKE_MS) {
     return json(
-      { error: 'This paperwork is still being saved. Wait a moment and tap Submit again.' },
+      { error: 'This paperwork is still being saved. Wait a moment and tap Retry Submission again.' },
       409,
       { 'Retry-After': '3' },
     );
@@ -233,13 +235,40 @@ Deno.serve(async (req: Request) => {
 
     const requestedSubmissionId = (req.headers.get('x-mj-submission-id') || '').trim();
     if (requestedSubmissionId && !UUID_RE.test(requestedSubmissionId)) {
-      return json({ error: 'This saved paperwork retry is invalid. Change the form and submit again.' }, 400);
+      return json({ error: 'This saved paperwork retry is invalid. Start a new submission and try again.' }, 400);
     }
+
+    const receiptProbe = req.headers.get('x-mj-receipt-check') === '1';
+    if (receiptProbe && !requestedSubmissionId) {
+      return json({ error: 'A submission ID is required to check a receipt.' }, 400);
+    }
+
     const submissionId = requestedSubmissionId || crypto.randomUUID();
 
-    // Retry lookup happens before multipart parsing. A completed retry can be
-    // acknowledged immediately, so the client does not have to retransmit all
-    // of its photos just to recover a receipt that was lost on the first call.
+    if (receiptProbe) {
+      // Receipt probes are deliberately separate from submission limits. They
+      // carry no paperwork and return no Pro/load/driver details, but still get
+      // their own abuse throttle because this is a public zero-login endpoint.
+      const installHash = await sha256Hex(`receipt:${installId}`);
+      const [installAllowed, globalAllowed] = await Promise.all([
+        consumeRateLimit(admin, installHash, INSTALL_RATE_WINDOW_SECONDS, RECEIPT_RATE_MAX),
+        consumeRateLimit(admin, await sha256Hex('paperwork-receipt-global-v1'), GLOBAL_RATE_WINDOW_SECONDS, GLOBAL_RECEIPT_RATE_MAX),
+      ]);
+      if (!installAllowed || !globalAllowed) {
+        return json({ error: 'Too many receipt checks in a short period. Wait a moment and try again.' }, 429);
+      }
+
+      const existingResponse = await existingSubmissionResponse(admin, submissionId);
+      if (existingResponse) return existingResponse;
+
+      // No completed or active intake exists for this UUID. The mobile app may
+      // safely continue with the normal full upload using the SAME UUID.
+      return json({ status: 'not_found' }, 404);
+    }
+
+    // Backward-compatible full retry fast path. Older idempotent app versions
+    // may resend multipart data directly; acknowledge an existing result before
+    // parsing that multipart body.
     if (requestedSubmissionId) {
       const existingResponse = await existingSubmissionResponse(admin, submissionId);
       if (existingResponse) return existingResponse;
