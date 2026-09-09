@@ -1,0 +1,27 @@
+{
+  "id": "./",
+  "name": "M-J Paperwork",
+  "short_name": "M-J App",
+  "description": "Submit D&L Transport trip sheets and paperwork.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait-primary",
+  "background_color": "#f3f5f7",
+  "theme_color": "#2463D6",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "./maskable-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
