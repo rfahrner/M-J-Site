@@ -41,4 +41,4 @@ jobs:
           deno-version: v2.x
 
       - name: Type-check paperwork Edge Function
-        run: deno check supabase/functions/paperwork-submit/index.ts
+        run: deno check --node-modules-dir=auto supabase/functions/paperwork-submit/index.ts
