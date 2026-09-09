@@ -9,6 +9,8 @@ const INSTALL_RATE_WINDOW_SECONDS = 10 * 60;
 const INSTALL_RATE_MAX = 20;
 const GLOBAL_RATE_WINDOW_SECONDS = 10 * 60;
 const GLOBAL_RATE_MAX = 2000;
+const STALE_INTAKE_MS = 5 * 60 * 1000;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ALLOWED_MIME_TYPES = new Set([
   'image/jpeg',
   'image/png',
@@ -17,10 +19,10 @@ const ALLOWED_MIME_TYPES = new Set([
   'image/heif',
 ]);
 
-function json(body: unknown, status = 200): Response {
+function json(body: unknown, status = 200, extraHeaders: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...extraHeaders },
   });
 }
 
@@ -65,6 +67,12 @@ type MatchCandidate = {
   loadNumber: string;
   shiftDate: string | null;
   isArchived: boolean;
+};
+
+type ExistingSubmission = {
+  id: string;
+  pro_number: string;
+  submitted_at: string;
 };
 
 async function findCandidates(admin: ReturnType<typeof createClient>, proNumber: string): Promise<MatchCandidate[]> {
@@ -125,6 +133,93 @@ async function consumeRateLimit(
   return data === true;
 }
 
+async function cleanupStaleSubmission(
+  admin: ReturnType<typeof createClient>,
+  submissionId: string,
+): Promise<void> {
+  const paths = new Set<string>();
+
+  const { data: imageRows, error: imageError } = await admin
+    .from('paperwork_images')
+    .select('storage_path')
+    .eq('submission_id', submissionId);
+  if (imageError) throw imageError;
+  for (const row of imageRows ?? []) {
+    if (row.storage_path) paths.add(String(row.storage_path));
+  }
+
+  // Also inspect the submission prefix so a hard runtime interruption between
+  // Storage upload and paperwork_images insert cannot leave an orphan behind.
+  const { data: objects, error: listError } = await admin.storage
+    .from(BUCKET)
+    .list(submissionId, { limit: 100 });
+  if (!listError) {
+    for (const object of objects ?? []) {
+      if (object.name) paths.add(`${submissionId}/${object.name}`);
+    }
+  }
+
+  if (paths.size) {
+    const { error: removeError } = await admin.storage.from(BUCKET).remove([...paths]);
+    if (removeError) throw removeError;
+  }
+
+  const { error: deleteError } = await admin
+    .from('paperwork_submissions')
+    .delete()
+    .eq('id', submissionId);
+  if (deleteError) throw deleteError;
+}
+
+async function existingSubmissionResponse(
+  admin: ReturnType<typeof createClient>,
+  submissionId: string,
+  proNumber: string,
+): Promise<Response | null> {
+  const { data, error } = await admin
+    .from('paperwork_submissions')
+    .select('id,pro_number,submitted_at')
+    .eq('id', submissionId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+
+  const existing = data as ExistingSubmission;
+  if (String(existing.pro_number) !== proNumber) {
+    return json({ error: 'This saved retry belongs to a different Pro number. Change the form and submit again.' }, 409);
+  }
+
+  const { data: completedEvents, error: eventError } = await admin
+    .from('paperwork_submission_events')
+    .select('id')
+    .eq('submission_id', submissionId)
+    .in('event_type', ['auto_attached', 'archived_matched', 'needs_review'])
+    .limit(1);
+  if (eventError) throw eventError;
+
+  if ((completedEvents ?? []).length > 0) {
+    return json({
+      submissionId,
+      receivedAt: existing.submitted_at,
+      status: 'received',
+      message: 'Paperwork received.',
+    }, 200);
+  }
+
+  const submittedAtMs = new Date(existing.submitted_at).getTime();
+  const ageMs = Number.isFinite(submittedAtMs) ? Date.now() - submittedAtMs : 0;
+  if (ageMs < STALE_INTAKE_MS) {
+    return json(
+      { error: 'This paperwork is still being saved. Wait a moment and tap Submit again.' },
+      409,
+      { 'Retry-After': '3' },
+    );
+  }
+
+  await cleanupStaleSubmission(admin, submissionId);
+  return null;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
 
@@ -142,14 +237,11 @@ Deno.serve(async (req: Request) => {
       return json({ error: 'This app installation could not be identified. Restart the app and try again.' }, 400);
     }
 
-    const installHash = await sha256Hex(`install:${installId}`);
-    const [installAllowed, globalAllowed] = await Promise.all([
-      consumeRateLimit(admin, installHash, INSTALL_RATE_WINDOW_SECONDS, INSTALL_RATE_MAX),
-      consumeRateLimit(admin, await sha256Hex('paperwork-global-v1'), GLOBAL_RATE_WINDOW_SECONDS, GLOBAL_RATE_MAX),
-    ]);
-    if (!installAllowed || !globalAllowed) {
-      return json({ error: 'Too many submissions in a short period. Try again shortly.' }, 429);
+    const requestedSubmissionId = (req.headers.get('x-mj-submission-id') || '').trim();
+    if (requestedSubmissionId && !UUID_RE.test(requestedSubmissionId)) {
+      return json({ error: 'This saved paperwork retry is invalid. Change the form and submit again.' }, 400);
     }
+    const submissionId = requestedSubmissionId || crypto.randomUUID();
 
     const form = await req.formData();
     const proNumber = String(form.get('proNumber') ?? '').trim();
@@ -179,6 +271,23 @@ Deno.serve(async (req: Request) => {
       return json({ error: 'This submission is too large. Send fewer photos and try again.' }, 400);
     }
 
+    // A retry uses the same UUID. If that logical submission already finished,
+    // return its receipt without creating a second database row or consuming a
+    // second rate-limit slot. In-progress retries are told to wait briefly.
+    if (requestedSubmissionId) {
+      const existingResponse = await existingSubmissionResponse(admin, submissionId, proNumber);
+      if (existingResponse) return existingResponse;
+    }
+
+    const installHash = await sha256Hex(`install:${installId}`);
+    const [installAllowed, globalAllowed] = await Promise.all([
+      consumeRateLimit(admin, installHash, INSTALL_RATE_WINDOW_SECONDS, INSTALL_RATE_MAX),
+      consumeRateLimit(admin, await sha256Hex('paperwork-global-v1'), GLOBAL_RATE_WINDOW_SECONDS, GLOBAL_RATE_MAX),
+    ]);
+    if (!installAllowed || !globalAllowed) {
+      return json({ error: 'Too many submissions in a short period. Try again shortly.' }, 429);
+    }
+
     const candidates = await findCandidates(admin, proNumber);
     let status: 'attached' | 'needs_review' | 'archived_match' = 'needs_review';
     let matchReason: 'exact_unique' | 'no_match' | 'ambiguous' | 'archived_unique' = 'no_match';
@@ -197,7 +306,6 @@ Deno.serve(async (req: Request) => {
       matchReason = 'ambiguous';
     }
 
-    const submissionId = crypto.randomUUID();
     const submittedAt = new Date().toISOString();
     const { error: submissionError } = await admin.from('paperwork_submissions').insert({
       id: submissionId,
@@ -211,7 +319,15 @@ Deno.serve(async (req: Request) => {
       matched_is_archived: matched?.isArchived ?? false,
       submitted_at: submittedAt,
     });
-    if (submissionError) throw submissionError;
+    if (submissionError) {
+      // A simultaneous retry may race the first request to the insert. Resolve
+      // the winner through the normal idempotency path instead of returning 500.
+      if (requestedSubmissionId && String((submissionError as { code?: string }).code || '') === '23505') {
+        const existingResponse = await existingSubmissionResponse(admin, submissionId, proNumber);
+        if (existingResponse) return existingResponse;
+      }
+      throw submissionError;
+    }
 
     const uploadedPaths: string[] = [];
     try {
