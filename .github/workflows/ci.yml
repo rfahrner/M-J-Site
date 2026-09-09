@@ -56,3 +56,6 @@ jobs:
 
       - name: Type-check paperwork Edge Function
         run: deno check --node-modules-dir=auto supabase/functions/paperwork-submit/.ci-check.ts
+
+      - name: Type-check driver PWA gateway
+        run: deno check --node-modules-dir=auto supabase/functions/paperwork-pwa-submit/index.ts
