@@ -1,3 +1,5 @@
+import './paperwork-nav-full.js';
+
 const PW_SUPABASE_URL = 'https://ygsapysqzwrpcimgvaqx.supabase.co';
 const PW_SUPABASE_KEY = 'sb_publishable_8b8bSIiYm5TzLTw0WG1pAw_5ZWW5ZPL';
 const pwClient = window.supabase.createClient(PW_SUPABASE_URL, PW_SUPABASE_KEY, {
