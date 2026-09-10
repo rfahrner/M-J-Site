@@ -63,6 +63,7 @@ h1 { margin: 2px 0 0; font-size: 29px; line-height: 1.18; letter-spacing: -.5px;
 .install-dialog p { color: #475467; line-height: 1.5; font-size: 13px; }
 .install-dialog .submit-button { margin-top: 10px; }
 .dialog-handle { width: 38px; height: 4px; margin: -5px auto 14px; border-radius: 4px; background: #d0d5dd; }
-.share-symbol { display: inline-block; font-size: 18px; font-weight: 700; margin-left: 3px; }
+.share-symbol { display: inline-flex; width: 20px; height: 23px; margin-left: 3px; vertical-align: -5px; color: currentColor; }
+.share-symbol svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 @media (display-mode: standalone) { .shell { padding-top: 18px; } }
 @media (max-width: 380px) { .button-row { grid-template-columns: 1fr; } .brand-mark { display: none; } }
