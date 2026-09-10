@@ -36,7 +36,9 @@ jobs:
         run: |
           node --check public/driver/app.js
           node --check public/driver/sw.js
-          node --check paperwork-inbox-v2.js
+          node --input-type=module --check < paperwork-inbox-v2.js
+          node --input-type=module --check < paperwork-nav-full.js
+          node --check driverlist-deeplink.js
           node --input-type=module --check < preshift-pro-text.js
 
       - name: Build site
