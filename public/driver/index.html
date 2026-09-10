@@ -6,10 +6,10 @@
   <meta name="theme-color" content="#2463D6">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="M-J App">
+  <meta name="apple-mobile-web-app-title" content="Carrier Docs">
   <meta name="format-detection" content="telephone=no">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' https://ygsapysqzwrpcimgvaqx.supabase.co; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'">
-  <title>M-J App · Submit Paperwork</title>
+  <title>Carrier Docs · Submit Paperwork</title>
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./app.css">
@@ -17,99 +17,40 @@
 <body>
   <main class="shell">
     <header class="header">
-      <div class="brand-mark" aria-hidden="true">D&amp;L</div>
+      <div class="brand-mark" aria-hidden="true">CD</div>
       <div>
-        <p class="eyebrow">D&amp;L TRANSPORT</p>
+        <p class="eyebrow">CARRIER DOCS</p>
         <h1>Submit Paperwork</h1>
         <p class="subtitle">Enter the Pro number and send clear photos of the trip sheets.</p>
       </div>
     </header>
-
-    <section id="installCard" class="notice install hidden" aria-live="polite">
-      <div>
-        <strong>Install M-J App</strong>
-        <p id="installText">Add this app to your Home Screen for one-tap access.</p>
-      </div>
-      <button id="installButton" class="small-button" type="button">Install</button>
-    </section>
-
-    <section id="offlineCard" class="notice warning hidden" role="status" aria-live="polite">
-      <div>
-        <strong>Offline</strong>
-        <p>Your Pro number and photos stay saved on this device. Submit will be available when your connection returns.</p>
-      </div>
-    </section>
-
-    <section id="restoredCard" class="notice info hidden" role="status" aria-live="polite">
-      <div>
-        <strong>Saved paperwork restored</strong>
-        <p id="restoredText">Your Pro number and photos were kept on this device.</p>
-      </div>
-    </section>
-
-    <section id="successCard" class="notice success hidden" role="status" aria-live="polite">
-      <div>
-        <strong>✓ Submitted</strong>
-        <p>Paperwork received.</p>
-      </div>
-    </section>
-
-    <section id="retryCard" class="notice retry hidden" role="status" aria-live="polite">
-      <div>
-        <strong>Receipt not confirmed</strong>
-        <p id="retryText">Anything D&amp;L already received remains preserved. Retry sends another linked copy; it does not replace earlier paperwork.</p>
-      </div>
-    </section>
-
+    <section id="installCard" class="notice install hidden" aria-live="polite"><div><strong>Install Carrier Docs</strong><p id="installText">Add this app to your Home Screen for one-tap access.</p></div><button id="installButton" class="small-button" type="button">Install</button></section>
+    <section id="offlineCard" class="notice warning hidden" role="status" aria-live="polite"><div><strong>Offline</strong><p>Your Pro number and photos stay saved on this device. Submit will be available when your connection returns.</p></div></section>
+    <section id="restoredCard" class="notice info hidden" role="status" aria-live="polite"><div><strong>Saved paperwork restored</strong><p id="restoredText">Your Pro number and photos were kept on this device.</p></div></section>
+    <section id="successCard" class="notice success hidden" role="status" aria-live="polite"><div><strong>✓ Submitted</strong><p>Paperwork received.</p></div></section>
+    <section id="retryCard" class="notice retry hidden" role="status" aria-live="polite"><div><strong>Receipt not confirmed</strong><p id="retryText">Anything the office already received remains preserved. Retry sends another linked copy; it does not replace earlier paperwork.</p></div></section>
     <section class="card">
       <label for="proNumber" class="label">Aljex / Pro Number</label>
       <input id="proNumber" class="input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="20" autocomplete="off" placeholder="Enter Pro number">
-
-      <div class="section-heading">
-        <span class="label">Paperwork</span>
-        <span id="imageCount" class="count">0 / 12 images</span>
-      </div>
-
-      <div class="button-row">
-        <button id="cameraButton" class="secondary-button" type="button">Take Photo</button>
-        <button id="libraryButton" class="secondary-button" type="button">Choose Photos</button>
-      </div>
+      <div class="section-heading"><span class="label">Paperwork</span><span id="imageCount" class="count">0 / 12 images</span></div>
+      <div class="button-row"><button id="cameraButton" class="secondary-button" type="button">Take Photo</button><button id="libraryButton" class="secondary-button" type="button">Choose Photos</button></div>
       <input id="cameraInput" class="hidden-input" type="file" accept="image/*" capture="environment">
       <input id="libraryInput" class="hidden-input" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" multiple>
-
-      <div id="processingRow" class="processing hidden" role="status" aria-live="polite">
-        <span class="spinner" aria-hidden="true"></span>
-        <span>Preparing photos for a reliable upload…</span>
-      </div>
-
+      <div id="processingRow" class="processing hidden" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span>Preparing photos for a reliable upload…</span></div>
       <div id="previewStrip" class="previews" aria-label="Selected paperwork photos"></div>
-
       <button id="submitButton" class="submit-button" type="button" disabled>Submit Paperwork</button>
       <p id="uploadStatus" class="upload-status hidden" role="status" aria-live="polite"></p>
-
-      <div id="attemptControls" class="attempt-controls hidden">
-        <p>Retry mode is active. Your Pro number and photo set are locked so each retry is an exact additional copy.</p>
-        <button id="discardButton" class="discard-button" type="button">Discard Local Retry &amp; Start New</button>
-      </div>
+      <div id="attemptControls" class="attempt-controls hidden"><p>Retry mode is active. Your Pro number and photo set are locked so each retry is an exact additional copy.</p><button id="discardButton" class="discard-button" type="button">Discard Local Retry &amp; Start New</button></div>
     </section>
-
     <p class="footer">Once receipt is confirmed, the paperwork is saved. If the Pro number cannot be matched automatically, the office can attach it manually.</p>
     <a class="privacy" href="../privacy.html" target="_blank" rel="noopener">Privacy Policy</a>
   </main>
-
   <dialog id="installDialog" class="install-dialog">
-    <div class="dialog-handle" aria-hidden="true"></div>
-    <h2>Add M-J App to your iPhone</h2>
-    <ol>
-      <li>Open this page in <strong>Safari</strong>.</li>
-      <li>Tap the <strong>Share</strong> button <span class="share-symbol" aria-hidden="true"><svg viewBox="0 0 24 28" focusable="false"><path d="M12 18V2M6.5 7.5 12 2l5.5 5.5M4 11h-1a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1V12a1 1 0 0 0-1-1h-1"/></svg></span>.</li>
-      <li>Choose <strong>Add to Home Screen</strong>.</li>
-      <li>Tap <strong>Add</strong>.</li>
-    </ol>
-    <p>You will then have an M-J App icon on your Home Screen and it will open like a standalone app.</p>
+    <div class="dialog-handle" aria-hidden="true"></div><h2>Add Carrier Docs to your iPhone</h2>
+    <ol><li>Open this page in <strong>Safari</strong>.</li><li>Tap the <strong>Share</strong> button <span class="share-symbol" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M12 15V3m0 0L8 7m4-4 4 4M7 10H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2h-2"/></svg></span>.</li><li>Choose <strong>Add to Home Screen</strong>.</li><li>Tap <strong>Add</strong>.</li></ol>
+    <p>You will then have a Carrier Docs icon on your Home Screen and it will open like a standalone app.</p>
     <button id="closeInstallDialog" class="submit-button" type="button">Got it</button>
   </dialog>
-
-  <script src="./app.js" defer></script>
+  <script src="./carrier-copy.js" defer></script><script src="./app.js" defer></script>
 </body>
 </html>
