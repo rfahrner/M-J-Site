@@ -60,7 +60,7 @@ Deno.serve(async (req: Request) => {
       if (value) headers.set(name, value);
     }
 
-    const upstream = await fetch(`${supabaseUrl}/functions/v1/paperwork-submit`, {
+    const upstream = await fetch(`${supabaseUrl}/functions/v1/paperwork-intake-v2`, {
       method: 'POST',
       headers,
       body: req.body,
