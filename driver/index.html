@@ -6,10 +6,10 @@
   <meta name="theme-color" content="#2463D6">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="M-J App">
+  <meta name="apple-mobile-web-app-title" content="Carrier Docs">
   <meta name="format-detection" content="telephone=no">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' https://ygsapysqzwrpcimgvaqx.supabase.co; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'">
-  <title>M-J App · Submit Paperwork</title>
+  <title>Carrier Docs · Submit Paperwork</title>
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./app.css">
@@ -17,9 +17,9 @@
 <body>
   <main class="shell">
     <header class="header">
-      <div class="brand-mark" aria-hidden="true">D&amp;L</div>
+      <div class="brand-mark" aria-hidden="true">CD</div>
       <div>
-        <p class="eyebrow">D&amp;L TRANSPORT</p>
+        <p class="eyebrow">CARRIER DOCS</p>
         <h1>Submit Paperwork</h1>
         <p class="subtitle">Enter the Pro number and send clear photos of the trip sheets.</p>
       </div>
@@ -27,7 +27,7 @@
 
     <section id="installCard" class="notice install hidden" aria-live="polite">
       <div>
-        <strong>Install M-J App</strong>
+        <strong>Install Carrier Docs</strong>
         <p id="installText">Add this app to your Home Screen for one-tap access.</p>
       </div>
       <button id="installButton" class="small-button" type="button">Install</button>
@@ -57,7 +57,7 @@
     <section id="retryCard" class="notice retry hidden" role="status" aria-live="polite">
       <div>
         <strong>Receipt not confirmed</strong>
-        <p id="retryText">Anything D&amp;L already received remains preserved. Retry sends another linked copy; it does not replace earlier paperwork.</p>
+        <p id="retryText">Anything the office already received remains preserved. Retry sends another linked copy; it does not replace earlier paperwork.</p>
       </div>
     </section>
 
@@ -99,17 +99,18 @@
 
   <dialog id="installDialog" class="install-dialog">
     <div class="dialog-handle" aria-hidden="true"></div>
-    <h2>Add M-J App to your iPhone</h2>
+    <h2>Add Carrier Docs to your iPhone</h2>
     <ol>
       <li>Open this page in <strong>Safari</strong>.</li>
-      <li>Tap the <strong>Share</strong> button <span class="share-symbol" aria-hidden="true"><svg viewBox="0 0 24 28" focusable="false"><path d="M12 18V2M6.5 7.5 12 2l5.5 5.5M4 11h-1a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1V12a1 1 0 0 0-1-1h-1"/></svg></span>.</li>
+      <li>Tap the <strong>Share</strong> button <span class="share-symbol" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M12 15V3m0 0L8 7m4-4 4 4M7 10H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2h-2"/></svg></span>.</li>
       <li>Choose <strong>Add to Home Screen</strong>.</li>
       <li>Tap <strong>Add</strong>.</li>
     </ol>
-    <p>You will then have an M-J App icon on your Home Screen and it will open like a standalone app.</p>
+    <p>You will then have a Carrier Docs icon on your Home Screen and it will open like a standalone app.</p>
     <button id="closeInstallDialog" class="submit-button" type="button">Got it</button>
   </dialog>
 
+  <script src="./carrier-copy.js" defer></script>
   <script src="./app.js" defer></script>
 </body>
 </html>
