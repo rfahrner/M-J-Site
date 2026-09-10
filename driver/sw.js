@@ -1,8 +1,9 @@
-const CACHE_NAME = 'mj-driver-shell-v1';
+const CACHE_NAME = 'carrier-docs-shell-v2';
 const SHELL = [
   './',
   './index.html',
   './app.css',
+  './carrier-copy.js',
   './app.js',
   './manifest.webmanifest',
   './icon.svg',
@@ -17,7 +18,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => Promise.all(
-      keys.filter((key) => key.startsWith('mj-driver-shell-') && key !== CACHE_NAME)
+      keys.filter((key) => (key.startsWith('mj-driver-shell-') || key.startsWith('carrier-docs-shell-')) && key !== CACHE_NAME)
         .map((key) => caches.delete(key)),
     )),
   );
