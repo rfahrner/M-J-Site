@@ -23,11 +23,11 @@ function removeDriverListNav() {
 
 function iconOnly(button, icon, label) {
   if (!button) return;
-  button.classList.add("board-toolbar-icon-button");
-  button.textContent = icon;
-  button.title = label;
-  button.setAttribute("aria-label", label);
-  button.removeAttribute("style");
+  if (!button.classList.contains("board-toolbar-icon-button")) button.classList.add("board-toolbar-icon-button");
+  if (button.textContent !== icon) button.textContent = icon;
+  if (button.title !== label) button.title = label;
+  if (button.getAttribute("aria-label") !== label) button.setAttribute("aria-label", label);
+  if (button.hasAttribute("style")) button.removeAttribute("style");
 }
 
 function driverListLocation() {
@@ -43,18 +43,17 @@ function ensureDriverListButton() {
   if (!titleRow) return;
   titleRow.classList.add("board-title-row");
 
-  let button = document.getElementById("btn-driver-list-board");
-  if (!button) {
-    button = document.createElement("button");
-    button.type = "button";
-    button.id = "btn-driver-list-board";
-    button.className = "btn board-driver-list-button";
-    button.textContent = "Driver List";
-    button.addEventListener("click", () => {
-      location.href = `driverlist.html?location=${encodeURIComponent(locationKey)}`;
-    });
-    title.insertAdjacentElement("afterend", button);
-  }
+  if (document.getElementById("btn-driver-list-board")) return;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.id = "btn-driver-list-board";
+  button.className = "btn board-driver-list-button";
+  button.textContent = "Driver List";
+  button.title = "Open Driver List";
+  button.addEventListener("click", () => {
+    location.href = `driverlist.html?location=${encodeURIComponent(locationKey)}`;
+  });
+  title.insertAdjacentElement("afterend", button);
 }
 
 function normalizeBoardToolbar() {
@@ -70,9 +69,7 @@ function normalizeBoardToolbar() {
   document.getElementById("btn-add-load")?.remove();
 
   const empty = document.getElementById("board-empty-state");
-  if (empty && /\+ Add Load/i.test(empty.textContent || "")) {
-    empty.textContent = "No loads yet for this day.";
-  }
+  if (empty && /\+ Add Load/i.test(empty.textContent || "")) empty.textContent = "No loads yet for this day.";
 }
 
 function openRequestedDriverListTab() {
