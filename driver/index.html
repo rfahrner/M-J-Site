@@ -21,49 +21,44 @@
       <div>
         <p class="eyebrow">CARRIER DOCS</p>
         <h1>Submit Paperwork</h1>
-        <p class="subtitle">Enter the Pro number and send clear photos of the trip sheets.</p>
+        <p class="subtitle">Enter your name and location, then send clear photos of the trip sheets. The Pro number is optional.</p>
       </div>
     </header>
 
     <section id="installCard" class="notice install hidden" aria-live="polite">
-      <div>
-        <strong>Install Carrier Docs</strong>
-        <p id="installText">Add this app to your Home Screen for one-tap access.</p>
-      </div>
+      <div><strong>Install Carrier Docs</strong><p id="installText">Add this app to your Home Screen for one-tap access.</p></div>
       <button id="installButton" class="small-button" type="button">Install</button>
     </section>
 
     <section id="offlineCard" class="notice warning hidden" role="status" aria-live="polite">
-      <div>
-        <strong>Offline</strong>
-        <p>Your Pro number and photos stay saved on this device. Submit will be available when your connection returns.</p>
-      </div>
+      <div><strong>Offline</strong><p>Your name, location, Pro number, and photos stay saved on this device. Submit will be available when your connection returns.</p></div>
     </section>
 
     <section id="restoredCard" class="notice info hidden" role="status" aria-live="polite">
-      <div>
-        <strong>Saved paperwork restored</strong>
-        <p id="restoredText">Your Pro number and photos were kept on this device.</p>
-      </div>
+      <div><strong>Saved paperwork restored</strong><p id="restoredText">Your saved paperwork was kept on this device.</p></div>
     </section>
 
     <section id="successCard" class="notice success hidden" role="status" aria-live="polite">
-      <div>
-        <strong>✓ Submitted</strong>
-        <p>Paperwork received.</p>
-      </div>
+      <div><strong>✓ Submitted</strong><p>Paperwork received.</p></div>
     </section>
 
     <section id="retryCard" class="notice retry hidden" role="status" aria-live="polite">
-      <div>
-        <strong>Receipt not confirmed</strong>
-        <p id="retryText">Anything the office already received remains preserved. Retry sends another linked copy; it does not replace earlier paperwork.</p>
-      </div>
+      <div><strong>Receipt not confirmed</strong><p id="retryText">Anything the office already received remains preserved. Retry sends another linked copy; it does not replace earlier paperwork.</p></div>
     </section>
 
     <section class="card">
-      <label for="proNumber" class="label">Aljex / Pro Number</label>
-      <input id="proNumber" class="input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="20" autocomplete="off" placeholder="Enter Pro number">
+      <label for="driverName" class="label">Driver Name <span aria-hidden="true">*</span></label>
+      <input id="driverName" class="input" type="text" maxlength="120" autocomplete="name" placeholder="Enter driver name" required>
+
+      <label for="locationSelect" class="label" style="display:block; margin-top:14px;">Location <span aria-hidden="true">*</span></label>
+      <select id="locationSelect" class="input" required>
+        <option value="">Select location</option>
+        <option value="kroger_atlanta">Kroger Atlanta</option>
+        <option value="kroger_delaware">Kroger Delaware</option>
+      </select>
+
+      <label for="proNumber" class="label" style="display:block; margin-top:14px;">Aljex / Pro Number <span class="count">Optional</span></label>
+      <input id="proNumber" class="input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="20" autocomplete="off" placeholder="Enter Pro number if available">
 
       <div class="section-heading">
         <span class="label">Paperwork</span>
@@ -78,8 +73,7 @@
       <input id="libraryInput" class="hidden-input" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" multiple>
 
       <div id="processingRow" class="processing hidden" role="status" aria-live="polite">
-        <span class="spinner" aria-hidden="true"></span>
-        <span>Preparing photos for a reliable upload…</span>
+        <span class="spinner" aria-hidden="true"></span><span>Preparing photos for a reliable upload…</span>
       </div>
 
       <div id="previewStrip" class="previews" aria-label="Selected paperwork photos"></div>
@@ -88,12 +82,12 @@
       <p id="uploadStatus" class="upload-status hidden" role="status" aria-live="polite"></p>
 
       <div id="attemptControls" class="attempt-controls hidden">
-        <p>Retry mode is active. Your Pro number and photo set are locked so each retry is an exact additional copy.</p>
+        <p>Retry mode is active. Your name, location, Pro number, and photo set are locked so each retry is an exact additional copy.</p>
         <button id="discardButton" class="discard-button" type="button">Discard Local Retry &amp; Start New</button>
       </div>
     </section>
 
-    <p class="footer">Once receipt is confirmed, the paperwork is saved. If the Pro number cannot be matched automatically, the office can attach it manually.</p>
+    <p class="footer">Once receipt is confirmed, the paperwork is saved. If a Pro number is not provided or cannot be matched automatically, the office can review and attach the paperwork manually.</p>
     <a class="privacy" href="../privacy.html" target="_blank" rel="noopener">Privacy Policy</a>
   </main>
 
