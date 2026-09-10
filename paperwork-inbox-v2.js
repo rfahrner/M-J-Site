@@ -38,6 +38,7 @@ function ensureUi() {
     style.id = 'paperwork-v2-style';
     style.textContent = `
       .pw-location-tabs { margin:0 0 14px; padding:0; }
+      .paperwork-table tr.needs-review:not(.inbox-needs-review):not(.inbox-unread) { background:#fff; }
       .paperwork-table tr.inbox-unread { background:#eaf3ff !important; }
       .paperwork-table tr.inbox-needs-review { background:#fff6cf !important; }
       .paperwork-table tr.pw-location-hidden { display:none; }
@@ -63,9 +64,7 @@ async function refreshMetadata() {
   decorateRows();
 }
 
-function locationKey(row) {
-  return row?.submitted_location || 'unassigned';
-}
+function locationKey(row) { return row?.submitted_location || 'unassigned'; }
 
 function ensureHeader() {
   const header = document.querySelector('.paperwork-table thead tr');
@@ -130,8 +129,7 @@ function escapeHtml(value) {
 async function setInboxStatus(id, status) {
   const previous = metadata.get(id);
   if (!previous) return;
-  const next = { ...previous, inbox_status: status };
-  metadata.set(id, next);
+  metadata.set(id, { ...previous, inbox_status: status });
   decorateRows();
   const { error } = await pwClient.rpc('paperwork_set_inbox_status', { p_submission_id: id, p_inbox_status: status });
   if (error) {
@@ -146,18 +144,13 @@ function installEvents() {
     const select = event.target.closest('[data-pw-inbox-status]');
     if (select) void setInboxStatus(select.dataset.pwInboxStatus, select.value);
   });
-
   document.addEventListener('click', (event) => {
     const view = event.target.closest('[data-view]');
     if (!view) return;
     const row = metadata.get(view.dataset.view);
     if (row?.inbox_status === 'unread') void setInboxStatus(row.id, 'read');
   }, true);
-
   document.getElementById('pw-refresh')?.addEventListener('click', () => setTimeout(refreshMetadata, 150));
-  document.getElementById('pw-status-filter')?.addEventListener('change', () => setTimeout(decorateRows, 0));
-  document.getElementById('pw-search')?.addEventListener('input', () => setTimeout(decorateRows, 0));
-
   const body = document.getElementById('pw-body');
   if (body) new MutationObserver(() => decorateRows()).observe(body, { childList: true });
 }
