@@ -1,3 +1,5 @@
+import "./loadboard-toolbar-controls.js";
+
 /* Shared Email List modal for Atlanta, Delaware, Building C, Houston, and Mondelez.
    Reads the currently rendered board so the list matches the user's visible order.
    Copy writes both HTML and TSV clipboard formats: rich email clients preserve the
@@ -58,7 +60,6 @@ function ensureStyles() {
     .email-list-status { min-height:18px; margin-right:auto; color:var(--slate-500,#64748b); font-size:12px; }
     .email-list-status.is-success { color:#15803d; font-weight:700; }
     .email-list-status.is-error { color:#b91c1c; font-weight:700; }
-    #btn-email-list { padding:3px 10px; font-size:12.5px; }
   `;
   document.head.appendChild(style);
 }
@@ -109,7 +110,7 @@ function installButton() {
   button.className = "btn btn-ghost";
   button.id = "btn-email-list";
   button.textContent = "Email List";
-  button.title = "Build a copyable driver name / phone / shift-start grid";
+  button.title = "Email List";
   button.addEventListener("click", openEmailList);
 
   const infoButton = document.getElementById("btn-page-info");
@@ -132,8 +133,6 @@ function displayedBoardRows() {
       return;
     }
 
-    // Mondelez collapses completed loads to one pill. Keep the row in the
-    // email list and fill phone/start from the saved record below.
     if (currentFile() === "mondelez.html") {
       const pill = tr.querySelector("[data-open-mdz-load]");
       if (!pill) return;
