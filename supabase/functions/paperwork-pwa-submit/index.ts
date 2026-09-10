@@ -2,6 +2,7 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 
 const ALLOWED_ORIGINS = new Set([
   'https://rfahrner.github.io',
+  'https://app.carrierdocs.com',
   'http://127.0.0.1:5173',
   'http://localhost:5173',
 ]);
@@ -59,10 +60,6 @@ Deno.serve(async (req: Request) => {
       if (value) headers.set(name, value);
     }
 
-    // The PWA gateway adds no database or Storage privileges. It only supplies
-    // browser CORS and forwards the exact paperwork request to the existing
-    // hardened zero-login intake endpoint, where validation, rate limiting,
-    // matching, additive retry handling and durable writes still happen.
     const upstream = await fetch(`${supabaseUrl}/functions/v1/paperwork-submit`, {
       method: 'POST',
       headers,
