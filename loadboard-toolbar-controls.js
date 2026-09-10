@@ -1,4 +1,6 @@
 import './preshift-pro-text.js';
+import './daily-rate-hierarchy.js';
+import './daily-rate-modal-sync.js';
 
 const BOARD_LOCATION_BY_FILE = {
   "": "atlanta",

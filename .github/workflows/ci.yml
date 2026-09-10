@@ -40,6 +40,10 @@ jobs:
           node --input-type=module --check < paperwork-nav-full.js
           node --check driverlist-deeplink.js
           node --input-type=module --check < preshift-pro-text.js
+          node --input-type=module --check < boardrates.js
+          node --input-type=module --check < daily-rate-hierarchy.js
+          node --input-type=module --check < daily-rate-modal-sync.js
+          node --input-type=module --check < loadboard-toolbar-controls.js
 
       - name: Build site
         run: npm run build
