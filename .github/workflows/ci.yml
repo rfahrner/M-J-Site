@@ -37,7 +37,7 @@ jobs:
           node --check public/driver/app.js
           node --check public/driver/sw.js
           node --check paperwork-inbox-v2.js
-          node --check preshift-pro-text.js
+          node --input-type=module --check < preshift-pro-text.js
 
       - name: Build site
         run: npm run build
