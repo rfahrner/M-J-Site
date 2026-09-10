@@ -1,3 +1,5 @@
+import './preshift-pro-text.js';
+
 const BOARD_LOCATION_BY_FILE = {
   "": "atlanta",
   "index.html": "atlanta",
@@ -58,16 +60,12 @@ function ensureDriverListButton() {
 
 function normalizeBoardToolbar() {
   removeDriverListNav();
-
   if (!driverListLocation()) return;
   ensureDriverListButton();
-
   iconOnly(document.getElementById("btn-page-info"), "ⓘ", "Info");
   iconOnly(document.getElementById("btn-atlanta-rate-settings"), "$", "Rate Settings");
   iconOnly(document.getElementById("btn-email-list"), "✉", "Email List");
-
   document.getElementById("btn-add-load")?.remove();
-
   const empty = document.getElementById("board-empty-state");
   if (empty && /\+ Add Load/i.test(empty.textContent || "")) empty.textContent = "No loads yet for this day.";
 }
@@ -78,9 +76,7 @@ function openRequestedDriverListTab() {
   if (!requested) return;
   const allowed = new Set(["atlanta", "delaware", "houston", "mondelez", "preferred"]);
   if (!allowed.has(requested)) return;
-  setTimeout(() => {
-    document.querySelector(`#driverlist-location-tabs .location-tab[data-location="${requested}"]`)?.click();
-  }, 0);
+  setTimeout(() => document.querySelector(`#driverlist-location-tabs .location-tab[data-location="${requested}"]`)?.click(), 0);
 }
 
 function installStyles() {
@@ -88,33 +84,9 @@ function installStyles() {
   const style = document.createElement("style");
   style.id = "board-toolbar-redesign-styles";
   style.textContent = `
-    .board-title-row {
-      display:flex !important;
-      align-items:center !important;
-      gap:8px !important;
-      flex-wrap:wrap;
-    }
-    .board-driver-list-button {
-      min-height:36px;
-      padding:7px 18px !important;
-      margin-left:8px;
-      font-size:14px !important;
-      font-weight:750;
-      white-space:nowrap;
-    }
-    .board-toolbar-icon-button {
-      width:34px !important;
-      height:34px !important;
-      min-width:34px !important;
-      min-height:34px !important;
-      padding:0 !important;
-      margin-left:0 !important;
-      display:inline-flex !important;
-      align-items:center !important;
-      justify-content:center !important;
-      font-size:17px !important;
-      line-height:1 !important;
-    }
+    .board-title-row { display:flex !important; align-items:center !important; gap:8px !important; flex-wrap:wrap; }
+    .board-driver-list-button { min-height:36px; padding:7px 18px !important; margin-left:8px; font-size:14px !important; font-weight:750; white-space:nowrap; }
+    .board-toolbar-icon-button { width:34px !important; height:34px !important; min-width:34px !important; min-height:34px !important; padding:0 !important; margin-left:0 !important; display:inline-flex !important; align-items:center !important; justify-content:center !important; font-size:17px !important; line-height:1 !important; }
   `;
   document.head.appendChild(style);
 }
@@ -123,7 +95,6 @@ function init() {
   installStyles();
   normalizeBoardToolbar();
   openRequestedDriverListTab();
-
   const observer = new MutationObserver(() => normalizeBoardToolbar());
   observer.observe(document.documentElement, { childList: true, subtree: true });
 }
