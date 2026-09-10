@@ -36,6 +36,7 @@ jobs:
         run: |
           node --check public/driver/app.js
           node --check public/driver/sw.js
+          node --check paperwork-inbox-v2.js
 
       - name: Build site
         run: npm run build
@@ -59,15 +60,15 @@ jobs:
           const sourcePath = 'supabase/functions/paperwork-submit/index.ts';
           const checkPath = 'supabase/functions/paperwork-submit/.ci-check.ts';
           const source = fs.readFileSync(sourcePath, 'utf8');
-          // This project intentionally does not commit generated Supabase DB types.
-          // Neutralize only the untyped service-client helper boundary so Deno can
-          // still type-check the remainder of the Edge Function implementation.
           const checked = source.replaceAll('ReturnType<typeof createClient>', 'any');
           fs.writeFileSync(checkPath, checked);
           NODE
 
       - name: Type-check paperwork Edge Function
         run: deno check --node-modules-dir=auto supabase/functions/paperwork-submit/.ci-check.ts
+
+      - name: Type-check Carrier Docs intake wrapper
+        run: deno check --node-modules-dir=auto supabase/functions/paperwork-intake-v2/index.ts
 
       - name: Type-check driver PWA gateway
         run: deno check --node-modules-dir=auto supabase/functions/paperwork-pwa-submit/index.ts
