@@ -101,6 +101,9 @@ function init() {
   installStyles();
   normalizeBoardToolbar();
   openRequestedDriverListTab();
+  if (currentFile() === "mondelez.html") {
+    import('./mondelez-completed-row-layout.js').catch((e) => console.error('Failed to load Mondelez completed-row layout:', e));
+  }
   const observer = new MutationObserver(() => normalizeBoardToolbar());
   observer.observe(document.documentElement, { childList: true, subtree: true });
 }
