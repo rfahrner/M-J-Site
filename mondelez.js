@@ -29,6 +29,7 @@ import {
 export const MONDELEZ_TABLE = "mondelez_loads";
 export const MONDELEZ_RATE_SETTINGS_TABLE = "mondelez_rate_settings";
 export const MONDELEZ_IMAGE_BUCKET = "mondelez-routes";
+const MONDELEZ_CHANGE_HISTORY_TABLE = "mondelez_change_history";
 // Best-cleanup pass of the locations in your spreadsheet — combined
 // "shuttle" entries like "Morris/Franksville" get filed under the
 // origin DC that dispatches them (Morris), since a load only lives on
@@ -533,12 +534,116 @@ async function deleteMondelezRow(rowId) {
 }
 /* ---------------- Load Details modal ---------------- */
 let mdzLoadDetailsRowId = null;
+let mdzLoadDetailsHistory = [];
+
+function mondelezHistoryFieldLabel(fieldName) {
+  const labels = {
+    location: "Location",
+    shift_date: "Date",
+    aljex_number: "Aljex #",
+    delivery_group: "Delivery Group",
+    start_time: "Start Time",
+    driver_app_id: "Driver App ID",
+    trailer_number: "Trailer #",
+    return_trailer_number: "Return Trailer #",
+    stop_count: "Stops",
+    notes: "Status / Notes",
+    driver_name: "Driver",
+    miles: "Miles",
+    carrier_rpm: "Carrier RPM",
+    carrier_pay_per_stop: "Carrier Pay Per Stop",
+    carrier_pay: "Carrier Pay",
+    fsc: "FSC",
+    additional_charges: "Additional Charges",
+    revenue_total: "Revenue",
+    revenue_manual: "Manual Revenue",
+    route_image_path: "Trip Sheet Image",
+    tonu: "TONU",
+    highlighted: "Highlight",
+    shift_complete: "Shift Complete",
+  };
+  return labels[fieldName] || String(fieldName || "").replaceAll("_", " ").replace(/^./, (c) => c.toUpperCase());
+}
+
+function renderMondelezChangeHistory() {
+  const target = document.querySelector('#modal-mdz-load-details [data-unified-ld-panel="history"]');
+  if (!target) return;
+  const row = getMondelezRowsForDate(state.activeDate).find((item) => item.id === mdzLoadDetailsRowId);
+  if (!row?.dbId) {
+    target.innerHTML = `<div class="subtext">Save this load first to begin Change History.</div>`;
+    return;
+  }
+  target.innerHTML = `
+    <div class="ld-edit-bar"><button type="button" class="btn btn-ghost" id="mdz-hist-save-notes">Save Notes</button></div>
+    <div class="ld-history-row" style="grid-template-columns:130px 150px 1fr 200px;"><div>When</div><div>By</div><div>What</div><div>Note</div></div>
+    ${mdzLoadDetailsHistory.length ? mdzLoadDetailsHistory.map((entry) => {
+      const oldValue = entry.old_value == null || entry.old_value === "" ? "—" : entry.old_value;
+      const newValue = entry.new_value == null || entry.new_value === "" ? "—" : entry.new_value;
+      const detail = entry.field_name === "route_image_path"
+        ? (!entry.old_value && entry.new_value ? "Image added" : (entry.old_value && !entry.new_value ? "Image removed" : "Image replaced"))
+        : `${escapeHtml(oldValue)} → ${escapeHtml(newValue)}`;
+      return `
+        <div class="ld-history-row" style="grid-template-columns:130px 150px 1fr 200px;align-items:start;">
+          <div>${new Date(entry.changed_at).toLocaleString()}</div>
+          <div>${escapeHtml(entry.changed_by || "Unknown user")}</div>
+          <div><strong>${escapeHtml(mondelezHistoryFieldLabel(entry.field_name))}</strong><div class="subtext">${detail}</div></div>
+          <div><input type="text" class="cell-input" style="width:100%;" data-mdz-hist-note-id="${entry.id}" value="${escapeHtml(entry.note || "")}" placeholder="Why was this changed?"></div>
+        </div>`;
+    }).join("") : `<div class="subtext" style="padding:10px 0;">No changes recorded yet.</div>`}`;
+}
+
+async function loadMondelezChangeHistory(row) {
+  mdzLoadDetailsHistory = [];
+  renderMondelezChangeHistory();
+  if (!row?.dbId || !supabaseClient) return;
+  const requestedDbId = row.dbId;
+  const { data, error } = await supabaseClient
+    .from(MONDELEZ_CHANGE_HISTORY_TABLE)
+    .select("*")
+    .eq("mondelez_load_id", requestedDbId)
+    .order("changed_at", { ascending: false });
+  if (error) {
+    console.error("Failed to load Mondelez change history:", error);
+    setDriverSyncStatus(`Couldn't load this load's change history (${error.message}).`, "error");
+    return;
+  }
+  const currentRow = getMondelezRowsForDate(state.activeDate).find((item) => item.id === mdzLoadDetailsRowId);
+  if (!currentRow || currentRow.dbId !== requestedDbId) return;
+  mdzLoadDetailsHistory = data || [];
+  renderMondelezChangeHistory();
+}
+
+async function saveMondelezHistoryNotes() {
+  const row = getMondelezRowsForDate(state.activeDate).find((item) => item.id === mdzLoadDetailsRowId);
+  if (!row?.dbId || !supabaseClient) return;
+  const button = $("#mdz-hist-save-notes");
+  if (button) { button.disabled = true; button.textContent = "Saving…"; }
+  let failed = false;
+  for (const input of document.querySelectorAll("[data-mdz-hist-note-id]")) {
+    const id = Number(input.dataset.mdzHistNoteId);
+    const entry = mdzLoadDetailsHistory.find((item) => Number(item.id) === id);
+    const next = input.value.trim();
+    if ((entry?.note || "") === next) continue;
+    const { error } = await supabaseClient
+      .from(MONDELEZ_CHANGE_HISTORY_TABLE)
+      .update({ note: next || null })
+      .eq("id", id)
+      .eq("mondelez_load_id", row.dbId);
+    if (error) failed = true;
+    else if (entry) entry.note = next || null;
+  }
+  if (button) { button.disabled = false; button.textContent = "Save Notes"; }
+  setDriverSyncStatus(failed ? "Some history notes couldn't be saved." : "Notes saved.", failed ? "error" : "success");
+}
+
 function openMondelezLoadDetailsModal(rowId) {
   const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
   if (!row) return;
   const modal = $("#modal-mdz-load-details");
   if (!modal) { console.error("Mondelez Load Details modal HTML isn't on this page yet."); return; }
   mdzLoadDetailsRowId = rowId;
+  const title = $("#mdz-ld-title");
+  if (title) title.textContent = `Load #${row.aljexNumber || "(not assigned)"}`;
   const setVal = (id, val) => { const el = $("#" + id); if (el) el.value = val == null ? "" : val; };
   const locSelect = $("#mdz-ld-location");
   if (locSelect) {
@@ -555,7 +660,6 @@ function openMondelezLoadDetailsModal(rowId) {
   }
   setVal("mdz-ld-aljex", row.aljexNumber);
   setVal("mdz-ld-group", row.deliveryGroup);
-  setVal("mdz-ld-start", row.startTime);
   setVal("mdz-ld-driverapp", row.driverAppId);
   setVal("mdz-ld-trailer", row.trailerNumber);
   setVal("mdz-ld-returntrailer", row.returnTrailerNumber);
@@ -567,12 +671,14 @@ function openMondelezLoadDetailsModal(rowId) {
   setVal("mdz-ld-revenue", row.revenueTotal);
   setVal("mdz-ld-notes", row.notes);
   modal.classList.remove("hidden");
+  void loadMondelezChangeHistory(row);
 }
 function closeMondelezLoadDetailsModal() {
   const modal = $("#modal-mdz-load-details");
   if (modal) modal.classList.add("hidden");
   closeDriverAutocomplete();
   mdzLoadDetailsRowId = null;
+  mdzLoadDetailsHistory = [];
 }
 function saveMondelezLoadDetailsModal() {
   if (!mdzLoadDetailsRowId) return;
@@ -594,7 +700,6 @@ function saveMondelezLoadDetailsModal() {
   row.driverId = driverId;
   row.aljexNumber = getVal("mdz-ld-aljex").trim();
   row.deliveryGroup = getVal("mdz-ld-group").trim();
-  row.startTime = getVal("mdz-ld-start").trim();
   row.driverAppId = getVal("mdz-ld-driverapp").replace(/\D/g, "").slice(0, 9);
   row.trailerNumber = getVal("mdz-ld-trailer").trim();
   row.returnTrailerNumber = getVal("mdz-ld-returntrailer").trim();
@@ -777,6 +882,11 @@ export async function initMondelezPage() {
     const cancelBtn = $("#mdz-ld-cancel"); if (cancelBtn) cancelBtn.addEventListener("click", closeMondelezLoadDetailsModal);
     const saveBtn = $("#mdz-ld-save"); if (saveBtn) saveBtn.addEventListener("click", saveMondelezLoadDetailsModal);
     mdzLdModal.addEventListener("click", (e) => { if (e.target.id === "modal-mdz-load-details") closeMondelezLoadDetailsModal(); });
+    mdzLdModal.addEventListener("click", (e) => {
+      if (e.target.closest("#mdz-hist-save-notes")) void saveMondelezHistoryNotes();
+      const tab = e.target.closest("[data-unified-ld-tab]")?.dataset?.unifiedLdTab;
+      if (tab === "history") setTimeout(renderMondelezChangeHistory, 0);
+    });
     const driverField = $("#mdz-ld-driver");
     if (driverField) {
       driverField.addEventListener("focus", () => {

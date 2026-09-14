@@ -3869,7 +3869,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       editDraft: null, // scratch copy of the fields being edited, discarded on Cancel
     };
     const openedForRowId = rowId; // snapshot — guards against a stale async response clobbering a newer/closed state below
-    $("#ld-title").textContent = `Load ${row.proNumber || "(no PRO# yet)"}`;
+    $("#ld-title").textContent = `Load #${row.proNumber || "(not assigned)"}`;
     modal.classList.remove("hidden");
     renderLoadDetailsTabs();
 
