@@ -8,6 +8,7 @@
 import './role-auth-compat.js';
 import './storage-compat.js';
 import './archive-reminder.js';
+import './board-row-hover-enhancements.js';
 import { supabaseClient, SHIFTS_TABLE } from './loadboard.js';
 
   export const ACCOUNTING_TABLE = "loads_accounting";
