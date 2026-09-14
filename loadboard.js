@@ -816,7 +816,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
             trip.hasStopTimes = !!stopsByTripId[t.id];
             return trip;
           });
-          if (!row.trips.length || row.trips[row.trips.length - 1].minimized) row.trips.push(blankTrip());
+          // Rendering decides whether a completely minimized shift needs one
+          // temporary blank route. Do not append one merely because the last
+          // saved route is minimized while another route is still active.
         });
         // Every trip with an uploaded image needs a fresh signed URL each
         // load, since the bucket is private -- collect them all and sign
@@ -1294,14 +1296,13 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (!found) return;
     const trip = found.row.trips.find((t) => t.id === tripId);
     if (!trip) return;
-    // A completed/minimized pill is also the restore control: put the load
-    // back into the editable row before opening Load Details. Completion is
-    // preserved; only the compact presentation is cleared.
+    // A completed/minimized pill is a pure restore control. Remove the
+    // temporary blank route that was only present because every real route
+    // had been minimized, then put this load back into the editable row.
+    found.row.trips = found.row.trips.filter((candidate) => candidate === trip || !candidate.autoRoutePlaceholder);
     trip.minimized = false;
     await saveTripNow(found.row, trip, found.row.trips.indexOf(trip) + 1);
     renderBoardTable();
-    await openLoadDetailsModal(rowId, tripId);
-    if (tripMissingFields(trip, found.row.location).length) startLoadDetailsEdit(tripId);
   }
 
   function addNewTrip(rowId) {
@@ -1754,6 +1755,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     // new blank one. This is a real, not-minimized trip, unlike the old
     // behavior that just displayed a completed trip as if it were open.
     const fresh = blankTrip();
+    fresh.autoRoutePlaceholder = true;
     row.trips.push(fresh);
     return [fresh];
   }
@@ -1793,8 +1795,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           const undocumented = t.complete && missing.length > 0;
           const statusCls = [t.complete ? "trip-segment-done" : "", undocumented ? "trip-chip-undocumented" : ""].filter(Boolean).join(" ");
           const title = undocumented
-            ? `Closed out but missing: ${missing.join(", ")} — click to fix`
-            : (t.complete ? "Closed out — click to view" : "Click to view or edit");
+            ? `Closed out but missing: ${missing.join(", ")} — click to restore`
+            : (t.complete ? "Closed out — click to restore" : "Click to restore to the row");
           return `<button type="button" class="trip-chip ${statusCls}" data-action="restore-trip" data-row="${row.id}" data-trip="${t.id}" title="${title}">${escapeHtml(t.routeId || t.tripId)}</button>`;
         }).join(" ")
       : `<span class="subtext" style="font-size:11px;">—</span>`;
@@ -5863,7 +5865,11 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     wireRowImageDropzone(
       boardTable,
       (id) => { const found = findTripAnywhere(id); return found ? found.trip : null; },
-      (trip) => { const found = findTripAnywhere(trip.id); return found ? saveTripNow(found.row, found.trip, found.tripNumber) : Promise.resolve(); },
+      (trip) => {
+        trip.autoRoutePlaceholder = false;
+        const found = findTripAnywhere(trip.id);
+        return found ? saveTripNow(found.row, found.trip, found.tripNumber) : Promise.resolve();
+      },
       renderBoardTable,
       (trip) => trip.routeId || trip.tripId || ""
     );
@@ -6091,6 +6097,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (t.dataset.trip && t.dataset.field) {
         const trip = found.row.trips.find((tr) => tr.id === t.dataset.trip);
         if (trip) {
+          trip.autoRoutePlaceholder = false;
           trip[t.dataset.field] = t.value;
           if (t.dataset.field === "dispatchTime" || t.dataset.field === "routeMiles") autoFillCalcTimes(rowId, trip);
           recalcRowCalcCellsInPlace(rowId);
@@ -6126,6 +6133,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         if (!found) return;
         const trip = found.row.trips.find((tr) => tr.id === t.dataset.trip);
         if (trip) {
+          trip.autoRoutePlaceholder = false;
           trip[t.dataset.field] = t.checked;
           const td = t.closest("td");
           td.classList.toggle(t.dataset.field === "backhaul" ? "flag-backhaul" : "flag-yes", t.checked);
