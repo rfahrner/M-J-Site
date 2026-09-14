@@ -12,7 +12,7 @@
    4. If there is no daily override, the permanent location base applies.
 
    Permanent base tables:
-   - board_rate_tiers: mileage bands (Atlanta)
+   - board_rate_tiers: mileage bands (Atlanta + Delaware)
    - board_rate_settings: flat/per-mile/stop/hourly values by location
 
    Date-scoped table:
@@ -28,9 +28,9 @@ export const BOARD_RATE_TIERS_TABLE = "board_rate_tiers";
 export const BOARD_RATE_SETTINGS_TABLE = "board_rate_settings";
 export const BOARD_RATE_DAILY_TABLE = "board_rate_daily_overrides";
 
-let cachedTiers = null;       // { atlanta: [{id,min,max,rate}, ...] }
-let cachedSettings = null;    // { location: {key:value} }
-let cachedDaily = null;       // { location: { YYYY-MM-DD: {tiers:{}, settings:{}} } }
+let cachedTiers = null;
+let cachedSettings = null;
+let cachedDaily = null;
 
 function ensureDailyBucket(location, rateDate) {
   if (!cachedDaily) cachedDaily = {};
@@ -175,7 +175,7 @@ function rowDate(row) {
 }
 
 function driverOverridesFor(row) {
-  if (!row?.driverId) return null;
+  if (!row?.driverId || (row?.location && row.location !== "atlanta")) return null;
   const drv = findDriver(row.driverId);
   return drv?.atlantaRateOverrides || null;
 }
@@ -189,10 +189,6 @@ function dailySettingForRow(row, locationKey, key, fallback) {
   return getDailySettingValue(locationKey, rowDate(row), key, fallback);
 }
 
-// Driver negotiated terms are a floor. For dollar values, higher wins.
-// `stop_charge_free_stops` is the one inverted setting: fewer free stops
-// means the driver is paid extra-stop money sooner, so the lower threshold
-// is the more favorable negotiated term.
 const LOWER_IS_MORE_FAVORABLE = new Set(["stop_charge_free_stops"]);
 
 export function effectiveTierRate(row, tier) {
@@ -236,9 +232,6 @@ export function isDriverSettingOverridden(row, key) {
   return !!(driverOv?.settings && driverOv.settings[key] != null);
 }
 
-// Kept under the old export names because loadboard.js already uses them
-// for the dot indicator. They now mean "this date has an override" rather
-// than the retired per-load JSON override layer.
 export function isTierOverridden(row, tierId) { return isDailyTierOverridden(row, tierId); }
 export function isSettingOverridden(row, key) { return isDailySettingOverridden(row, key); }
 
@@ -260,10 +253,6 @@ function withDriverFlatFloor(row, breakdown) {
   };
 }
 
-// Calculates the non-manual rate. The helpers above already apply the
-// permanent-base -> daily-date -> driver-negotiated hierarchy at each rate
-// component. A driver's single flat normalRate is compared against the
-// completed calculation as a final pay floor.
 export function calcLoadRateBreakdown(locationKey, row) {
   const tiers = (cachedTiers?.[locationKey]) || [];
   let breakdown;
@@ -278,7 +267,7 @@ export function calcLoadRateBreakdown(locationKey, row) {
     }
 
     if (!realTrips.length) {
-      breakdown = { total: 0, mode: locationKey === "atlanta" ? "mileage-tiers" : "flat-per-route", lines: [], note: "No routes entered yet." };
+      breakdown = { total: 0, mode: "mileage-tiers", lines: [], note: "No routes entered yet." };
       return withDriverFlatFloor(row, breakdown);
     }
 
@@ -292,16 +281,6 @@ export function calcLoadRateBreakdown(locationKey, row) {
         return;
       }
 
-      if (locationKey === "delaware") {
-        const minFlat = effectiveSetting(row, locationKey, "flat_minimum", 1000);
-        const perMile = effectiveSetting(row, locationKey, "per_mile", 4);
-        const calc = Math.max(minFlat, miles * perMile);
-        const rounded = Math.round(calc * 100) / 100;
-        lines.push({ label, detail: `${miles} mi — greater of $${minFlat} flat or $${perMile}/mi`, amount: rounded });
-        total += calc;
-        return;
-      }
-
       const tier = tiers.find((tr) => miles >= tr.min && miles <= tr.max);
       let routeRate;
       let tierLabel;
@@ -309,24 +288,32 @@ export function calcLoadRateBreakdown(locationKey, row) {
         routeRate = effectiveTierRate(row, tier);
         tierLabel = `${tier.min}-${tier.max}mi tier`;
       } else {
-        const perMile = effectiveSetting(row, locationKey, "over_tier_per_mile", 2.4);
+        const perMileFallback = locationKey === "delaware" ? 4 : 2.4;
+        const perMile = effectiveSetting(row, locationKey, "over_tier_per_mile", perMileFallback);
         routeRate = miles * perMile;
         tierLabel = `over tier, $${perMile}/mi`;
       }
-      const stops = parseInt(t.stopCount, 10) || 0;
-      const freeStops = effectiveSetting(row, locationKey, "stop_charge_free_stops", 2);
-      const perStop = effectiveSetting(row, locationKey, "stop_charge_per_stop", 20);
-      const stopCharge = stops > freeStops ? (stops - freeStops) * perStop : 0;
-      const routeTotal = routeRate + stopCharge;
-      const stopNote = stopCharge
-        ? ` + ${stops} stops (${stops - freeStops} over ${freeStops} free × $${perStop})`
-        : (stops ? ` + ${stops} stops (within ${freeStops} free)` : "");
+
+      let routeTotal = routeRate;
+      let stopNote = "";
+      if (locationKey === "atlanta") {
+        const stops = parseInt(t.stopCount, 10) || 0;
+        const freeStops = effectiveSetting(row, locationKey, "stop_charge_free_stops", 2);
+        const perStop = effectiveSetting(row, locationKey, "stop_charge_per_stop", 20);
+        const stopCharge = stops > freeStops ? (stops - freeStops) * perStop : 0;
+        routeTotal += stopCharge;
+        stopNote = stopCharge
+          ? ` + ${stops} stops (${stops - freeStops} over ${freeStops} free × $${perStop})`
+          : (stops ? ` + ${stops} stops (within ${freeStops} free)` : "");
+      }
+
       lines.push({ label, detail: `${miles} mi (${tierLabel})${stopNote}`, amount: Math.round(routeTotal * 100) / 100 });
       total += routeTotal;
     });
+
     breakdown = {
       total: Math.round(total * 100) / 100,
-      mode: locationKey === "atlanta" ? "mileage-tiers" : "flat-per-route",
+      mode: "mileage-tiers",
       lines,
       note: null,
     };
@@ -355,7 +342,6 @@ export function calcLoadRateBreakdown(locationKey, row) {
     return withDriverFlatFloor(row, breakdown);
   }
 
-  // Houston (and any future flat-rate location using this engine).
   const flat = effectiveSetting(row, locationKey, "flat_rate", 0);
   breakdown = { total: flat, mode: "flat", lines: [{ label: "Location flat rate", detail: "", amount: flat }], note: null };
   return withDriverFlatFloor(row, breakdown);
