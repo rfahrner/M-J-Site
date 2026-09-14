@@ -23,18 +23,6 @@ function currentFile() {
   return location.pathname.split("/").pop() || "";
 }
 
-function fieldFor(id) {
-  const input = document.getElementById(id);
-  return input ? input.closest(".field") : null;
-}
-
-function moveFields(ids, target) {
-  ids.forEach((id) => {
-    const field = fieldFor(id);
-    if (field) target.appendChild(field);
-  });
-}
-
 function makePanel(key, active = false) {
   const panel = document.createElement("div");
   panel.className = `unified-ld-panel${active ? "" : " hidden"}`;
@@ -76,7 +64,25 @@ function standardizeModal(config) {
   ).join("");
   header.insertAdjacentElement("afterend", tabs);
 
+  // Capture the actual live field nodes BEFORE clearing the body. The old
+  // implementation cleared body.innerHTML first and then tried to find these
+  // controls with getElementById(), which destroyed the controls and broke
+  // the legacy open/save code (most visibly completed Mondelez load pills).
   const originalFields = [...body.children];
+  const fieldByControlId = new Map();
+  originalFields.forEach((field) => {
+    field.querySelectorAll?.("[id]").forEach((el) => fieldByControlId.set(el.id, field));
+  });
+  const movedFields = new Set();
+  const moveCapturedFields = (ids, target) => {
+    ids.forEach((id) => {
+      const field = fieldByControlId.get(id);
+      if (!field || movedFields.has(field)) return;
+      target.appendChild(field);
+      movedFields.add(field);
+    });
+  };
+
   body.innerHTML = "";
 
   const overview = makePanel("overview", true);
@@ -117,21 +123,19 @@ function standardizeModal(config) {
 
   body.append(overview, notes, route, images, history);
 
-  // Move the existing live form controls rather than recreating them. That
-  // preserves every existing id and all of the location-specific save logic.
-  moveFields(config.overview, overviewFields);
-  moveFields(config.rate, rateFields);
-  moveFields(config.notes, notesGrid);
-  moveFields(config.route, routeGrid);
+  // Move the captured live form controls rather than recreating them. This
+  // preserves every existing id, event listener and location-specific save path.
+  moveCapturedFields(config.overview, overviewFields);
+  moveCapturedFields(config.rate, rateFields);
+  moveCapturedFields(config.notes, notesGrid);
+  moveCapturedFields(config.route, routeGrid);
 
-  // If a future field is added to the old modal and isn't explicitly mapped,
-  // keep it visible on Overview rather than silently losing it.
+  // Keep any future/unmapped legacy fields visible on Overview instead of
+  // silently dropping them when this wrapper is applied.
   originalFields.forEach((field) => {
-    if (field.isConnected && field.parentElement === body) overviewFields.appendChild(field);
+    if (!movedFields.has(field)) overviewFields.appendChild(field);
   });
 
-  // Give legacy .field blocks the same card-like visual rhythm as Atlanta's
-  // fieldsets without replacing the actual controls.
   modal.querySelectorAll(".unified-field-grid > .field, .unified-rate-fields > .field").forEach((field) => {
     field.classList.add("unified-field-box");
   });
@@ -142,8 +146,6 @@ function standardizeModal(config) {
     activate(modal, button.dataset.unifiedLdTab);
   });
 
-  // Each time the legacy open function shows the modal, return to Overview so
-  // Houston/Mondelez behave like opening a fresh Atlanta Load Details window.
   let wasHidden = modal.classList.contains("hidden");
   new MutationObserver(() => {
     const hidden = modal.classList.contains("hidden");
