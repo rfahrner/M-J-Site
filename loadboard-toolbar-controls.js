@@ -3,6 +3,7 @@ import './delaware-rate-tiers.js';
 import './daily-rate-hierarchy.js';
 import './daily-rate-modal-sync.js';
 import './unified-load-modals.js';
+import './houston-load-details-v2.js';
 
 const BOARD_LOCATION_BY_FILE = {
   "": "atlanta",
