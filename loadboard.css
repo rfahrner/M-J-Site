@@ -397,6 +397,18 @@ table.board th.col-nextCallTimeCalc,
 table.board td.col-nextCallTimeCalc { background: var(--butter-yellow) !important; }
 table.board th.col-pistachio,
 table.board td.col-pistachio { background: var(--pistachio) !important; }
+/* A saved Highlight applies to the whole logical load row, including cells
+   whose column/status surfaces normally use !important. Hover remains the
+   strongest temporary treatment so the row under the pointer stays clear. */
+table.board tbody tr.is-row-pinned > td {
+  background: rgba(234, 179, 8, 0.22) !important;
+}
+table.board tbody tr:hover > td,
+table.board tbody tr.is-row-pinned:hover > td,
+table.driverlist tbody tr:hover > td,
+table.available-table tbody tr:hover > td {
+  background: #d7e8ff !important;
+}
 /* pinned/sticky left columns */
 .pin {
   position: sticky;
@@ -422,7 +434,7 @@ table.board td.col-pistachio { background: var(--pistachio) !important; }
   color: #000;
 }
 table.board tbody tr:nth-child(even) td.pin { background: #fbfcfe; }
-table.board tbody tr.is-row-pinned td.pin { background: rgba(234, 179, 8, 0.22); }
+table.board tbody tr.is-row-pinned td.pin { background: rgba(234, 179, 8, 0.22) !important; }
 table.board tbody tr.is-row-selected td.pin { background: rgba(59, 130, 246, 0.22); }
 table.board tbody tr:hover td.pin { background: #eaf1ff; }
 table.board thead th.pin { z-index: 6; }

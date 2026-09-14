@@ -383,6 +383,8 @@ export const HOUSTON_TABLE = "loads_houston";
     const row = found.row;
     const modal = $("#modal-houston-load-details");
     if (!modal) { console.error("Houston Load Details modal HTML isn't on this page yet."); return; }
+    const title = $("#hou-ld-title");
+    if (title) title.textContent = `Load #${row.aljexNumber || "(not assigned)"}`;
     houstonLdRowId = rowId;
 
     const setVal = (id, val) => { const el = $("#" + id); if (el) el.value = val == null ? "" : val; };

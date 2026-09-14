@@ -6,16 +6,16 @@ const CONFIG = {
     notes: ["hou-ld-comments", "hou-ld-timeout"],
     rate: ["hou-ld-rate"],
     imagesCopy: "Trip Sheet Images for Houston are attached from the Image cell on the load board. This tab is kept here so Load Details has the same layout as the other locations.",
-    historyCopy: "Change History is not yet recorded field-by-field for Houston loads. This tab is reserved so every Load Details window uses the same layout."
+    historyCopy: "Loading this load's change history…"
   },
   "mondelez.html": {
     modal: "#modal-mdz-load-details",
-    overview: ["mdz-ld-location", "mdz-ld-driver", "mdz-ld-aljex", "mdz-ld-start"],
+    overview: ["mdz-ld-location", "mdz-ld-driver", "mdz-ld-aljex"],
     route: ["mdz-ld-group", "mdz-ld-driverapp", "mdz-ld-trailer", "mdz-ld-returntrailer", "mdz-ld-stops", "mdz-ld-miles"],
     notes: ["mdz-ld-notes"],
     rate: ["mdz-ld-carrierpay", "mdz-ld-fsc", "mdz-ld-additional", "mdz-ld-revenue"],
     imagesCopy: "Trip Sheet Images for Mondelez are attached from the Image cell on the load board. This tab is kept here so Load Details has the same layout as the other locations.",
-    historyCopy: "Change History is not yet recorded field-by-field for Mondelez loads. This tab is reserved so every Load Details window uses the same layout."
+    historyCopy: "Loading this load's change history…"
   }
 };
 

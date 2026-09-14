@@ -1294,9 +1294,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (!found) return;
     const trip = found.row.trips.find((t) => t.id === tripId);
     if (!trip) return;
-    // Opens straight into Load Details on this trip's tab rather than
-    // un-minimizing it back onto the active row — matches what the pill's
-    // own tooltip already promises ("click to fix" / "click to view").
+    // A completed/minimized pill is also the restore control: put the load
+    // back into the editable row before opening Load Details. Completion is
+    // preserved; only the compact presentation is cleared.
+    trip.minimized = false;
+    await saveTripNow(found.row, trip, found.row.trips.indexOf(trip) + 1);
+    renderBoardTable();
     await openLoadDetailsModal(rowId, tripId);
     if (tripMissingFields(trip, found.row.location).length) startLoadDetailsEdit(tripId);
   }
@@ -3869,7 +3872,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       editDraft: null, // scratch copy of the fields being edited, discarded on Cancel
     };
     const openedForRowId = rowId; // snapshot — guards against a stale async response clobbering a newer/closed state below
-    $("#ld-title").textContent = `Load ${row.proNumber || "(no PRO# yet)"}`;
+    $("#ld-title").textContent = `Load #${row.proNumber || "(not assigned)"}`;
     modal.classList.remove("hidden");
     renderLoadDetailsTabs();
 
