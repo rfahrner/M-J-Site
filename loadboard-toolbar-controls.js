@@ -1,4 +1,5 @@
 import './preshift-pro-text.js';
+import './delaware-rate-tiers.js';
 import './daily-rate-hierarchy.js';
 import './daily-rate-modal-sync.js';
 import './unified-load-modals.js';
