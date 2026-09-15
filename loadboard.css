@@ -1518,20 +1518,13 @@ fieldset.rate-tier-box.is-overridden {
   max-height: 78vh;
   object-fit: contain;
   background: #fff;
+  cursor: pointer;
+}
+.image-viewer-gallery img.is-selected-image {
+  outline: 4px solid #2563eb;
+  outline-offset: 4px;
+  border-radius: 4px;
 }
 .image-viewer-footer {
   flex: 0 0 auto;
-}
-.image-viewer-navigation {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  flex: 1 1 auto;
-}
-.image-viewer-navigation [data-viewer-page] {
-  min-width: 56px;
-  text-align: center;
-  color: var(--slate-600, #475569);
-  font-size: 13px;
 }
