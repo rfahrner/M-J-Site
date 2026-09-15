@@ -482,14 +482,14 @@ function viewRouteImage(rowId, imageIndex = 0) {
   const urls = (row?.routeImageUrls || []).filter(Boolean);
   if (!urls.length) return;
   const overlay = document.createElement("div"); overlay.className = "overlay image-lightbox-overlay"; overlay.id = "mdz-image-overlay";
-  overlay.innerHTML = \`<div class="modal image-lightbox-content"><div class="modal-header"><h3>Route — ${escapeHtml(row.aljexNumber || "")}</h3><button class="modal-close" id="mdz-image-close">&times;</button></div><div class="modal-body mdz-lightbox-gallery">${urls.map((url, i) => `<img src="${escapeHtml(url)}" alt="Route image ${i + 1}">`).join("")}</div></div>\`;
+  overlay.innerHTML = `<div class="modal image-lightbox-content"><div class="modal-header"><h3>Route — ${escapeHtml(row.aljexNumber || "")}</h3><button class="modal-close" id="mdz-image-close">&times;</button></div><div class="modal-body mdz-lightbox-gallery">${urls.map((url, i) => `<img src="${escapeHtml(url)}" alt="Route image ${i + 1}">`).join("")}</div></div>`;
   document.body.appendChild(overlay); const close = () => overlay.remove(); overlay.addEventListener("click", (ev) => { if (ev.target === overlay) close(); }); $("#mdz-image-close").addEventListener("click", close);
 }
 async function deleteRouteImage(rowId, imageIndex = 0) {
   const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId); if (!row) return;
   const paths = row.routeImagePaths || parseMondelezImagePaths(row.routeImagePath); const oldPath = paths[Number(imageIndex)]; if (!oldPath) return;
   paths.splice(Number(imageIndex), 1); row.routeImagePaths = paths; row.routeImagePath = paths[0] || ""; row.routeImageUrls = (row.routeImageUrls || []).filter((_, i) => i !== Number(imageIndex)); row.routeImageUrl = row.routeImageUrls[0] || ""; renderMondelezTable();
-  try { if (supabaseClient) { const { error } = await supabaseClient.storage.from(MONDELEZ_IMAGE_BUCKET).remove([oldPath]); if (error) throw error; } await saveMondelezRowNow(row); } catch (e) { console.error("deleteRouteImage failed:", e); setDriverSyncStatus(\`Image removed here, but couldn't delete it from storage (\${e.message || e}).\`, "error"); }
+  try { if (supabaseClient) { const { error } = await supabaseClient.storage.from(MONDELEZ_IMAGE_BUCKET).remove([oldPath]); if (error) throw error; } await saveMondelezRowNow(row); } catch (e) { console.error("deleteRouteImage failed:", e); setDriverSyncStatus(`Image removed here, but couldn't delete it from storage (${e.message || e}).`, "error"); }
 }
 /* ---------------- row actions ---------------- */
 function quickAddMondelezRow() {
