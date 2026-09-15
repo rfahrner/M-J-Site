@@ -18,15 +18,20 @@ function installStyles() {
   const style = document.createElement('style');
   style.id = 'board-row-hover-enhancement-styles';
   style.textContent = `
-    /* Give the three route timing columns a distinct surface from the
-       surrounding pistachio route block. Scoped to standard board tables. */
+    /* Keep the three operational return/dispatch times blue, while the
+       driver's return ETA stays visibly distinct in yellow. */
     table.board th.col-dispatchTime,
     table.board td.col-dispatchTime,
     table.board th.col-lastStopDepart,
     table.board td.col-lastStopDepart,
+    table.board th.col-returnToDC,
+    table.board td.col-returnToDC {
+      background: #c9ddf2 !important;
+    }
+
     table.board th.col-returnEtaToDc,
     table.board td.col-returnEtaToDc {
-      background: #c9ddf2 !important;
+      background: var(--butter-yellow) !important;
     }
 
     /* One consistent hover color across all primary operational tables.
