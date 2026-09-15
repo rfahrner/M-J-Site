@@ -2650,6 +2650,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_shifts" }, handleRealtimeShiftChange);
     channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_trips" }, handleRealtimeTripChange);
     channel.on("postgres_changes", { event: "*", schema: "public", table: "atlanta_drivers" }, handleRealtimeDriverChange);
+    // Available rows share this same all-Kroger channel so every dispatcher
+    // receives inserts, edits, and removals on the same path as load-board
+    // changes. The handler filters by the active location/date in memory.
+    channel.on("postgres_changes", { event: "*", schema: "public", table: AVAILABLE_TABLE }, handleRealtimeAvailableChange);
     channel.on("broadcast", { event: "row-editing" }, ({ payload }) => handleRemoteRowEditing(payload));
     channel.subscribe((status, err) => {
       if (status === "SUBSCRIBED") {
@@ -6306,17 +6310,17 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     }
   }
 
-  export function setupAvailableRealtimeSync(locationKey) {
-    if (!supabaseClient) return;
-    const channel = supabaseClient.channel(`available-${locationKey}`);
-    channel.on("postgres_changes", { event: "*", schema: "public", table: AVAILABLE_TABLE, filter: `location=eq.${locationKey}` }, handleRealtimeAvailableChange);
-    channel.subscribe();
+  // Kept as an exported compatibility shim for callers from older pages.
+  // Standard Kroger boards now attach this listener to the shared
+  // "board-kroger" channel in setupRealtimeSync(), so they cannot drift onto
+  // a separate per-location subscription.
+  export function setupAvailableRealtimeSync() {
+    return boardChannel;
   }
 
   export function initAvailableSection() {
     if (!$("#available-table-body")) return; // not every page has this section
     refreshAvailableSection();
-    setupAvailableRealtimeSync(state.activeLocation || "atlanta");
 
     on("btn-available-add-row", "click", addAvailableRow);
 
