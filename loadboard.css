@@ -1429,3 +1429,8 @@ fieldset.rate-tier-box.is-overridden {
 .mdz-lightbox-gallery img { max-width: min(44vw, 420px); max-height: 70vh; object-fit: contain; }
 
 .image-lightbox-overlay { z-index: 300; }
+
+/* Mondelez route scans need a real viewing canvas, not natural-size thumbnails */
+.mdz-image-lightbox-overlay .image-lightbox-content { width: min(92vw, 1200px); max-width: 92vw; }
+.mdz-image-lightbox-overlay .image-lightbox-content .modal-body { min-height: min(70vh, 760px); display: flex; align-items: center; justify-content: center; }
+.mdz-image-lightbox-overlay .image-lightbox-content img { width: min(86vw, 1080px); max-width: 86vw; max-height: 78vh; object-fit: contain; }
