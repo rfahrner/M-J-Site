@@ -2693,10 +2693,27 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   function positionDriverAcBox(inputEl) {
     const box = ensureDriverAcBox();
     const rect = inputEl.getBoundingClientRect();
+    const gap = 2;
+    const viewportPadding = 8;
+    const configuredMaxHeight = 200;
+    const availableField = !!inputEl.dataset.availRow;
+
+    // The Available table sits at the bottom of each board. Its driver
+    // picker must open upward so the choices are not clipped by the bottom
+    // edge of the page. For every other field, choose the side with enough
+    // room and keep the list inside the viewport.
+    const boxHeight = Math.min(box.scrollHeight || configuredMaxHeight, configuredMaxHeight);
+    const spaceAbove = Math.max(0, rect.top - viewportPadding);
+    const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - viewportPadding);
+    const openAbove = availableField || (spaceBelow < boxHeight + gap && spaceAbove > spaceBelow);
+
     box.style.position = "fixed";
     box.style.left = rect.left + "px";
-    box.style.top = rect.bottom + 2 + "px";
     box.style.width = Math.max(rect.width, 220) + "px";
+    box.style.maxHeight = Math.max(80, Math.min(configuredMaxHeight, openAbove ? spaceAbove : spaceBelow)) + "px";
+    box.style.top = openAbove
+      ? Math.max(viewportPadding, rect.top - Math.min(box.scrollHeight || boxHeight, configuredMaxHeight) - gap) + "px"
+      : rect.bottom + gap + "px";
   }
 
   function renderDriverAcOptions(query, locationKey) {
@@ -2760,9 +2777,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // Mondelez board, "houston" on Houston, etc; falls back to state.activeLocation).
   export function openDriverAutocomplete(inputEl, locationKey, onPick) {
     driverAcOnPick = onPick;
-    positionDriverAcBox(inputEl);
     renderDriverAcOptions(inputEl.value, locationKey || state.activeLocation);
-    ensureDriverAcBox().classList.remove("hidden");
+    const box = ensureDriverAcBox();
+    box.classList.remove("hidden");
+    positionDriverAcBox(inputEl);
     if (driverAcInput && driverAcInput !== inputEl) driverAcInput.removeEventListener("keydown", handleDriverAcKeydown);
     if (driverAcInput !== inputEl) inputEl.addEventListener("keydown", handleDriverAcKeydown);
     driverAcInput = inputEl;
@@ -2778,8 +2796,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (document.activeElement === inputEl) openDriverAutocomplete(inputEl, locationKey, driverAcOnPick);
       return;
     }
-    positionDriverAcBox(inputEl); // re-anchor in case the row shifted (e.g. a save-status change)
     renderDriverAcOptions(inputEl.value, locationKey || state.activeLocation);
+    positionDriverAcBox(inputEl); // re-anchor after rendering so above/below fit uses the real list height
   }
   export function closeDriverAutocomplete() {
     if (driverAcBox) driverAcBox.classList.add("hidden");
