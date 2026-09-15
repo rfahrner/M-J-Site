@@ -485,10 +485,10 @@ function viewRouteImage(rowId, imageIndex = 0) {
   const overlay = document.createElement("div");
   overlay.className = "overlay image-lightbox-overlay mdz-image-lightbox-overlay";
   overlay.id = "mdz-image-overlay";
-  overlay.innerHTML = \`
+  overlay.innerHTML = `
     <div class="modal image-lightbox-content image-viewer-modal">
       <div class="modal-header image-viewer-header">
-        <h3>Route — \${escapeHtml(row.aljexNumber || "")}</h3>
+        <h3>Route — ${escapeHtml(row.aljexNumber || "")}</h3>
         <div class="image-viewer-toolbar">
           <button type="button" class="btn btn-ghost" data-viewer-zoom-out title="Zoom out">−</button>
           <span class="image-viewer-zoom-level" data-viewer-zoom-level>100%</span>
@@ -498,9 +498,9 @@ function viewRouteImage(rowId, imageIndex = 0) {
         </div>
       </div>
       <div class="image-viewer-stage">
-        <div class="mdz-lightbox-gallery image-viewer-gallery">\${urls.map((url, i) => \`<img src="\${escapeHtml(url)}" alt="Route image \${i + 1}"\${i === startIndex ? ' class="is-active-image"' : ''}>\`).join("")}</div>
+        <div class="mdz-lightbox-gallery image-viewer-gallery">${urls.map((url, i) => `<img src="${escapeHtml(url)}" alt="Route image ${i + 1}"${i === startIndex ? ' class="is-active-image"' : ''}>`).join("")}</div>
       </div>
-    </div>\`;
+    </div>`;
   document.body.appendChild(overlay);
   const gallery = overlay.querySelector(".image-viewer-gallery");
   wireImageViewer(overlay, gallery);
