@@ -502,11 +502,6 @@ function viewRouteImage(rowId, imageIndex = 0) {
       <div class="image-viewer-stage">
         <div class="mdz-lightbox-gallery image-viewer-gallery">${urls.map((url, i) => `<img src="${escapeHtml(url)}" alt="Route image ${i + 1}"${i === startIndex ? ' class="is-active-image"' : ''}>`).join("")}</div>
       </div>
-      <div class="image-viewer-navigation">
-        <button type="button" class="btn btn-ghost" data-viewer-prev title="Previous image">‹</button>
-        <span data-viewer-page>1 / ${urls.length}</span>
-        <button type="button" class="btn btn-ghost" data-viewer-next title="Next image">›</button>
-      </div>
     </div>`;
   document.body.appendChild(overlay);
   const gallery = overlay.querySelector(".image-viewer-gallery");
