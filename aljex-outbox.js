@@ -8,7 +8,7 @@
 
    1. Typing a route ID fires a change per keystroke. Debouncing plus
       a payload hash means "PA3090" queues one row, not six.
-   2. If Aljex is down (or, right now, simply not connected yet), the
+   2. If Aljex is down or, right now, simply not connected yet, the
       work is durable and replayable instead of lost.
    3. Every attempt is auditable — who queued it, what exactly we
       intended to send, and what came back.
@@ -22,6 +22,7 @@ import { supabaseClient, currentUserName } from './loadboard.js';
 import { buildOrderPayload, payloadHash, isSendable, describePayload, resolveAljexOrderNo } from './aljex-payload.js';
 import { createAljexClient, getAljexMode } from './aljex-client.js';
 import './stop-times-highlight-fix.js';
+import './image-gallery-scroll-fix.js';
 
 export const OUTBOX_TABLE = "aljex_outbox";
 const SHIFTS_TABLE = "loads_shifts";
