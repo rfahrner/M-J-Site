@@ -796,7 +796,16 @@ function handleRealtimeMondelezChange(payload) {
   const activeEl = document.activeElement;
   const domField = (tr && tr.contains(activeEl)) ? activeEl.dataset.mdzField : null;
   const preserved = domField ? existing[domField] : undefined;
-  Object.assign(existing, mondelezRowFromDbRow(dbRow), { id: existing.id, selected: existing.selected });
+  const previousImagePaths = existing.routeImagePaths || [];
+  const previousImageUrls = existing.routeImageUrls || [];
+  const incoming = mondelezRowFromDbRow(dbRow);
+  // Realtime echoes contain storage paths but no signed URLs. Keep the URLs
+  // already signed by this tab when the saved image list is unchanged.
+  if (JSON.stringify(incoming.routeImagePaths || []) === JSON.stringify(previousImagePaths)) {
+    incoming.routeImageUrls = previousImageUrls;
+    incoming.routeImageUrl = previousImageUrls[0] || "";
+  }
+  Object.assign(existing, incoming, { id: existing.id, selected: existing.selected });
   if (domField) existing[domField] = preserved;
   const restoreFocus = captureFocusForRerender();
   renderMondelezTable();
