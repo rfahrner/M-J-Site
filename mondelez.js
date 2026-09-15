@@ -481,7 +481,7 @@ function viewRouteImage(rowId, imageIndex = 0) {
   const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
   const urls = (row?.routeImageUrls || []).filter(Boolean);
   if (!urls.length) return;
-  const overlay = document.createElement("div"); overlay.className = "overlay image-lightbox-overlay"; overlay.id = "mdz-image-overlay";
+  const overlay = document.createElement("div"); overlay.className = "overlay image-lightbox-overlay mdz-image-lightbox-overlay"; overlay.id = "mdz-image-overlay";
   overlay.innerHTML = `<div class="modal image-lightbox-content"><div class="modal-header"><h3>Route — ${escapeHtml(row.aljexNumber || "")}</h3><button class="modal-close" id="mdz-image-close">&times;</button></div><div class="modal-body mdz-lightbox-gallery">${urls.map((url, i) => `<img src="${escapeHtml(url)}" alt="Route image ${i + 1}">`).join("")}</div></div>`;
   document.body.appendChild(overlay); const close = () => overlay.remove(); overlay.addEventListener("click", (ev) => { if (ev.target === overlay) close(); }); $("#mdz-image-close").addEventListener("click", close);
 }
