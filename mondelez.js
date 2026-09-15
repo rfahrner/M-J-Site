@@ -23,7 +23,7 @@ import {
   refreshDriverDatalist, closeDateDropdown, renderCalendarGrid, resetCalendarViewMonth,
   closeContextMenu, handleRealtimeDriverChange, pick, textDriverPhone, openAddDriverModal,
   openDriverAutocomplete, updateDriverAutocomplete, closeDriverAutocomplete, captureFocusForRerender,
-  handleRowAwareTab, openEditDriverModal, batchSignImageUrls,
+  handleRowAwareTab, openEditDriverModal, batchSignImageUrls, wireImageViewer,
   openLocationNotesModal, closeLocationNotesModal, saveLocationNotes,
 } from './loadboard.js';
 export const MONDELEZ_TABLE = "mondelez_loads";
@@ -481,10 +481,38 @@ function viewRouteImage(rowId, imageIndex = 0) {
   const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
   const urls = (row?.routeImageUrls || []).filter(Boolean);
   if (!urls.length) return;
-  const overlay = document.createElement("div"); overlay.className = "overlay image-lightbox-overlay mdz-image-lightbox-overlay"; overlay.id = "mdz-image-overlay";
-  overlay.innerHTML = `<div class="modal image-lightbox-content"><div class="modal-header"><h3>Route — ${escapeHtml(row.aljexNumber || "")}</h3><button class="modal-close" id="mdz-image-close">&times;</button></div><div class="modal-body mdz-lightbox-gallery">${urls.map((url, i) => `<img src="${escapeHtml(url)}" alt="Route image ${i + 1}">`).join("")}</div></div>`;
-  document.body.appendChild(overlay); const close = () => overlay.remove(); overlay.addEventListener("click", (ev) => { if (ev.target === overlay) close(); }); $("#mdz-image-close").addEventListener("click", close);
+  const startIndex = Math.max(0, Math.min(Number(imageIndex) || 0, urls.length - 1));
+  const overlay = document.createElement("div");
+  overlay.className = "overlay image-lightbox-overlay mdz-image-lightbox-overlay";
+  overlay.id = "mdz-image-overlay";
+  overlay.innerHTML = `
+    <div class="modal image-lightbox-content image-viewer-modal">
+      <div class="modal-header image-viewer-header">
+        <h3>Route — ${escapeHtml(row.aljexNumber || "")}</h3>
+        <div class="image-viewer-toolbar">
+          <button type="button" class="btn btn-ghost" data-viewer-zoom-out title="Zoom out">−</button>
+          <span class="image-viewer-zoom-level" data-viewer-zoom-level>100%</span>
+          <button type="button" class="btn btn-ghost" data-viewer-zoom-in title="Zoom in">+</button>
+          <button type="button" class="btn btn-ghost" data-viewer-reset title="Reset view">Fit</button>
+          <button type="button" class="modal-close" id="mdz-image-close">&times;</button>
+        </div>
+      </div>
+      <div class="image-viewer-stage">
+        <div class="mdz-lightbox-gallery image-viewer-gallery">${urls.map((url, i) => `<img src="${escapeHtml(url)}" alt="Route image ${i + 1}"${i === startIndex ? ' class="is-active-image"' : ''}>`).join("")}</div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const gallery = overlay.querySelector(".image-viewer-gallery");
+  wireImageViewer(overlay, gallery);
+  const close = () => overlay.remove();
+  overlay.addEventListener("click", (ev) => { if (ev.target === overlay) close(); });
+  const closeBtn = overlay.querySelector("#mdz-image-close");
+  if (closeBtn) closeBtn.addEventListener("click", close);
+  document.addEventListener("keydown", function escHandler(e) {
+    if (e.key === "Escape") { close(); document.removeEventListener("keydown", escHandler); }
+  });
 }
+
 async function deleteRouteImage(rowId, imageIndex = 0) {
   const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId); if (!row) return;
   const paths = row.routeImagePaths || parseMondelezImagePaths(row.routeImagePath); const oldPath = paths[Number(imageIndex)]; if (!oldPath) return;

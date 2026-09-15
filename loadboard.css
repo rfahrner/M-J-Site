@@ -1434,3 +1434,85 @@ fieldset.rate-tier-box.is-overridden {
 .mdz-image-lightbox-overlay .image-lightbox-content { width: min(92vw, 1200px); max-width: 92vw; }
 .mdz-image-lightbox-overlay .image-lightbox-content .modal-body { min-height: min(70vh, 760px); display: flex; align-items: center; justify-content: center; }
 .mdz-image-lightbox-overlay .image-lightbox-content img { width: min(86vw, 1080px); max-width: 86vw; max-height: 78vh; object-fit: contain; }
+
+/* Full-screen original-image viewer. Thumbnails remain compact on the board,
+   but every viewer loads the stored original and gives it a zoomable canvas. */
+.image-lightbox-overlay {
+  z-index: 300;
+  padding: 0;
+}
+.image-viewer-modal {
+  width: 100vw;
+  max-width: none;
+  height: 100vh;
+  max-height: none;
+  border-radius: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.image-viewer-header {
+  flex: 0 0 auto;
+  gap: 12px;
+}
+.image-viewer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.image-viewer-toolbar .btn {
+  min-width: 34px;
+  padding: 4px 9px;
+  line-height: 1.2;
+}
+.image-viewer-toolbar .modal-close {
+  margin-left: 4px;
+}
+.image-viewer-zoom-level {
+  min-width: 48px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--slate-500);
+}
+.image-viewer-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: #111827;
+  touch-action: none;
+  cursor: grab;
+}
+.image-viewer-stage.is-dragging {
+  cursor: grabbing;
+}
+.image-viewer-stage > img {
+  display: block;
+  width: min(94vw, 1400px);
+  max-width: 100%;
+  max-height: 100%;
+  height: auto;
+  object-fit: contain;
+  border-radius: 4px;
+  user-select: none;
+}
+.image-viewer-gallery {
+  width: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: visible;
+  transform-origin: center center;
+}
+.image-viewer-gallery img {
+  max-width: min(44vw, 700px);
+  max-height: 78vh;
+  object-fit: contain;
+  background: #fff;
+}
+.image-viewer-footer {
+  flex: 0 0 auto;
+}

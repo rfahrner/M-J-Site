@@ -1021,7 +1021,81 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     }
   }
 
-  const IMAGE_LIGHTBOX_SCALE = 1.75; // 75% bigger than the image's natural size
+  // Shared full-screen image viewer behavior. The caller supplies the
+  // original image element (or a gallery container); this adds zoom controls,
+  // mouse-wheel zoom, double-click zoom, and pointer-drag panning without
+  // replacing or downsampling the stored file.
+  export function wireImageViewer(overlay, targetEl) {
+    if (!overlay || !targetEl) return;
+    const stage = overlay.querySelector(".image-viewer-stage");
+    if (!stage) return;
+
+    let scale = 1;
+    let offsetX = 0;
+    let offsetY = 0;
+    let dragging = false;
+    let lastX = 0;
+    let lastY = 0;
+    const levelEl = overlay.querySelector("[data-viewer-zoom-level]");
+
+    targetEl.style.transformOrigin = "center center";
+    targetEl.style.willChange = "transform";
+
+    const render = () => {
+      targetEl.style.transform = `translate3d(${offsetX}px, ${offsetY}px, 0) scale(${scale})`;
+      if (levelEl) levelEl.textContent = `${Math.round(scale * 100)}%`;
+    };
+    const setScale = (next) => {
+      scale = Math.min(4, Math.max(1, next));
+      if (scale === 1) { offsetX = 0; offsetY = 0; }
+      render();
+    };
+    const zoomBy = (factor) => setScale(scale * factor);
+    const reset = () => { scale = 1; offsetX = 0; offsetY = 0; render(); };
+
+    const zoomIn = overlay.querySelector("[data-viewer-zoom-in]");
+    const zoomOut = overlay.querySelector("[data-viewer-zoom-out]");
+    const resetBtn = overlay.querySelector("[data-viewer-reset]");
+    if (zoomIn) zoomIn.addEventListener("click", () => zoomBy(1.25));
+    if (zoomOut) zoomOut.addEventListener("click", () => zoomBy(0.8));
+    if (resetBtn) resetBtn.addEventListener("click", reset);
+
+    stage.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      zoomBy(e.deltaY < 0 ? 1.2 : 0.833333);
+    }, { passive: false });
+
+    stage.addEventListener("dblclick", () => setScale(scale > 1 ? 1 : 2));
+
+    stage.addEventListener("pointerdown", (e) => {
+      if (scale <= 1) return;
+      dragging = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      stage.classList.add("is-dragging");
+      if (stage.setPointerCapture) stage.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    });
+    stage.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      offsetX += e.clientX - lastX;
+      offsetY += e.clientY - lastY;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      render();
+    });
+    const endDrag = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      stage.classList.remove("is-dragging");
+      if (stage.releasePointerCapture && e && stage.hasPointerCapture && stage.hasPointerCapture(e.pointerId)) {
+        stage.releasePointerCapture(e.pointerId);
+      }
+    };
+    stage.addEventListener("pointerup", endDrag);
+    stage.addEventListener("pointercancel", endDrag);
+    render();
+  }
 
   export function viewRowImage(row, label) {
     if (!row.routeImageUrl) return;
@@ -1029,37 +1103,36 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     overlay.className = "overlay image-lightbox-overlay";
     overlay.id = "board-image-overlay";
     overlay.innerHTML = `
-      <div class="modal image-lightbox-content">
-        <div class="modal-header"><h3>Route — ${escapeHtml(label || "")}</h3><button class="modal-close" id="board-image-close">&times;</button></div>
-        <div class="modal-body" style="text-align:center; padding:12px;"><img id="board-image-img" src="${escapeHtml(row.routeImageUrl)}" alt="Route image"></div>
-        <div class="modal-footer"><button type="button" class="btn btn-ghost" id="board-image-delete" style="color:#b91c1c; border-color:#b91c1c;">Delete Image</button></div>
+      <div class="modal image-lightbox-content image-viewer-modal">
+        <div class="modal-header image-viewer-header">
+          <h3>Route — ${escapeHtml(label || "")}</h3>
+          <div class="image-viewer-toolbar">
+            <button type="button" class="btn btn-ghost" data-viewer-zoom-out title="Zoom out">−</button>
+            <span class="image-viewer-zoom-level" data-viewer-zoom-level>100%</span>
+            <button type="button" class="btn btn-ghost" data-viewer-zoom-in title="Zoom in">+</button>
+            <button type="button" class="btn btn-ghost" data-viewer-reset title="Reset view">Fit</button>
+            <button type="button" class="modal-close" id="board-image-close">&times;</button>
+          </div>
+        </div>
+        <div class="image-viewer-stage">
+          <img id="board-image-img" src="${escapeHtml(row.routeImageUrl)}" alt="Route image">
+        </div>
+        <div class="modal-footer image-viewer-footer">
+          <button type="button" class="btn btn-ghost" id="board-image-delete" style="color:#b91c1c; border-color:#b91c1c;">Delete Image</button>
+        </div>
       </div>`;
     document.body.appendChild(overlay);
 
-    // The stylesheet only ever capped this image (max-width/max-height); it
-    // never scaled one up, so a manifest scan that comes in small rendered
-    // small no matter how much room the lightbox had. Draw it 75% larger
-    // than its natural size, still bounded by the viewport so a big scan
-    // can't run off screen. Height stays auto, so the aspect is untouched.
-    const imgEl = $("#board-image-img");
-    if (imgEl) {
-      const sizeUp = () => {
-        if (!imgEl.naturalWidth) return;
-        const target = Math.min(imgEl.naturalWidth * IMAGE_LIGHTBOX_SCALE, window.innerWidth * 0.95);
-        imgEl.style.width = Math.round(target) + "px";
-        imgEl.style.maxWidth = "95vw";
-      };
-      if (imgEl.complete) sizeUp();
-      else imgEl.addEventListener("load", sizeUp, { once: true });
-    }
-
+    const imgEl = overlay.querySelector("#board-image-img");
+    wireImageViewer(overlay, imgEl);
     const close = () => overlay.remove();
     overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
-    $("#board-image-close").addEventListener("click", close);
+    const closeBtn = overlay.querySelector("#board-image-close");
+    if (closeBtn) closeBtn.addEventListener("click", close);
     document.addEventListener("keydown", function escHandler(e) {
       if (e.key === "Escape") { close(); document.removeEventListener("keydown", escHandler); }
     });
-    return close; // caller wires the Delete button itself, since it needs board-specific save/render callbacks
+    return close;
   }
 
   // Shared HTML for the image dropzone cell — same markup/behavior on
@@ -4024,7 +4097,30 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       // (or now-null) loadDetailsState here is exactly what threw "Cannot
       // set properties of null". Bail out silently if either happened.
       if (!loadDetailsState || loadDetailsState.rowId !== openedForRowId) return;
-      loadDetailsState.attachments = attachments || [];
+      const attachmentRows = attachments || [];
+      const attachmentPaths = attachmentRows.map((a) => a.file_path).filter(Boolean);
+      const signedAttachmentUrls = {};
+      if (attachmentPaths.length && supabaseClient) {
+        try {
+          const { data: signedList, error: signedError } = await supabaseClient.storage.from("trip-sheets").createSignedUrls(attachmentPaths, 3600);
+          if (!signedError) {
+            attachmentPaths.forEach((path, i) => {
+              const signed = signedList && signedList[i] && signedList[i].signedUrl;
+              if (signed) signedAttachmentUrls[path] = signed;
+            });
+          }
+        } catch (e) {
+          console.warn("Could not sign trip-sheet image URLs:", e);
+        }
+      }
+      loadDetailsState.attachments = attachmentRows.map((a) => {
+        let publicUrl = signedAttachmentUrls[a.file_path] || a.publicUrl || "";
+        if (!publicUrl && a.file_path && supabaseClient) {
+          try { publicUrl = supabaseClient.storage.from("trip-sheets").getPublicUrl(a.file_path).data.publicUrl || ""; }
+          catch (e) { /* no usable fallback */ }
+        }
+        return { ...a, publicUrl };
+      });
       loadDetailsState.history = (history || []).sort((a, b) => (a.changed_at < b.changed_at ? 1 : -1));
       loadDetailsState.loadNotes = notesResult.data || [];
       const stopRows = stopsResult.data || [];
@@ -5927,8 +6023,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         const image = e.target.closest("[data-inline-image-src]");
         if (image) {
           const overlay = document.createElement("div"); overlay.className = "overlay image-lightbox-overlay"; overlay.id = "ld-inline-image-overlay";
-          overlay.innerHTML = `<div class="modal image-lightbox-content"><div class="modal-header"><h3>Trip Sheet Image</h3><button class="modal-close" id="ld-inline-image-close">&times;</button></div><div class="modal-body" style="text-align:center;padding:12px;"><img src="${escapeHtml(image.dataset.inlineImageSrc)}" alt="${escapeHtml(image.alt || "Trip Sheet Image")}"></div></div>`;
+          overlay.innerHTML = `<div class="modal image-lightbox-content image-viewer-modal"><div class="modal-header image-viewer-header"><h3>Trip Sheet Image</h3><div class="image-viewer-toolbar"><button type="button" class="btn btn-ghost" data-viewer-zoom-out title="Zoom out">−</button><span class="image-viewer-zoom-level" data-viewer-zoom-level>100%</span><button type="button" class="btn btn-ghost" data-viewer-zoom-in title="Zoom in">+</button><button type="button" class="btn btn-ghost" data-viewer-reset title="Reset view">Fit</button><button class="modal-close" id="ld-inline-image-close">&times;</button></div></div><div class="image-viewer-stage"><img id="ld-inline-image" src="${escapeHtml(image.dataset.inlineImageSrc)}" alt="${escapeHtml(image.alt || "Trip Sheet Image")}"></div></div>`;
           document.body.appendChild(overlay);
+          wireImageViewer(overlay, overlay.querySelector("#ld-inline-image"));
           const close = () => overlay.remove(); overlay.addEventListener("click", (ev) => { if (ev.target === overlay) close(); });
           $("#ld-inline-image-close").addEventListener("click", close);
           return;
