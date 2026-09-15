@@ -4,12 +4,13 @@
    Rate priority is deliberately explicit:
    1. A dispatcher-entered manual total in the board Rate cell is handled
       by loadboard.js and wins over everything here.
-   2. Otherwise, the working rate card for the load's LOCATION + DATE is
-      the permanent base card with any date-scoped overrides substituted.
-   3. A driver's negotiated rate is a floor: if it pays more than today's
-      location rate, the driver rate wins; if today's rate pays more, the
-      higher daily rate wins.
-   4. If there is no daily override, the permanent location base applies.
+   2. Otherwise, each tier/setting starts with this load's own override,
+      when present. These values live on loads_shifts.rate_overrides and
+      never change another load.
+   3. With no load override, the working value comes from the load's
+      LOCATION + DATE card, falling back to the permanent location base.
+   4. A driver's negotiated rate remains a floor: if it pays more than the
+      load/location value, the driver rate wins.
 
    Permanent base tables:
    - board_rate_tiers: mileage bands (Atlanta + Delaware)
@@ -18,9 +19,8 @@
    Date-scoped table:
    - board_rate_daily_overrides: location + date + tier/setting + value
 
-   Legacy per-load rate_overrides JSON is intentionally no longer part of
-   the calculation hierarchy. A one-load exception should be entered in
-   the visible Rate cell, which sets rate_manual and is unambiguous.
+   Load-scoped table column:
+   - loads_shifts.rate_overrides: tier/setting values for one load only
    ================================================================ */
 import { supabaseClient, findDriver } from './loadboard.js';
 
@@ -189,25 +189,37 @@ function dailySettingForRow(row, locationKey, key, fallback) {
   return getDailySettingValue(locationKey, rowDate(row), key, fallback);
 }
 
+function loadTierForRow(row, tier, fallback) {
+  const value = row?.rateOverrides?.tiers?.[tier.id] ?? row?.rateOverrides?.tiers?.[String(tier.id)];
+  return value != null ? Number(value) : Number(fallback);
+}
+
+function loadSettingForRow(row, key, fallback) {
+  const value = row?.rateOverrides?.settings?.[key];
+  return value != null ? Number(value) : Number(fallback);
+}
+
 const LOWER_IS_MORE_FAVORABLE = new Set(["stop_charge_free_stops"]);
 
 export function effectiveTierRate(row, tier) {
   const dailyOrBase = dailyTierForRow(row, tier);
+  const loadOrDefault = loadTierForRow(row, tier, dailyOrBase);
   const driverOv = driverOverridesFor(row);
   const driverValue = driverOv?.tiers?.[tier.id] ?? driverOv?.tiers?.[String(tier.id)];
-  if (driverValue == null) return dailyOrBase;
-  return Math.max(Number(dailyOrBase), Number(driverValue));
+  if (driverValue == null) return loadOrDefault;
+  return Math.max(Number(loadOrDefault), Number(driverValue));
 }
 
 export function effectiveSetting(row, locationKey, key, fallback) {
   const dailyOrBase = dailySettingForRow(row, locationKey, key, fallback);
-  if (locationKey !== "atlanta") return dailyOrBase;
+  const loadOrDefault = loadSettingForRow(row, key, dailyOrBase);
+  if (locationKey !== "atlanta") return loadOrDefault;
   const driverOv = driverOverridesFor(row);
   const driverValue = driverOv?.settings?.[key];
-  if (driverValue == null) return dailyOrBase;
+  if (driverValue == null) return loadOrDefault;
   return LOWER_IS_MORE_FAVORABLE.has(key)
-    ? Math.min(Number(dailyOrBase), Number(driverValue))
-    : Math.max(Number(dailyOrBase), Number(driverValue));
+    ? Math.min(Number(loadOrDefault), Number(driverValue))
+    : Math.max(Number(loadOrDefault), Number(driverValue));
 }
 
 export function isDailyTierOverridden(row, tierId) {
@@ -232,8 +244,15 @@ export function isDriverSettingOverridden(row, key) {
   return !!(driverOv?.settings && driverOv.settings[key] != null);
 }
 
-export function isTierOverridden(row, tierId) { return isDailyTierOverridden(row, tierId); }
-export function isSettingOverridden(row, key) { return isDailySettingOverridden(row, key); }
+export function isTierOverridden(row, tierId) {
+  return !!(row?.rateOverrides?.tiers && (
+    row.rateOverrides.tiers[tierId] != null || row.rateOverrides.tiers[String(tierId)] != null
+  ));
+}
+
+export function isSettingOverridden(row, key) {
+  return !!(row?.rateOverrides?.settings && row.rateOverrides.settings[key] != null);
+}
 
 function withDriverFlatFloor(row, breakdown) {
   const drv = row?.driverId ? findDriver(row.driverId) : null;
