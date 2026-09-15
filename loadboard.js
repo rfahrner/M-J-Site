@@ -2226,16 +2226,19 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     // contain the old name plus driver_id = null. Preserving only the focused
     // text field detached the profile again, so MC and cell vanished until
     // the same dropdown option was picked a second time.
-    const preserveDriverLink = !!preservedDriverId && (
-      domField === "driverName" ||
-      (!fresh.driverId &&
-        String(fresh.driverNameText || "").trim().toLowerCase() ===
-        String(preservedDriverName || "").trim().toLowerCase())
-    );
+    const editingDriver = domField === "driverName";
+    const preserveDriverLink = !!preservedDriverId && !editingDriver && !fresh.driverId &&
+      String(fresh.driverNameText || "").trim().toLowerCase() ===
+      String(preservedDriverName || "").trim().toLowerCase();
 
     Object.assign(existing, fresh, { id: existing.id, trips: existing.trips, addedAt: existing.addedAt, selected: existing.selected });
     if (stateKey) existing[stateKey] = preserved; // don't clobber what the user is actively typing right now
-    if (preserveDriverLink) existing.driverId = preservedDriverId;
+    // The driver field owns both the visible name and its profile link. Keep
+    // that pair atomic while the field is focused — including an intentional
+    // clear where driverId is null. Otherwise an older realtime echo can put
+    // Ewan's hidden link back after the name was erased, or leave a linked
+    // phone/MC on a row whose visible driver name is blank.
+    if (editingDriver || preserveDriverLink) existing.driverId = preservedDriverId;
     if (wasComplete !== existing.shiftComplete) {
       const restoreFocus = captureFocusForRerender();
       renderBoardTable(); // needs to move to the top/bottom — a single-row rebuild can't reposition it
