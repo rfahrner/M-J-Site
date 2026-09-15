@@ -55,6 +55,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   const HIGHLIGHT_MS = 30 * 60 * 1000; // 30 minutes, per spec
   const HISTORY_DAYS = 730;             // ~2 years back — covers all imported historic data with room to spare, no separate Historics page needed
   const FUTURE_DAYS = 14;               // how far ahead loads can be pre-scheduled
+  // Kept as a shared export for alerts.js route timing logic. It no longer
+  // populates Last Stop Depart or Return to DC on the board.
+  export const AVG_MPH = 45;
 
   // Prompted to send when a dispatcher marks a trip as Salvage or Backhaul.
   // NOTE: the two message bodies were given to me with the trigger labels
