@@ -6354,6 +6354,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (["etaShiftReport", "notes", "revLevel"].includes(t.dataset.field) && !t.dataset.trip) {
         found.row[t.dataset.field] = t.value;
         scheduleShiftSave(found.row);
+        if (t.dataset.field === "etaShiftReport") window.dispatchEvent(new CustomEvent("dl-shift-updated", { detail: { shiftId: found.row.dbId } }));
         return;
       }
       if (t.dataset.trip && t.dataset.field) {
