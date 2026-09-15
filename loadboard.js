@@ -1042,8 +1042,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     targetEl.style.willChange = "transform";
 
     const render = () => {
-      targetEl.style.transform = \`translate3d(\${offsetX}px, \${offsetY}px, 0) scale(\${scale})\`;
-      if (levelEl) levelEl.textContent = \`\${Math.round(scale * 100)}%\`;
+      targetEl.style.transform = `translate3d(${offsetX}px, ${offsetY}px, 0) scale(${scale})`;
+      if (levelEl) levelEl.textContent = `${Math.round(scale * 100)}%`;
     };
     const setScale = (next) => {
       scale = Math.min(4, Math.max(1, next));
@@ -1102,10 +1102,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const overlay = document.createElement("div");
     overlay.className = "overlay image-lightbox-overlay";
     overlay.id = "board-image-overlay";
-    overlay.innerHTML = \`
+    overlay.innerHTML = `
       <div class="modal image-lightbox-content image-viewer-modal">
         <div class="modal-header image-viewer-header">
-          <h3>Route — \${escapeHtml(label || "")}</h3>
+          <h3>Route — ${escapeHtml(label || "")}</h3>
           <div class="image-viewer-toolbar">
             <button type="button" class="btn btn-ghost" data-viewer-zoom-out title="Zoom out">−</button>
             <span class="image-viewer-zoom-level" data-viewer-zoom-level>100%</span>
@@ -1115,12 +1115,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           </div>
         </div>
         <div class="image-viewer-stage">
-          <img id="board-image-img" src="\${escapeHtml(row.routeImageUrl)}" alt="Route image">
+          <img id="board-image-img" src="${escapeHtml(row.routeImageUrl)}" alt="Route image">
         </div>
         <div class="modal-footer image-viewer-footer">
           <button type="button" class="btn btn-ghost" id="board-image-delete" style="color:#b91c1c; border-color:#b91c1c;">Delete Image</button>
         </div>
-      </div>\`;
+      </div>`;
     document.body.appendChild(overlay);
 
     const imgEl = overlay.querySelector("#board-image-img");
