@@ -5455,6 +5455,29 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     }
   }
 
+
+  // Realtime echoes for an existing Available row must not rebuild the
+  // whole mini-table. A rebuild replaces the focused name input and closes
+  // its autocomplete roughly one debounce interval after typing begins,
+  // which looks like the dropdown is timing out. Refresh just this row's
+  // linked cells instead, leaving the active input and dropdown untouched.
+  function updateAvailableRowInPlace(row) {
+    const tr = document.getElementById(row.id);
+    if (!tr) return false;
+    const drv = row.driverId ? findDriver(row.driverId) : null;
+    const input = tr.querySelector("input[data-avail-row]");
+    if (input && document.activeElement !== input) input.value = drv ? drv.name : row.driverName;
+    const setText = (selector, value) => {
+      const el = tr.querySelector(selector);
+      if (el) el.textContent = value || "—";
+    };
+    setText(".col-cell .static-text", drv && drv.phone);
+    setText(".col-dispatcherPhone .static-text", drv && drv.dispatcherPhone);
+    setText(".col-email .static-text", drv && drv.email);
+    setText(".col-mc .static-text", drv && drv.mc);
+    setText(".col-rating .static-text", drv && drv.rating);
+    return true;
+  }
   function addAvailableRow() {
     getAvailableSheet(state.activeLocation, state.activeDate).push(blankAvailableRow());
     renderAvailableTable();
@@ -5494,7 +5517,15 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       for (const k in state.availableSheets) {
         const sheet = state.availableSheets[k];
         const idx = sheet.findIndex((r) => r.dbId === oldRow.id);
-        if (idx !== -1) { sheet.splice(idx, 1); if (k === availableSheetKey(state.activeLocation, state.activeDate)) renderAvailableTable(); break; }
+        if (idx !== -1) {
+          sheet.splice(idx, 1);
+          if (k === availableSheetKey(state.activeLocation, state.activeDate)) {
+            const restoreFocus = captureFocusForRerender();
+            renderAvailableTable();
+            restoreFocus();
+          }
+          break;
+        }
       }
       return;
     }
@@ -5503,16 +5534,34 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const k = availableSheetKey(dbRow.location, dbRow.shift_date);
     if (!state.availableSheets[k]) return; // that day isn't cached in this tab yet — nothing to merge into
     const sheet = state.availableSheets[k];
-    const existing = sheet.find((r) => r.dbId === dbRow.id);
+    // The realtime INSERT can beat the matching HTTP response that assigns
+    // dbId to this tab's new row. Match the one pending local row by its
+    // exact name so the echo cannot create a duplicate.
+    const dbName = String(dbRow.driver_name || "").trim().toLowerCase();
+    const existing = sheet.find((r) => r.dbId === dbRow.id) ||
+      sheet.find((r) => !r.dbId && dbName && String(r.driverName || "").trim().toLowerCase() === dbName);
     if (existing) {
+      const activeInput = document.activeElement;
+      const editingThisRow = !!activeInput && activeInput.dataset && activeInput.dataset.availRow === existing.id;
+      const preservedDriverName = existing.driverName;
+      const preservedDriverId = existing.driverId;
       Object.assign(existing, availableRowFromDbRow(dbRow), { id: existing.id });
+      if (editingThisRow) {
+        existing.driverName = preservedDriverName;
+        existing.driverId = preservedDriverId;
+      }
+      if (k === availableSheetKey(state.activeLocation, state.activeDate)) updateAvailableRowInPlace(existing);
     } else {
       // Drop the lone starting blank row once real data arrives, same as the board's own sheets do
       const onlyBlank = sheet.length === 1 && !sheet[0].dbId && !sheet[0].driverName.trim();
       if (onlyBlank) sheet.length = 0;
       sheet.push(availableRowFromDbRow(dbRow));
+      if (k === availableSheetKey(state.activeLocation, state.activeDate)) {
+        const restoreFocus = captureFocusForRerender();
+        renderAvailableTable();
+        restoreFocus();
+      }
     }
-    if (k === availableSheetKey(state.activeLocation, state.activeDate)) renderAvailableTable();
   }
 
   export function setupAvailableRealtimeSync(locationKey) {
