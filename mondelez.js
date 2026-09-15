@@ -65,7 +65,7 @@ function blankMondelezRow(locationKey) {
     driverId: null, driverName: "",
     miles: "", carrierRpm: "", carrierPayPerStop: "", carrierPay: "",
     fsc: "", additionalCharges: "", revenueTotal: "", revenueManual: false,
-    routeImagePath: "", routeImageUrl: "",
+    routeImagePath: "", routeImagePaths: [], routeImageUrl: "", routeImageUrls: [],
     tonu: false, highlighted: false, shiftComplete: false, selected: false,
     createdAt: null, updatedAt: null, addedAt: null,
   };
@@ -92,11 +92,18 @@ function mondelezRowToDbRow(row, dKey) {
     additional_charges: row.additionalCharges !== "" && row.additionalCharges != null ? Number(row.additionalCharges) : null,
     revenue_total: row.revenueTotal !== "" && row.revenueTotal != null ? Number(row.revenueTotal) : null,
     revenue_manual: !!row.revenueManual,
-    route_image_path: row.routeImagePath || null,
+    route_image_path: row.routeImagePaths?.length > 1 ? JSON.stringify(row.routeImagePaths) : (row.routeImagePaths?.[0] || row.routeImagePath || null),
     tonu: !!row.tonu,
     highlighted: !!row.highlighted,
     shift_complete: !!row.shiftComplete,
   };
+}
+function parseMondelezImagePaths(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.filter(Boolean);
+  const raw = String(value);
+  if (raw.trim().startsWith("[")) { try { const parsed = JSON.parse(raw); if (Array.isArray(parsed)) return parsed.filter(Boolean); } catch (_) {} }
+  return [raw];
 }
 function mondelezRowFromDbRow(r) {
   return {
@@ -114,8 +121,9 @@ function mondelezRowFromDbRow(r) {
     additionalCharges: r.additional_charges != null ? String(r.additional_charges) : "",
     revenueTotal: r.revenue_total != null ? String(r.revenue_total) : "",
     revenueManual: !!r.revenue_manual,
-    routeImagePath: r.route_image_path || "",
-    routeImageUrl: "", // filled in by batchSignImageUrls after loading — see ensureMondelezDateLoaded
+    routeImagePath: parseMondelezImagePaths(r.route_image_path)[0] || "",
+    routeImagePaths: parseMondelezImagePaths(r.route_image_path),
+    routeImageUrl: "", routeImageUrls: [], // filled in by batchSignImageUrls after loading
     tonu: !!r.tonu, highlighted: !!r.highlighted, shiftComplete: !!r.shift_complete, selected: false,
     createdAt: r.created_at || null, updatedAt: r.updated_at || null, addedAt: null,
   };
@@ -210,8 +218,9 @@ async function ensureMondelezDateLoaded(dKey) {
   const rows = (data || []).map(mondelezRowFromDbRow);
   const imagePaths = [];
   const imageTargets = [];
-  rows.forEach((row) => { if (row.routeImagePath) { imagePaths.push(row.routeImagePath); imageTargets.push(row); } });
+  rows.forEach((row) => (row.routeImagePaths || []).forEach((path, index) => { imagePaths.push(path); imageTargets.push({ row, index }); }));
   await batchSignImageUrls(MONDELEZ_IMAGE_BUCKET, imagePaths, imageTargets);
+  imageTargets.forEach((target) => { if (target.routeImageUrl) { target.row.routeImageUrls[target.index] = target.routeImageUrl; if (!target.row.routeImageUrl) target.row.routeImageUrl = target.routeImageUrl; } });
   mondelezState.rowsByDate[dKey] = rows;
 }
 export async function loadMondelezDatesWithData() {
@@ -358,13 +367,10 @@ function mondelezRowHtml(row) {
     <td class="col-mdz-notes"><input class="cell-input" placeholder="Status / Notes" data-mdz-row="${row.id}" data-mdz-field="notes" value="${escapeHtml(row.notes)}"></td>
     <td class="col-mdz-image">
       <div class="mdz-image-dropzone" tabindex="0" data-action="image-dropzone" data-mdz-row="${row.id}" title="Click to browse, or drag/paste an image here">
-        ${row.routeImageUrl
-          ? `<div class="mdz-thumb-wrap">
-               <img src="${escapeHtml(row.routeImageUrl)}" class="mdz-route-thumb" data-action="view-route-image" data-mdz-row="${row.id}" alt="Route image" title="Click to view full size">
-               <button type="button" class="mdz-thumb-delete" data-action="delete-route-image" data-mdz-row="${row.id}" title="Delete image">&times;</button>
-             </div>`
+        ${(row.routeImageUrls || []).filter(Boolean).length
+          ? (row.routeImageUrls || []).map((url, index) => `<div class="mdz-thumb-wrap"><img src="${escapeHtml(url)}" class="mdz-route-thumb" data-action="view-route-image" data-mdz-row="${row.id}" data-mdz-image-index="${index}" alt="Route image ${index + 1}" title="Click to view full size"><button type="button" class="mdz-thumb-delete" data-action="delete-route-image" data-mdz-row="${row.id}" data-mdz-image-index="${index}" title="Delete image">&times;</button></div>`).join("")
           : `<span class="mdz-upload-hint">Drop / paste / click</span>`}
-        <input type="file" accept="image/*" data-action="upload-route-image" data-mdz-row="${row.id}" class="mdz-hidden-file-input">
+        <input type="file" accept="image/*" multiple data-action="upload-route-image" data-mdz-row="${row.id}" class="mdz-hidden-file-input">
       </div>
     </td>
     <td class="col-availRemove"><button type="button" class="available-remove-btn" data-action="delete-mdz-row" data-mdz-row="${row.id}" title="Delete">&times;</button></td>
@@ -449,68 +455,41 @@ function renderMondelezRateSettingsPanel() {
     </fieldset>`;
 }
 /* ---------------- image upload / view ---------------- */
-async function uploadRouteImage(rowId, file) {
+async function uploadRouteImage(rowId, files) {
   const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
   if (!row || !supabaseClient) return;
-  if (!row.dbId) await saveMondelezRowNow(row); // needs a dbId before it can own a storage path
+  if (!row.dbId) await saveMondelezRowNow(row);
   if (!row.dbId) { setDriverSyncStatus("Couldn't save this load before uploading — try again.", "error"); return; }
-  const path = `${row.dbId}/${Date.now()}_${file.name}`;
+  const list = Array.from(files || []).filter((file) => file && file.type.startsWith("image/"));
+  if (!list.length) return;
   try {
-    const { error: upErr } = await supabaseClient.storage.from(MONDELEZ_IMAGE_BUCKET).upload(path, file);
-    if (upErr) throw upErr;
-    row.routeImagePath = path;
-    const { data: signed, error: signErr } = await supabaseClient.storage.from(MONDELEZ_IMAGE_BUCKET).createSignedUrl(path, 3600);
-    if (signErr) throw signErr;
-    row.routeImageUrl = signed.signedUrl;
-    await saveMondelezRowNow(row);
-    renderMondelezTable();
-  } catch (e) {
-    console.error("uploadRouteImage failed:", e);
-    setDriverSyncStatus(`Couldn't upload that image (${e.message || e}).`, "error");
-  }
-}
-function viewRouteImage(rowId) {
-  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
-  if (!row || !row.routeImageUrl) return;
-  const overlay = document.createElement("div");
-  overlay.className = "overlay image-lightbox-overlay";
-  overlay.id = "mdz-image-overlay";
-  overlay.innerHTML = `
-    <div class="modal image-lightbox-content">
-      <div class="modal-header"><h3>Route — ${escapeHtml(row.aljexNumber || "")}</h3><button class="modal-close" id="mdz-image-close">&times;</button></div>
-      <div class="modal-body" style="text-align:center; padding:12px;"><img src="${escapeHtml(row.routeImageUrl)}" alt="Route image"></div>
-      <div class="modal-footer"><button type="button" class="btn btn-ghost" id="mdz-image-delete" style="color:#b91c1c; border-color:#b91c1c;">Delete Image</button></div>
-    </div>`;
-  document.body.appendChild(overlay);
-  const close = () => overlay.remove();
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
-  $("#mdz-image-close").addEventListener("click", close);
-  $("#mdz-image-delete").addEventListener("click", async () => {
-    if (!confirm("Delete this route image? This can't be undone.")) return;
-    close();
-    await deleteRouteImage(rowId);
-  });
-  document.addEventListener("keydown", function escHandler(e) {
-    if (e.key === "Escape") { close(); document.removeEventListener("keydown", escHandler); }
-  });
-}
-async function deleteRouteImage(rowId) {
-  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
-  if (!row || !row.routeImageUrl) return;
-  const oldPath = row.routeImagePath;
-  row.routeImagePath = "";
-  row.routeImageUrl = "";
-  renderMondelezTable();
-  try {
-    if (oldPath && supabaseClient) {
-      const { error } = await supabaseClient.storage.from(MONDELEZ_IMAGE_BUCKET).remove([oldPath]);
-      if (error) throw error;
+    row.routeImagePaths = row.routeImagePaths || parseMondelezImagePaths(row.routeImagePath);
+    row.routeImageUrls = row.routeImageUrls || [];
+    for (const file of list) {
+      const path = `${row.dbId}/${Date.now()}_${file.name}`;
+      const { error: upErr } = await supabaseClient.storage.from(MONDELEZ_IMAGE_BUCKET).upload(path, file);
+      if (upErr) throw upErr;
+      const { data: signed, error: signErr } = await supabaseClient.storage.from(MONDELEZ_IMAGE_BUCKET).createSignedUrl(path, 3600);
+      if (signErr) throw signErr;
+      row.routeImagePaths.push(path); row.routeImageUrls.push(signed.signedUrl);
     }
-    await saveMondelezRowNow(row);
-  } catch (e) {
-    console.error("deleteRouteImage failed:", e);
-    setDriverSyncStatus(`Image removed here, but couldn't delete it from storage (${e.message || e}).`, "error");
-  }
+    row.routeImagePath = row.routeImagePaths[0] || ""; row.routeImageUrl = row.routeImageUrls[0] || "";
+    await saveMondelezRowNow(row); renderMondelezTable();
+  } catch (e) { console.error("uploadRouteImage failed:", e); setDriverSyncStatus(`Couldn't upload that image (${e.message || e}).`, "error"); }
+}
+function viewRouteImage(rowId, imageIndex = 0) {
+  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
+  const urls = (row?.routeImageUrls || []).filter(Boolean);
+  if (!urls.length) return;
+  const overlay = document.createElement("div"); overlay.className = "overlay image-lightbox-overlay"; overlay.id = "mdz-image-overlay";
+  overlay.innerHTML = \`<div class="modal image-lightbox-content"><div class="modal-header"><h3>Route — ${escapeHtml(row.aljexNumber || "")}</h3><button class="modal-close" id="mdz-image-close">&times;</button></div><div class="modal-body mdz-lightbox-gallery">${urls.map((url, i) => `<img src="${escapeHtml(url)}" alt="Route image ${i + 1}">`).join("")}</div></div>\`;
+  document.body.appendChild(overlay); const close = () => overlay.remove(); overlay.addEventListener("click", (ev) => { if (ev.target === overlay) close(); }); $("#mdz-image-close").addEventListener("click", close);
+}
+async function deleteRouteImage(rowId, imageIndex = 0) {
+  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId); if (!row) return;
+  const paths = row.routeImagePaths || parseMondelezImagePaths(row.routeImagePath); const oldPath = paths[Number(imageIndex)]; if (!oldPath) return;
+  paths.splice(Number(imageIndex), 1); row.routeImagePaths = paths; row.routeImagePath = paths[0] || ""; row.routeImageUrls = (row.routeImageUrls || []).filter((_, i) => i !== Number(imageIndex)); row.routeImageUrl = row.routeImageUrls[0] || ""; renderMondelezTable();
+  try { if (supabaseClient) { const { error } = await supabaseClient.storage.from(MONDELEZ_IMAGE_BUCKET).remove([oldPath]); if (error) throw error; } await saveMondelezRowNow(row); } catch (e) { console.error("deleteRouteImage failed:", e); setDriverSyncStatus(\`Image removed here, but couldn't delete it from storage (\${e.message || e}).\`, "error"); }
 }
 /* ---------------- row actions ---------------- */
 function quickAddMondelezRow() {
@@ -933,10 +912,10 @@ export async function initMondelezPage() {
     const delBtn = e.target.closest("[data-action='delete-mdz-row']");
     if (delBtn) deleteMondelezRow(delBtn.dataset.mdzRow);
     const viewBtn = e.target.closest("[data-action='view-route-image']");
-    if (viewBtn) viewRouteImage(viewBtn.dataset.mdzRow);
+    if (viewBtn) viewRouteImage(viewBtn.dataset.mdzRow, viewBtn.dataset.mdzImageIndex || 0);
     const deleteImgBtn = e.target.closest("[data-action='delete-route-image']");
     if (deleteImgBtn) {
-      if (confirm("Delete this route image? This can't be undone.")) deleteRouteImage(deleteImgBtn.dataset.mdzRow);
+      if (confirm("Delete this route image? This can't be undone.")) deleteRouteImage(deleteImgBtn.dataset.mdzRow, deleteImgBtn.dataset.mdzImageIndex || 0);
     }
     // clicking the empty dropzone (no image yet) opens the file picker --
     // if there's already a thumbnail, the view/delete handlers above catch
@@ -964,8 +943,9 @@ export async function initMondelezPage() {
       updateMondelezSelectCount();
       return;
     }
-    if (t.dataset.action === "upload-route-image" && t.files && t.files[0]) {
-      uploadRouteImage(t.dataset.mdzRow, t.files[0]);
+    if (t.dataset.action === "upload-route-image" && t.files && t.files.length) {
+      uploadRouteImage(t.dataset.mdzRow, t.files);
+      t.value = "";
     }
   });
   // Drag-and-drop and paste for route images -- the point of both is
@@ -988,8 +968,8 @@ export async function initMondelezPage() {
     if (!dropzone) return;
     e.preventDefault();
     dropzone.classList.remove("mdz-dropzone-active");
-    const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-    if (file && file.type.startsWith("image/")) uploadRouteImage(dropzone.dataset.mdzRow, file);
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (files && files.length) uploadRouteImage(dropzone.dataset.mdzRow, files);
   });
   table.addEventListener("paste", (e) => {
     const dropzone = e.target.closest("[data-action='image-dropzone']");
@@ -1000,7 +980,7 @@ export async function initMondelezPage() {
       if (item.type.startsWith("image/")) {
         e.preventDefault();
         const file = item.getAsFile();
-        if (file) uploadRouteImage(dropzone.dataset.mdzRow, file);
+        if (file) uploadRouteImage(dropzone.dataset.mdzRow, [file]);
         break;
       }
     }
