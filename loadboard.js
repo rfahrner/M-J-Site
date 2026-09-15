@@ -4029,7 +4029,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     return `
       <fieldset class="rate-section">
         <legend class="rate-section-header">Rate</legend>
-        <div class="subtext" style="margin: -4px 0 10px;">These boxes apply to this load only — a dot means it's different from the ${escapeHtml(locationKey)} default.</div>
+        <div class="subtext" style="margin: -4px 0 10px;">Changes here apply only to this load. A dot marks a load-specific or negotiated-driver value that differs from the ${escapeHtml(locationKey)} default.</div>
         ${defaultsHtml}
 
         <div class="rate-total-box">
