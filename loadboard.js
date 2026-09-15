@@ -1102,26 +1102,30 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     let lastX = 0;
     let lastY = 0;
     const levelEl = overlay.querySelector("[data-viewer-zoom-level]");
-    const pageEl = overlay.querySelector("[data-viewer-page]");
-    const prevBtn = overlay.querySelector("[data-viewer-prev]");
-    const nextBtn = overlay.querySelector("[data-viewer-next]");
 
-    const activeImage = () => images[activeIndex] || targetEl;
     const render = () => {
       images.forEach((img, index) => {
-        img.hidden = index !== activeIndex;
-        img.classList.toggle("is-active-image", index === activeIndex);
+        const selected = index === activeIndex;
+        img.hidden = false;
+        img.classList.toggle("is-selected-image", selected);
+        img.classList.toggle("is-active-image", selected);
+        img.style.transformOrigin = "center center";
+        img.style.willChange = "transform";
+        img.style.transform = selected
+          ? "translate3d(" + offsetX + "px, " + offsetY + "px, 0) scale(" + scale + ") rotate(" + rotations[index] + "deg)"
+          : "rotate(" + rotations[index] + "deg)";
       });
-      const img = activeImage();
-      img.style.transformOrigin = "center center";
-      img.style.willChange = "transform";
-      img.style.transform = "translate3d(" + offsetX + "px, " + offsetY + "px, 0) scale(" + scale + ") rotate(" + rotations[activeIndex] + "deg)";
       overlay.dataset.viewerIndex = String(activeIndex);
       overlay.dataset.imageIndex = String(activeIndex);
       if (levelEl) levelEl.textContent = Math.round(scale * 100) + "%";
-      if (pageEl) pageEl.textContent = (activeIndex + 1) + " / " + images.length;
-      if (prevBtn) prevBtn.classList.toggle("hidden", images.length <= 1);
-      if (nextBtn) nextBtn.classList.toggle("hidden", images.length <= 1);
+    };
+    const selectImage = (nextIndex) => {
+      if (nextIndex < 0 || nextIndex >= images.length || nextIndex === activeIndex) return;
+      activeIndex = nextIndex;
+      scale = 1;
+      offsetX = 0;
+      offsetY = 0;
+      render();
     };
     const setScale = (next) => {
       scale = Math.min(4, Math.max(1, next));
@@ -1134,14 +1138,6 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       offsetX = 0;
       offsetY = 0;
       rotations[activeIndex] = 0;
-      render();
-    };
-    const setActive = (nextIndex) => {
-      if (images.length <= 1) return;
-      activeIndex = (nextIndex + images.length) % images.length;
-      scale = 1;
-      offsetX = 0;
-      offsetY = 0;
       render();
     };
     const rotate = () => {
@@ -1157,15 +1153,24 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (zoomOut) zoomOut.addEventListener("click", () => zoomBy(0.8));
     if (resetBtn) resetBtn.addEventListener("click", reset);
     if (rotateBtn) rotateBtn.addEventListener("click", rotate);
-    if (prevBtn) prevBtn.addEventListener("click", () => setActive(activeIndex - 1));
-    if (nextBtn) nextBtn.addEventListener("click", () => setActive(activeIndex + 1));
 
+    stage.addEventListener("click", (e) => {
+      const image = e.target && e.target.closest ? e.target.closest("img") : null;
+      const index = image ? images.indexOf(image) : -1;
+      if (index >= 0) selectImage(index);
+    });
     stage.addEventListener("wheel", (e) => {
       e.preventDefault();
       zoomBy(e.deltaY < 0 ? 1.2 : 0.833333);
     }, { passive: false });
     stage.addEventListener("dblclick", () => setScale(scale > 1 ? 1 : 2));
     stage.addEventListener("pointerdown", (e) => {
+      const image = e.target && e.target.closest ? e.target.closest("img") : null;
+      const index = image ? images.indexOf(image) : -1;
+      if (index >= 0 && index !== activeIndex) {
+        selectImage(index);
+        return;
+      }
       if (scale <= 1) return;
       dragging = true;
       lastX = e.clientX;
@@ -1224,11 +1229,6 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           </div>
         </div>
         <div class="modal-footer image-viewer-footer">
-          <div class="image-viewer-navigation">
-            <button type="button" class="btn btn-ghost" data-viewer-prev title="Previous image">‹</button>
-            <span data-viewer-page>1 / ${imageUrls.length}</span>
-            <button type="button" class="btn btn-ghost" data-viewer-next title="Next image">›</button>
-          </div>
           <button type="button" class="btn btn-ghost" id="board-image-delete" style="color:#b91c1c; border-color:#b91c1c;">Delete Image</button>
         </div>
       </div>`;
