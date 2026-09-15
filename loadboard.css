@@ -1416,3 +1416,14 @@ fieldset.rate-tier-box.is-overridden {
   width: 22px; height: 22px; border-radius: var(--radius-sm); flex: none;
 }
 .ats-slot-row .ats-remove-btn:hover { background: rgba(220, 38, 38, 0.1); color: var(--red-600); }
+
+/* Mondelez grid/readability fixes */
+#mondelez-table { table-layout: fixed; }
+#mondelez-table .col-mdz-trailer { width: 118px; min-width: 118px; }
+#mondelez-table td.col-mdz-trailer input { width: 100% !important; box-sizing: border-box; }
+#mondelez-table .pin-text { width: 108px; min-width: 108px; white-space: nowrap; text-align: center; }
+#mondelez-table td.pin-text { display: table-cell; vertical-align: middle; }
+#mondelez-table td.pin-text .text-btn { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; }
+.mdz-image-dropzone { min-width: 90px; min-height: 30px; gap: 4px; flex-wrap: wrap; }
+.mdz-lightbox-gallery { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+.mdz-lightbox-gallery img { max-width: min(44vw, 420px); max-height: 70vh; object-fit: contain; }
