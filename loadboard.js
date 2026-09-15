@@ -169,7 +169,20 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       const { data, error } = await supabaseClient.storage.from(bucket).createSignedUrls(paths, SIGNED_URL_EXPIRY_SECONDS);
       if (error) throw error;
       (data || []).forEach((entry, i) => {
-        if (entry && entry.signedUrl && targets[i]) targets[i].routeImageUrl = entry.signedUrl;
+        if (!entry || !entry.signedUrl || !targets[i]) return;
+        const target = targets[i];
+        // Standard load-board rows use an explicit image target so every
+        // signed URL lands in the matching slot of the route gallery.
+        if (target.routeImageTarget) {
+          const trip = target.routeImageTarget;
+          trip.routeImageUrls = trip.routeImageUrls || [];
+          trip.routeImageUrls[target.index] = entry.signedUrl;
+          if (target.index === 0) trip.routeImageUrl = entry.signedUrl;
+        } else {
+          // Mondelez still passes its legacy { row, index } target and
+          // copies this value into its gallery after the batch completes.
+          target.routeImageUrl = entry.signedUrl;
+        }
       });
     } catch (e) {
       console.error("batchSignImageUrls failed:", e);
@@ -473,10 +486,29 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       time_to_dc: trip.timeToDc !== "" && trip.timeToDc != null ? Number(trip.timeToDc) : null,
       eta_to_final_stop: trip.etaToFinalStop || null,
       est_route_complete: trip.estRouteComplete || null,
-      route_image_path: trip.routeImagePath || null,
+      route_image_path: (() => {
+        const imagePaths = Array.isArray(trip.routeImagePaths)
+          ? trip.routeImagePaths.filter(Boolean).map(String)
+          : (trip.routeImagePath ? [String(trip.routeImagePath)] : []);
+        return imagePaths.length > 1 ? JSON.stringify(imagePaths) : (imagePaths[0] || null);
+      })(),
     };
   }
+  function parseRouteImagePaths(value) {
+    if (Array.isArray(value)) return value.filter(Boolean).map(String);
+    if (typeof value === "string" && value.trim().startsWith("[")) {
+      try {
+        const parsed = JSON.parse(value);
+        if (Array.isArray(parsed)) return parsed.filter(Boolean).map(String);
+      } catch (e) {
+        console.warn("Could not parse route image paths:", e);
+      }
+    }
+    return value ? [String(value)] : [];
+  }
+
   function tripFromDbRow(dbRow) {
+    const imagePaths = parseRouteImagePaths(dbRow.route_image_path);
     return {
       id: uid("trip"),
       dbId: dbRow.id,
@@ -515,8 +547,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       etaToFinalStop: dbRow.eta_to_final_stop || "",
       estRouteComplete: dbRow.est_route_complete || "",
       hasStopTimes: false, // computed client-side after loading, see ensureSheetLoaded — not a real DB column
-      routeImagePath: dbRow.route_image_path || "",
+      routeImagePath: imagePaths[0] || "",
+      routeImagePaths: imagePaths,
       routeImageUrl: "", // filled in by batchSignImageUrls after loading — see ensureSheetLoaded
+      routeImageUrls: [],
       completedAt: dbRow.completed_at || null,
     };
   }
@@ -758,7 +792,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       returnEtaToDc: "", returnDropLocation: "", ppwkReceived: false, checkedIn: false, timesheetStartTime: "", timesheetEndTime: "", dropLocationText: "", returnToDcText: "",
       routeEstHours: "", timeToFinalStop: "", timeToDc: "", etaToFinalStop: "", estRouteComplete: "",
       hasStopTimes: false, // client-side only, not persisted -- computed from trip_stops presence, see ensureSheetLoaded / the Stop Times save flow
-      routeImagePath: "", routeImageUrl: "", completedAt: null,
+      routeImagePath: "", routeImagePaths: [], routeImageUrl: "", routeImageUrls: [], completedAt: null,
     };
   }
   function blankRow(driverId, driverNameText) {
@@ -844,7 +878,13 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         const imagePaths = [];
         const imageTargets = [];
         rows.forEach((row) => row.trips.forEach((t) => {
-          if (t.routeImagePath) { imagePaths.push(t.routeImagePath); imageTargets.push(t); }
+          const paths = t.routeImagePaths || parseRouteImagePaths(t.routeImagePath);
+          t.routeImagePaths = paths;
+          t.routeImageUrls = [];
+          paths.forEach((path, index) => {
+            imagePaths.push(path);
+            imageTargets.push({ routeImageTarget: t, index });
+          });
         }));
         await batchSignImageUrls(BOARD_IMAGE_BUCKET, imagePaths, imageTargets);
       }
@@ -983,31 +1023,49 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // render functions as callbacks rather than assuming any one board's
   // shape, since Atlanta/Delaware/Building C, Houston, and Mondelez each
   // have their own save/render pair.
-  export async function uploadRowImage(row, file, saveRowFn, renderFn) {
+  export async function uploadRowImage(row, files, saveRowFn, renderFn) {
     if (!supabaseClient) return;
     if (!row.dbId) await saveRowFn(row);
     if (!row.dbId) { setDriverSyncStatus("Couldn't save this load before uploading — try again.", "error"); return; }
-    const path = `${row.dbId}/${Date.now()}_${file.name}`;
+    const list = Array.from(files || []).filter((file) => file && String(file.type || "").startsWith("image/"));
+    if (!list.length) return;
+    const paths = row.routeImagePaths || parseRouteImagePaths(row.routeImagePath);
+    const urls = row.routeImageUrls || [];
     try {
-      const { error: upErr } = await supabaseClient.storage.from(BOARD_IMAGE_BUCKET).upload(path, file);
-      if (upErr) throw upErr;
-      row.routeImagePath = path;
-      const { data: signed, error: signErr } = await supabaseClient.storage.from(BOARD_IMAGE_BUCKET).createSignedUrl(path, SIGNED_URL_EXPIRY_SECONDS);
-      if (signErr) throw signErr;
-      row.routeImageUrl = signed.signedUrl;
+      for (const file of list) {
+        const safeName = String(file.name || "image").replace(/[^a-zA-Z0-9._-]+/g, "_");
+        const path = String(row.dbId) + "/" + Date.now() + "_" + Math.random().toString(36).slice(2, 8) + "_" + safeName;
+        const { error: upErr } = await supabaseClient.storage.from(BOARD_IMAGE_BUCKET).upload(path, file);
+        if (upErr) throw upErr;
+        const { data: signed, error: signErr } = await supabaseClient.storage.from(BOARD_IMAGE_BUCKET).createSignedUrl(path, SIGNED_URL_EXPIRY_SECONDS);
+        if (signErr) throw signErr;
+        paths.push(path);
+        urls.push(signed.signedUrl);
+      }
+      row.routeImagePaths = paths;
+      row.routeImageUrls = urls;
+      row.routeImagePath = paths[0] || "";
+      row.routeImageUrl = urls[0] || "";
       await saveRowFn(row);
       renderFn();
     } catch (e) {
       console.error("uploadRowImage failed:", e);
-      setDriverSyncStatus(`Couldn't upload that image (${e.message || e}).`, "error");
+      setDriverSyncStatus("Couldn't upload that image (" + (e.message || e) + ").", "error");
     }
   }
 
-  export async function deleteRowImage(row, saveRowFn, renderFn) {
-    if (!row.routeImageUrl) return;
-    const oldPath = row.routeImagePath;
-    row.routeImagePath = "";
-    row.routeImageUrl = "";
+  export async function deleteRowImage(row, imageIndex, saveRowFn, renderFn) {
+    const paths = row.routeImagePaths || parseRouteImagePaths(row.routeImagePath);
+    const urls = row.routeImageUrls || [];
+    const index = Math.max(0, Number(imageIndex) || 0);
+    const oldPath = paths[index];
+    if (!oldPath && !urls[index]) return;
+    paths.splice(index, 1);
+    urls.splice(index, 1);
+    row.routeImagePaths = paths;
+    row.routeImageUrls = urls;
+    row.routeImagePath = paths[0] || "";
+    row.routeImageUrl = urls[0] || "";
     renderFn();
     try {
       if (oldPath && supabaseClient) {
@@ -1017,7 +1075,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       await saveRowFn(row);
     } catch (e) {
       console.error("deleteRowImage failed:", e);
-      setDriverSyncStatus(`Image removed here, but couldn't delete it from storage (${e.message || e}).`, "error");
+      setDriverSyncStatus("Image removed here, but couldn't delete it from storage (" + (e.message || e) + ").", "error");
     }
   }
 
@@ -1097,11 +1155,15 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     render();
   }
 
-  export function viewRowImage(row, label) {
-    if (!row.routeImageUrl) return;
+  export function viewRowImage(row, label, imageIndex = 0) {
+    const imageUrls = (row.routeImageUrls || []).filter(Boolean);
+    if (!imageUrls.length && row.routeImageUrl) imageUrls.push(row.routeImageUrl);
+    if (!imageUrls.length) return;
+    const selectedIndex = Math.max(0, Math.min(Number(imageIndex) || 0, imageUrls.length - 1));
     const overlay = document.createElement("div");
     overlay.className = "overlay image-lightbox-overlay";
     overlay.id = "board-image-overlay";
+    overlay.dataset.imageIndex = String(selectedIndex);
     overlay.innerHTML = `
       <div class="modal image-lightbox-content image-viewer-modal">
         <div class="modal-header image-viewer-header">
@@ -1115,7 +1177,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           </div>
         </div>
         <div class="image-viewer-stage">
-          <img id="board-image-img" src="${escapeHtml(row.routeImageUrl)}" alt="Route image">
+          <div class="image-viewer-gallery board-image-gallery">
+            ${imageUrls.map((url, index) => `<img src="${escapeHtml(url)}" data-image-index="${index}" alt="Route image ${index + 1}">`).join("")}
+          </div>
         </div>
         <div class="modal-footer image-viewer-footer">
           <button type="button" class="btn btn-ghost" id="board-image-delete" style="color:#b91c1c; border-color:#b91c1c;">Delete Image</button>
@@ -1123,8 +1187,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       </div>`;
     document.body.appendChild(overlay);
 
-    const imgEl = overlay.querySelector("#board-image-img");
-    wireImageViewer(overlay, imgEl);
+    const gallery = overlay.querySelector(".board-image-gallery");
+    wireImageViewer(overlay, gallery);
     const close = () => overlay.remove();
     overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
     const closeBtn = overlay.querySelector("#board-image-close");
@@ -1138,15 +1202,17 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // Shared HTML for the image dropzone cell — same markup/behavior on
   // every board, just parameterized by which row it belongs to.
   export function rowImageDropzoneHtml(row, rowIdAttr) {
+    const imageUrls = (row.routeImageUrls || []).filter(Boolean);
+    if (!imageUrls.length && row.routeImageUrl) imageUrls.push(row.routeImageUrl);
     return `
-      <div class="mdz-image-dropzone" tabindex="0" data-action="row-image-dropzone" data-row-image-id="${rowIdAttr}" title="Click to browse, or drag/paste an image here">
-        ${row.routeImageUrl
-          ? `<div class="mdz-thumb-wrap">
-               <img src="${escapeHtml(row.routeImageUrl)}" class="mdz-route-thumb" data-action="view-row-image" data-row-image-id="${rowIdAttr}" alt="Route image" title="Click to view full size">
-               <button type="button" class="mdz-thumb-delete" data-action="delete-row-image" data-row-image-id="${rowIdAttr}" title="Delete image">&times;</button>
-             </div>`
+      <div class="mdz-image-dropzone" tabindex="0" data-action="row-image-dropzone" data-row-image-id="${rowIdAttr}" title="Click to browse, or drag/paste one or more images here">
+        ${imageUrls.length
+          ? imageUrls.map((url, index) => `<div class="mdz-thumb-wrap">
+               <img src="${escapeHtml(url)}" class="mdz-route-thumb" data-action="view-row-image" data-row-image-id="${rowIdAttr}" data-image-index="${index}" alt="Route image ${index + 1}" title="Click to view full size">
+               <button type="button" class="mdz-thumb-delete" data-action="delete-row-image" data-row-image-id="${rowIdAttr}" data-image-index="${index}" title="Delete image ${index + 1}">&times;</button>
+             </div>`).join("")
           : `<span class="mdz-upload-hint">Drop / paste / click</span>`}
-        <input type="file" accept="image/*" data-action="upload-row-image" data-row-image-id="${rowIdAttr}" class="mdz-hidden-file-input">
+        <input type="file" accept="image/*" multiple data-action="upload-row-image" data-row-image-id="${rowIdAttr}" class="mdz-hidden-file-input">
       </div>`;
   }
 
@@ -1159,13 +1225,13 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       const deleteBtn = e.target.closest("[data-action='delete-row-image']");
       if (viewBtn) {
         const row = getRowFn(viewBtn.dataset.rowImageId);
-        if (row) viewRowImage(row, labelFn ? labelFn(row) : "");
+        if (row) viewRowImage(row, labelFn ? labelFn(row) : "", Number(viewBtn.dataset.imageIndex || 0));
         const delHandler = (ev) => {
           if (ev.target.id === "board-image-delete") {
             const overlay = document.getElementById("board-image-overlay");
             if (overlay && confirm("Delete this route image? This can't be undone.")) {
               overlay.remove();
-              if (row) deleteRowImage(row, saveRowFn, renderFn);
+              if (row) deleteRowImage(row, Number(overlay.dataset.imageIndex || 0), saveRowFn, renderFn);
             }
           }
         };
@@ -1174,7 +1240,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       }
       if (deleteBtn) {
         const row = getRowFn(deleteBtn.dataset.rowImageId);
-        if (row && confirm("Delete this route image? This can't be undone.")) deleteRowImage(row, saveRowFn, renderFn);
+        if (row && confirm("Delete this route image? This can't be undone.")) deleteRowImage(row, Number(deleteBtn.dataset.imageIndex || 0), saveRowFn, renderFn);
         return;
       }
       const dropzone = e.target.closest("[data-action='row-image-dropzone']");
@@ -1184,9 +1250,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       }
     });
     table.addEventListener("change", (e) => {
-      if (e.target.dataset.action === "upload-row-image" && e.target.files && e.target.files[0]) {
+      if (e.target.dataset.action === "upload-row-image" && e.target.files && e.target.files.length) {
         const row = getRowFn(e.target.dataset.rowImageId);
-        if (row) uploadRowImage(row, e.target.files[0], saveRowFn, renderFn);
+        if (row) uploadRowImage(row, Array.from(e.target.files), saveRowFn, renderFn);
+        e.target.value = "";
       }
     });
     table.addEventListener("dragover", (e) => {
@@ -1204,23 +1271,26 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (!dropzone) return;
       e.preventDefault();
       dropzone.classList.remove("mdz-dropzone-active");
-      const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      const files = e.dataTransfer && e.dataTransfer.files ? Array.from(e.dataTransfer.files) : [];
       const row = getRowFn(dropzone.dataset.rowImageId);
-      if (file && file.type.startsWith("image/") && row) uploadRowImage(row, file, saveRowFn, renderFn);
+      if (files.length && row) uploadRowImage(row, files, saveRowFn, renderFn);
     });
     table.addEventListener("paste", (e) => {
       const dropzone = e.target.closest("[data-action='row-image-dropzone']");
       if (!dropzone) return;
       const items = e.clipboardData && e.clipboardData.items;
       if (!items) return;
+      const files = [];
       for (const item of items) {
         if (item.type.startsWith("image/")) {
-          e.preventDefault();
           const file = item.getAsFile();
-          const row = getRowFn(dropzone.dataset.rowImageId);
-          if (file && row) uploadRowImage(row, file, saveRowFn, renderFn);
-          break;
+          if (file) files.push(file);
         }
+      }
+      if (files.length) {
+        e.preventDefault();
+        const row = getRowFn(dropzone.dataset.rowImageId);
+        if (row) uploadRowImage(row, files, saveRowFn, renderFn);
       }
     });
   }
@@ -1861,12 +1931,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       // it live during the shift — paperwork confirmation, stop times,
       // check-in, and drop location genuinely don't apply the way they
       // do for Atlanta or Building C. Only the image is actually required.
-      if (!trip.routeImagePath) missing.push({ key: "image", label: "an image" });
+      if (!(trip.routeImagePaths || []).length && !trip.routeImagePath) missing.push({ key: "image", label: "an image" });
       return missing;
     }
     if (!trip.ppwkReceived) missing.push({ key: "ppwk", label: "paperwork confirmation" });
     if (!trip.hasStopTimes) missing.push({ key: "stops", label: "stop times" });
-    if (!trip.routeImagePath) missing.push({ key: "image", label: "an image" });
+    if (!(trip.routeImagePaths || []).length && !trip.routeImagePath) missing.push({ key: "image", label: "an image" });
     if (!String(trip.returnDropLocation || "").trim()) missing.push({ key: "dropLocation", label: "a drop location" });
     if (!trip.checkedIn) missing.push({ key: "checkedIn", label: "load checked in" });
     return missing;
@@ -2360,7 +2430,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const preserved = domField ? localTrip[domField] : undefined;
     const preservedHasStopTimes = localTrip.hasStopTimes;
     const preservedImagePath = localTrip.routeImagePath;
+    const preservedImagePaths = localTrip.routeImagePaths || [];
     const preservedImageUrl = localTrip.routeImageUrl;
+    const preservedImageUrls = localTrip.routeImageUrls || [];
     const fresh = tripFromDbRow(dbTrip);
     Object.assign(localTrip, fresh, { id: localTrip.id });
     if (domField) localTrip[domField] = preserved;
@@ -2370,7 +2442,11 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     // off the row. An unrelated field changing elsewhere on this trip
     // shouldn't silently undo either one.
     localTrip.hasStopTimes = preservedHasStopTimes;
-    if (localTrip.routeImagePath === preservedImagePath) localTrip.routeImageUrl = preservedImageUrl;
+    if (localTrip.routeImagePath === preservedImagePath) {
+      localTrip.routeImagePaths = preservedImagePaths;
+      localTrip.routeImageUrls = preservedImageUrls;
+      localTrip.routeImageUrl = preservedImageUrls[0] || preservedImageUrl || "";
+    }
     // Trip fields have the same requirement as shift fields: route IDs,
     // trailers, statuses, checkboxes, pills, and images must all repaint for
     // other connected users, not just the calculated cells.
@@ -4327,7 +4403,14 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
   function loadDetailsTripSheetImagesHtml(row) {
     const items = [];
-    (row.trips || []).forEach((trip, tripIndex) => { if (trip.routeImageUrl) items.push({ url: trip.routeImageUrl, label: `Route ${tripIndex + 1}` }); });
+    (row.trips || []).forEach((trip, tripIndex) => {
+      const urls = (trip.routeImageUrls || []).filter(Boolean);
+      if (!urls.length && trip.routeImageUrl) urls.push(trip.routeImageUrl);
+      urls.forEach((url, imageIndex) => items.push({
+        url,
+        label: `Route ${tripIndex + 1}${urls.length > 1 ? ` — Image ${imageIndex + 1}` : ""}`,
+      }));
+    });
     return items.map((item) => `<div class="ld-image-item"><img class="ld-image-thumb" data-inline-image-src="${escapeHtml(item.url)}" src="${escapeHtml(item.url)}" alt="${escapeHtml(item.label)}" title="Click to enlarge"><div class="subtext">${escapeHtml(item.label)}</div></div>`).join("");
   }
 
