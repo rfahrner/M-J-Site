@@ -3435,7 +3435,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   }
 
   function formatTextAddress(rawPhone) {
-    const digits = (rawPhone || "").replace(/\D/g, "");
+    // Driver-cell values can arrive from imported sheets as numbers rather
+    // than strings. Normalize before stripping punctuation so the modal
+    // cannot fail while opening an alert recipient list.
+    const digits = String(rawPhone == null ? "" : rawPhone).replace(/\D/g, "");
     if (!digits) return null;
     const withCountryCode = digits.length === 10 ? "1" + digits : digits;
     return `${withCountryCode}@textbetter.com`;
@@ -3460,7 +3463,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   }
 
   export function openSendTextModal(recipients, prefilledMessage, markShiftIdsOnSent) {
-    const withPhone = recipients.filter((r) => formatTextAddress(r.phone));
+    const safeRecipients = Array.isArray(recipients) ? recipients.filter(Boolean) : [];
+    const withPhone = safeRecipients.filter((r) => formatTextAddress(r.phone));
     // De-dupe by normalized phone — several drivers can share the same
     // dispatcher (or even the same cell), and nobody should get texted
     // more than once just because multiple of their drivers were selected.
