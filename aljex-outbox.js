@@ -21,6 +21,7 @@
 import { supabaseClient, currentUserName } from './loadboard.js';
 import { buildOrderPayload, payloadHash, isSendable, describePayload, resolveAljexOrderNo } from './aljex-payload.js';
 import { createAljexClient, getAljexMode } from './aljex-client.js';
+import './stop-times-highlight-fix.js';
 
 export const OUTBOX_TABLE = "aljex_outbox";
 const SHIFTS_TABLE = "loads_shifts";
