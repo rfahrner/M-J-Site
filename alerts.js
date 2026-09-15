@@ -43,7 +43,10 @@ import './paperwork-load-integration.js';
   }
   export function driverPhoneForShift(s) {
     const drv = s.driver_id ? findDriver(String(s.driver_id)) : null;
-    return (drv && drv.phone) || s.driver_cell_snapshot || "";
+    const rawPhone = (drv && drv.phone) || s.driver_cell_snapshot || "";
+    // Keep alert recipients consistent even when an imported cell arrived
+    // from the spreadsheet as a number.
+    return rawPhone == null ? "" : String(rawPhone);
   }
   export function driverNameForShift(s) {
     const drv = s.driver_id ? findDriver(String(s.driver_id)) : null;
