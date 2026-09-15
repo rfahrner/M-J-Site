@@ -55,7 +55,6 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   const HIGHLIGHT_MS = 30 * 60 * 1000; // 30 minutes, per spec
   const HISTORY_DAYS = 730;             // ~2 years back — covers all imported historic data with room to spare, no separate Historics page needed
   const FUTURE_DAYS = 14;               // how far ahead loads can be pre-scheduled
-  export const AVG_MPH = 45;                   // placeholder speed for calc columns
 
   // Prompted to send when a dispatcher marks a trip as Salvage or Backhaul.
   // NOTE: the two message bodies were given to me with the trigger labels
@@ -1712,25 +1711,15 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
   const CALC_FIELD_RETENTION_MS = 3 * 60 * 60 * 1000; // 3 hours
 
-  // Last Stop Depart and Return to DC are editable trip fields now
-  // (trip.lastStopDepart / trip.returnToDC), not pure calculations — see
-  // autoFillCalcTimes() below for how they get their initial 45mph-based
-  // value. What's left here is just ETA Next Dispatch / HOS Left / Trip
-  // Call Time, which key off whichever Return to DC time is actually
-  // showing (a manual entry if there is one, otherwise the same 45mph
-  // estimate) so a correction to the real return time flows through
-  // instead of getting silently ignored.
+  // Last Stop Depart and Return to DC remain manual trip fields. The
+  // calculated fields below only use a Return to DC value after a dispatcher
+  // enters one; there is no dispatch-time or mileage-based fallback.
   function computeCalc(trip, row) {
     const dispatch = parseHHMM(trip.dispatchTime);
-    const miles = parseFloat(trip.routeMiles);
     const out = { etaNextDispatch: "", hosLeft: "", tripCallTime: "" };
     if (dispatch != null) out.tripCallTime = minsToClock(dispatch - 30);
 
-    let returnMin = parseHHMM(trip.returnToDC);
-    if (returnMin == null && dispatch != null && !isNaN(miles) && miles > 0) {
-      const leg = (miles / AVG_MPH) * 60;
-      returnMin = dispatch + leg + leg + 15;
-    }
+    const returnMin = parseHHMM(trip.returnToDC);
     if (returnMin == null) return applyCalcRetention(out, row);
 
     const etaNextMin = returnMin + 30;
@@ -1849,33 +1838,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     return computeNextCallTimeForRow(row);
   }
 
-  // Give Last Stop Depart / Return to DC a starting value once Dispatch
-  // Time and Route Miles are both known, using the same 45mph estimate as
-  // before — but only while the field is still blank. Once a dispatcher
-  // has anything in there (typed manually or from a previous auto-fill),
-  // this leaves it alone; it never overwrites what's already showing.
-  function autoFillCalcTimes(rowId, trip) {
-    const dispatch = parseHHMM(trip.dispatchTime);
-    const miles = parseFloat(trip.routeMiles);
-    if (dispatch == null || isNaN(miles) || miles <= 0) return;
-    const leg = (miles / AVG_MPH) * 60;
-    let changed = false;
-    if (!String(trip.lastStopDepart || "").trim()) {
-      trip.lastStopDepart = minsToClock(dispatch + leg);
-      changed = true;
-    }
-    if (!String(trip.returnToDC || "").trim()) {
-      const lastDepartMin = parseHHMM(trip.lastStopDepart);
-      trip.returnToDC = minsToClock((lastDepartMin != null ? lastDepartMin : dispatch + leg) + leg + 15);
-      changed = true;
-    }
-    if (!changed) return;
-    const lsdEl = document.querySelector(`input[data-row="${rowId}"][data-trip="${trip.id}"][data-field="lastStopDepart"]`);
-    if (lsdEl) lsdEl.value = trip.lastStopDepart;
-    const rtdEl = document.querySelector(`input[data-row="${rowId}"][data-trip="${trip.id}"][data-field="returnToDC"]`);
-    if (rtdEl) rtdEl.value = trip.returnToDC;
-  }
-
+  // Last Stop Depart and Return to DC are intentionally manual. Dispatch
+  // Time and Route Miles changes do not populate or overwrite either field.
 
   // Shift-level HOS display -- a driver only has one "current" HOS status
   // at a time, not one per trip block, so this reflects whichever trip is
@@ -6615,7 +6579,6 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         if (trip) {
           trip.autoRoutePlaceholder = false;
           trip[t.dataset.field] = t.value;
-          if (t.dataset.field === "dispatchTime" || t.dataset.field === "routeMiles") autoFillCalcTimes(rowId, trip);
           recalcRowCalcCellsInPlace(rowId);
           scheduleTripSave(found.row, trip, found.row.trips.indexOf(trip) + 1);
           if (t.dataset.field === "routeMiles" || t.dataset.field === "stopCount") recomputeRowRate(found.row);
