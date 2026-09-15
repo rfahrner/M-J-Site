@@ -3704,18 +3704,6 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // Every driver already on a board for a given day, across all three
   // load tables — a driver booked in Delaware isn't available for an
   // Atlanta shift, so "scheduled" deliberately means scheduled anywhere.
-<<<<<<< HEAD
-  // Called-off shifts don't count: that driver's day is free again. Neither
-  // do cancelled loads -- the load is dead but the driver is still free to
-  // run something else that day.
-  async function driverIdsScheduledOn(dateStr) {
-    const scheduled = new Set();
-    if (!supabaseClient || !dateStr) return scheduled;
-    const [kroger, houston, mondelez] = await Promise.all([
-      supabaseClient.from(SHIFTS_TABLE).select("driver_id, called_off, load_cancelled").eq("shift_date", dateStr).not("driver_id", "is", null),
-      supabaseClient.from("loads_houston").select("driver_id").eq("shift_date", dateStr).not("driver_id", "is", null),
-      supabaseClient.from("mondelez_loads").select("driver_id").eq("shift_date", dateStr).not("driver_id", "is", null),
-=======
   // Called-off Kroger shifts don't count: that driver's day is free again.
   async function scheduledDriversOn(dateStr) {
     const index = { ids: new Set(), namePhone: new Set(), phoneMc: new Set(), nameMc: new Set(), unlinkedNames: new Set() };
@@ -3730,18 +3718,11 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       supabaseClient.from("mondelez_loads")
         .select("driver_id, driver_name")
         .eq("shift_date", dateStr),
->>>>>>> e020b80ff0c5722fad6376b6b9d41e559ad6d4b0
     ]);
     const firstError = kroger.error || houston.error || mondelez.error;
     // Failing open would text drivers who are already booked, which is
     // worse than not sending — make the caller stop and show why.
     if (firstError) throw new Error(firstError.message || String(firstError));
-<<<<<<< HEAD
-    (kroger.data || []).forEach((r) => { if (!r.called_off && !r.load_cancelled) scheduled.add(String(r.driver_id)); });
-    (houston.data || []).forEach((r) => scheduled.add(String(r.driver_id)));
-    (mondelez.data || []).forEach((r) => scheduled.add(String(r.driver_id)));
-    return scheduled;
-=======
     (kroger.data || []).forEach((row) => {
       if (!row.called_off && (row.driver_id != null || String(row.driver_name_text || "").trim())) {
         addScheduledDriver(index, row, "driver_name_text", "driver_cell_snapshot", "mc_snapshot");
@@ -3758,7 +3739,6 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       }
     });
     return index;
->>>>>>> e020b80ff0c5722fad6376b6b9d41e559ad6d4b0
   }
 
   async function startGroupTexting() {
@@ -4216,12 +4196,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     return `
       <fieldset class="rate-section">
         <legend class="rate-section-header">Rate</legend>
-<<<<<<< HEAD
         <div class="rate-applied-line" style="margin: -2px 0 8px; font-weight: 700;">Rate Applied: <span class="rate-applied-value" data-rate-applied="${escapeHtml(appliedRate.toLowerCase())}">${escapeHtml(appliedRate)}</span></div>
-        <div class="subtext" style="margin: -4px 0 10px;">These boxes apply to this load only — a dot means it's different from the ${escapeHtml(locationKey)} default.</div>
-=======
         <div class="subtext" style="margin: -4px 0 10px;">Changes here apply only to this load. A dot marks a load-specific or negotiated-driver value that differs from the ${escapeHtml(locationKey)} default.</div>
->>>>>>> e020b80ff0c5722fad6376b6b9d41e559ad6d4b0
         ${defaultsHtml}
 
         <div class="rate-total-box">
@@ -5728,9 +5704,6 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       for (const k in state.availableSheets) {
         const sheet = state.availableSheets[k];
         const idx = sheet.findIndex((r) => r.dbId === oldRow.id);
-<<<<<<< HEAD
-        if (idx !== -1) { sheet.splice(idx, 1); if (k === availableSheetKey(state.activeLocation, state.activeDate)) renderAvailableTableKeepingFocus(); break; }
-=======
         if (idx !== -1) {
           sheet.splice(idx, 1);
           if (k === availableSheetKey(state.activeLocation, state.activeDate)) {
@@ -5740,7 +5713,6 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           }
           break;
         }
->>>>>>> e020b80ff0c5722fad6376b6b9d41e559ad6d4b0
       }
       return;
     }
@@ -5756,18 +5728,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const existing = sheet.find((r) => r.dbId === dbRow.id) ||
       sheet.find((r) => !r.dbId && dbName && String(r.driverName || "").trim().toLowerCase() === dbName);
     if (existing) {
-<<<<<<< HEAD
-      // Almost always this is the echo of our own save coming back. If the
-      // cursor is still in that row, whatever is on screen is newer than
-      // what the database just told us, so leave the row alone entirely
-      // rather than typing the older text back over the person mid-word.
-      if (activelyEditedAvailableRowId() === existing.id) return;
-=======
       const activeInput = document.activeElement;
       const editingThisRow = !!activeInput && activeInput.dataset && activeInput.dataset.availRow === existing.id;
       const preservedDriverName = existing.driverName;
       const preservedDriverId = existing.driverId;
->>>>>>> e020b80ff0c5722fad6376b6b9d41e559ad6d4b0
       Object.assign(existing, availableRowFromDbRow(dbRow), { id: existing.id });
       if (editingThisRow) {
         existing.driverName = preservedDriverName;
@@ -5785,10 +5749,6 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         restoreFocus();
       }
     }
-<<<<<<< HEAD
-    if (k === availableSheetKey(state.activeLocation, state.activeDate)) renderAvailableTableKeepingFocus();
-=======
->>>>>>> e020b80ff0c5722fad6376b6b9d41e559ad6d4b0
   }
 
   export function setupAvailableRealtimeSync(locationKey) {
