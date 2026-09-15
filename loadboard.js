@@ -826,7 +826,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
             trip.hasStopTimes = !!stopsByTripId[t.id];
             return trip;
           });
-          if (!row.trips.length || row.trips[row.trips.length - 1].minimized) row.trips.push(blankTrip());
+          // Rendering decides whether a completely minimized shift needs one
+          // temporary blank route. Do not append one merely because the last
+          // saved route is minimized while another route is still active.
         });
         // Every trip with an uploaded image needs a fresh signed URL each
         // load, since the bucket is private -- collect them all and sign
@@ -1316,11 +1318,13 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (!found) return;
     const trip = found.row.trips.find((t) => t.id === tripId);
     if (!trip) return;
-    // Opens straight into Load Details on this trip's tab rather than
-    // un-minimizing it back onto the active row — matches what the pill's
-    // own tooltip already promises ("click to fix" / "click to view").
-    await openLoadDetailsModal(rowId, tripId);
-    if (tripMissingFields(trip, found.row.location).length) startLoadDetailsEdit(tripId);
+    // A completed/minimized pill is a pure restore control. Remove the
+    // temporary blank route that was only present because every real route
+    // had been minimized, then put this load back into the editable row.
+    found.row.trips = found.row.trips.filter((candidate) => candidate === trip || !candidate.autoRoutePlaceholder);
+    trip.minimized = false;
+    await saveTripNow(found.row, trip, found.row.trips.indexOf(trip) + 1);
+    renderBoardTable();
   }
 
   function addNewTrip(rowId) {
@@ -1761,6 +1765,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     // new blank one. This is a real, not-minimized trip, unlike the old
     // behavior that just displayed a completed trip as if it were open.
     const fresh = blankTrip();
+    fresh.autoRoutePlaceholder = true;
     row.trips.push(fresh);
     return [fresh];
   }
@@ -1800,8 +1805,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           const undocumented = t.complete && missing.length > 0;
           const statusCls = [t.complete ? "trip-segment-done" : "", undocumented ? "trip-chip-undocumented" : ""].filter(Boolean).join(" ");
           const title = undocumented
-            ? `Closed out but missing: ${missing.join(", ")} — click to fix`
-            : (t.complete ? "Closed out — click to view" : "Click to view or edit");
+            ? `Closed out but missing: ${missing.join(", ")} — click to restore`
+            : (t.complete ? "Closed out — click to restore" : "Click to restore to the row");
           return `<button type="button" class="trip-chip ${statusCls}" data-action="restore-trip" data-row="${row.id}" data-trip="${t.id}" title="${title}">${escapeHtml(t.routeId || t.tripId)}</button>`;
         }).join(" ")
       : `<span class="subtext" style="font-size:11px;">—</span>`;
@@ -1944,11 +1949,33 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
   async function loadDatesWithData(locationKey) {
     if (!supabaseClient) return;
-    const { data, error } = await supabaseClient
-      .from(SHIFTS_TABLE).select("shift_date")
-      .eq("location", locationKey).gte("shift_date", state.minDate).lte("shift_date", state.maxDate);
-    if (error) { console.error("Failed to load date-availability info:", error); return; }
-    state.datesWithData = new Set((data || []).map((r) => r.shift_date));
+
+    // Atlanta has far more than Supabase/PostgREST's 1,000-row response
+    // limit. Page through the same date-only query so the calendar receives
+    // every shift date instead of an arbitrary first slice.
+    const PAGE_SIZE = 1000;
+    const dates = new Set();
+    let from = 0;
+    while (true) {
+      const { data, error } = await supabaseClient
+        .from(SHIFTS_TABLE)
+        .select("shift_date")
+        .eq("location", locationKey)
+        .gte("shift_date", state.minDate)
+        .lte("shift_date", state.maxDate)
+        .order("shift_date", { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
+      if (error) { console.error("Failed to load date-availability info:", error); return; }
+      (data || []).forEach((row) => dates.add(row.shift_date));
+      if (!data || data.length < PAGE_SIZE) break;
+      from += PAGE_SIZE;
+    }
+
+    state.datesWithData = dates;
+    const dropdown = $("#date-dropdown");
+    if (dropdown && !dropdown.classList.contains("hidden")) {
+      renderCalendarGrid(state.datesWithData);
+    }
   }
 
   let calendarViewMonth = null; // { year, month } — which month the open popup is showing
@@ -2201,17 +2228,37 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const domField = currentlyEditedField(existing.id, null);
     const stateKey = domField ? (SHIFT_FIELD_TO_STATE_KEY[domField] || domField) : null;
     const preserved = stateKey ? existing[stateKey] : undefined;
-    const wasComplete = existing.shiftComplete;
+    const preservedDriverId = existing.driverId;
+    const preservedDriverName = existing.driverNameText;
     const fresh = shiftFromDbRow(dbRow);
+
+    // A driver selection changes two values together: driverNameText and
+    // driverId. A delayed echo from an earlier keystroke/blank-row save can
+    // contain the old name plus driver_id = null. Preserving only the focused
+    // text field detached the profile again, so MC and cell vanished until
+    // the same dropdown option was picked a second time.
+    const editingDriver = domField === "driverName";
+    const preserveDriverLink = !!preservedDriverId && !editingDriver && !fresh.driverId &&
+      String(fresh.driverNameText || "").trim().toLowerCase() ===
+      String(preservedDriverName || "").trim().toLowerCase();
+
     Object.assign(existing, fresh, { id: existing.id, trips: existing.trips, addedAt: existing.addedAt, selected: existing.selected });
     if (stateKey) existing[stateKey] = preserved; // don't clobber what the user is actively typing right now
-    if (wasComplete !== existing.shiftComplete) {
-      const restoreFocus = captureFocusForRerender();
-      renderBoardTable(); // needs to move to the top/bottom — a single-row rebuild can't reposition it
-      restoreFocus();
-    } else {
-      recalcRowCalcCellsInPlace(existing.id);
-    }
+    // The driver field owns both the visible name and its profile link. Keep
+    // that pair atomic while the field is focused — including an intentional
+    // clear where driverId is null. Otherwise an older realtime echo can put
+    // Ewan's hidden link back after the name was erased, or leave a linked
+    // phone/MC on a row whose visible driver name is blank.
+    if (editingDriver || preserveDriverLink) existing.driverId = preservedDriverId;
+    // The database row is now the canonical state for every non-focused
+    // field. Rebuild the visible board so ordinary inputs (PRO #, notes,
+    // rate, shift times, etc.) update on the other dispatcher's screen too.
+    // The old in-place path refreshed only driver-linked and calculated
+    // cells, leaving the DOM's PRO input stale even though state and the
+    // database already contained the new number.
+    const restoreFocus = captureFocusForRerender();
+    renderBoardTable();
+    restoreFocus();
   }
 
   function handleRealtimeTripChange(payload) {
@@ -2241,7 +2288,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     // shouldn't silently undo either one.
     localTrip.hasStopTimes = preservedHasStopTimes;
     if (localTrip.routeImagePath === preservedImagePath) localTrip.routeImageUrl = preservedImageUrl;
-    recalcRowCalcCellsInPlace(parentRow.id);
+    // Trip fields have the same requirement as shift fields: route IDs,
+    // trailers, statuses, checkboxes, pills, and images must all repaint for
+    // other connected users, not just the calculated cells.
+    const restoreFocus = captureFocusForRerender();
+    renderBoardTable();
+    restoreFocus();
   }
 
   // Handles inserts, updates, AND deletes for atlanta_drivers — deletes
@@ -3542,15 +3594,14 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const dispatchModeCheckbox = $("#tg-dispatch-mode");
     if (dispatchModeCheckbox) dispatchModeCheckbox.checked = true;
 
-    // Availability filter resets to "everyone" on each open — an
-    // exclusion left over from a previous send is the kind of thing
-    // you'd only notice after the texts had already gone out.
-    const allRadio = $("input[name='tg-availability'][value='all']");
-    if (allRadio) allRadio.checked = true;
+    // Both independent options default on whenever the modal opens.
+    // The exclusion date starts on the user's current local date.
+    const excludeScheduledCheckbox = $("#tg-exclude-scheduled");
+    if (excludeScheduledCheckbox) excludeScheduledCheckbox.checked = true;
     const dayWrap = $("#tg-day-wrap");
-    if (dayWrap) dayWrap.classList.remove("tg-day-visible");
+    if (dayWrap) dayWrap.classList.add("tg-day-visible");
     const dayInput = $("#tg-day");
-    if (dayInput) dayInput.value = dateKey(addDays(todayDate(), 1)); // filling tomorrow is the usual reason to ask
+    if (dayInput) dayInput.value = dateKey(todayDate());
     const dayNote = $("#tg-day-note");
     if (dayNote) dayNote.textContent = "Anyone already on a board that day is left out.";
 
@@ -3607,9 +3658,53 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     renderGroupTextProgress();
   }
 
+  // The same person can have separate Atlanta and Preferred Driver records,
+  // so driver_id alone is not a stable identity. Build several conservative
+  // identity keys: exact IDs, individual phone numbers, and name+MC pairs.
+  // Older imported rows with no link use their exact name as the last resort.
+  function normalizedDriverName(value) {
+    return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+  }
+
+  function driverPhoneKeys(value) {
+    return String(value || "")
+      .split(/[\\/,;|]+/)
+      .map((part) => part.replace(/\D/g, ""))
+      .map((digits) => digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits)
+      .filter((digits) => digits.length === 10);
+  }
+
+  function addScheduledDriver(index, row, nameField, phoneField, mcField) {
+    const id = row.driver_id == null ? "" : String(row.driver_id);
+    const linked = id ? findDriver(id) : null;
+    const name = normalizedDriverName((linked && linked.name) || row[nameField]);
+    const mc = String((linked && linked.mc) || row[mcField] || "").trim();
+    const phones = driverPhoneKeys((linked && linked.phone) || row[phoneField]);
+
+    if (id) index.ids.add(id);
+    phones.forEach((phone) => {
+      if (name) index.namePhone.add(`${name}|${phone}`);
+      if (mc) index.phoneMc.add(`${phone}|${mc}`);
+    });
+    if (name && mc) index.nameMc.add(`${name}|${mc}`);
+    if (!id && name) index.unlinkedNames.add(name);
+  }
+
+  function driverIsScheduled(driver, index) {
+    if (index.ids.has(String(driver.id))) return true;
+    const name = normalizedDriverName(driver.name);
+    const mc = String(driver.mc || "").trim();
+    const phones = driverPhoneKeys(driver.phone);
+    if (name && phones.some((phone) => index.namePhone.has(`${name}|${phone}`))) return true;
+    if (mc && phones.some((phone) => index.phoneMc.has(`${phone}|${mc}`))) return true;
+    if (name && mc && index.nameMc.has(`${name}|${mc}`)) return true;
+    return !!name && index.unlinkedNames.has(name);
+  }
+
   // Every driver already on a board for a given day, across all three
   // load tables — a driver booked in Delaware isn't available for an
   // Atlanta shift, so "scheduled" deliberately means scheduled anywhere.
+<<<<<<< HEAD
   // Called-off shifts don't count: that driver's day is free again. Neither
   // do cancelled loads -- the load is dead but the driver is still free to
   // run something else that day.
@@ -3620,15 +3715,50 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       supabaseClient.from(SHIFTS_TABLE).select("driver_id, called_off, load_cancelled").eq("shift_date", dateStr).not("driver_id", "is", null),
       supabaseClient.from("loads_houston").select("driver_id").eq("shift_date", dateStr).not("driver_id", "is", null),
       supabaseClient.from("mondelez_loads").select("driver_id").eq("shift_date", dateStr).not("driver_id", "is", null),
+=======
+  // Called-off Kroger shifts don't count: that driver's day is free again.
+  async function scheduledDriversOn(dateStr) {
+    const index = { ids: new Set(), namePhone: new Set(), phoneMc: new Set(), nameMc: new Set(), unlinkedNames: new Set() };
+    if (!supabaseClient || !dateStr) return index;
+    const [kroger, houston, mondelez] = await Promise.all([
+      supabaseClient.from(SHIFTS_TABLE)
+        .select("driver_id, driver_name_text, driver_cell_snapshot, mc_snapshot, called_off")
+        .eq("shift_date", dateStr),
+      supabaseClient.from("loads_houston")
+        .select("driver_id, driver_name, driver_phone, mc")
+        .eq("shift_date", dateStr),
+      supabaseClient.from("mondelez_loads")
+        .select("driver_id, driver_name")
+        .eq("shift_date", dateStr),
+>>>>>>> e020b80ff0c5722fad6376b6b9d41e559ad6d4b0
     ]);
     const firstError = kroger.error || houston.error || mondelez.error;
     // Failing open would text drivers who are already booked, which is
     // worse than not sending — make the caller stop and show why.
     if (firstError) throw new Error(firstError.message || String(firstError));
+<<<<<<< HEAD
     (kroger.data || []).forEach((r) => { if (!r.called_off && !r.load_cancelled) scheduled.add(String(r.driver_id)); });
     (houston.data || []).forEach((r) => scheduled.add(String(r.driver_id)));
     (mondelez.data || []).forEach((r) => scheduled.add(String(r.driver_id)));
     return scheduled;
+=======
+    (kroger.data || []).forEach((row) => {
+      if (!row.called_off && (row.driver_id != null || String(row.driver_name_text || "").trim())) {
+        addScheduledDriver(index, row, "driver_name_text", "driver_cell_snapshot", "mc_snapshot");
+      }
+    });
+    (houston.data || []).forEach((row) => {
+      if (row.driver_id != null || String(row.driver_name || "").trim()) {
+        addScheduledDriver(index, row, "driver_name", "driver_phone", "mc");
+      }
+    });
+    (mondelez.data || []).forEach((row) => {
+      if (row.driver_id != null || String(row.driver_name || "").trim()) {
+        addScheduledDriver(index, row, "driver_name", "", "");
+      }
+    });
+    return index;
+>>>>>>> e020b80ff0c5722fad6376b6b9d41e559ad6d4b0
   }
 
   async function startGroupTexting() {
@@ -3643,8 +3773,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     let members = groupKey === "ALL" ? pool : pool.filter((d) => driverClassification(d) === groupKey);
     let label = groupKey === "ALL" ? "All Drivers" : (groupKey === "DNU" ? "DNU" : `Rating ${groupKey}`);
 
-    const availability = ($("input[name='tg-availability']:checked") || {}).value || "all";
-    if (availability === "unscheduled") {
+    const excludeScheduledCheckbox = $("#tg-exclude-scheduled");
+    const excludeScheduled = !!(excludeScheduledCheckbox && excludeScheduledCheckbox.checked);
+    if (excludeScheduled) {
       const day = ($("#tg-day") || {}).value || "";
       if (!day) { errEl.textContent = "Pick the day you're trying to fill."; errEl.classList.remove("hidden"); return; }
 
@@ -3652,7 +3783,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (startBtn) { startBtn.disabled = true; startBtn.textContent = "Checking the boards…"; }
       let scheduled;
       try {
-        scheduled = await driverIdsScheduledOn(day);
+        scheduled = await scheduledDriversOn(day);
       } catch (e) {
         errEl.textContent = `Couldn't check who's already scheduled (${e.message}). Nobody was texted.`;
         errEl.classList.remove("hidden");
@@ -3662,7 +3793,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       }
 
       const before = members.length;
-      members = members.filter((d) => !scheduled.has(String(d.id)));
+      members = members.filter((driver) => !driverIsScheduled(driver, scheduled));
       const excluded = before - members.length;
       if (!members.length) {
         errEl.textContent = `Everyone in ${label} (${before}) is already scheduled on ${day}.`;
@@ -3881,7 +4012,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       editDraft: null, // scratch copy of the fields being edited, discarded on Cancel
     };
     const openedForRowId = rowId; // snapshot — guards against a stale async response clobbering a newer/closed state below
-    $("#ld-title").textContent = `Load ${row.proNumber || "(no PRO# yet)"}`;
+    $("#ld-title").textContent = `Load #${row.proNumber || "(not assigned)"}`;
     modal.classList.remove("hidden");
     renderLoadDetailsTabs();
 
@@ -4085,8 +4216,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     return `
       <fieldset class="rate-section">
         <legend class="rate-section-header">Rate</legend>
+<<<<<<< HEAD
         <div class="rate-applied-line" style="margin: -2px 0 8px; font-weight: 700;">Rate Applied: <span class="rate-applied-value" data-rate-applied="${escapeHtml(appliedRate.toLowerCase())}">${escapeHtml(appliedRate)}</span></div>
         <div class="subtext" style="margin: -4px 0 10px;">These boxes apply to this load only — a dot means it's different from the ${escapeHtml(locationKey)} default.</div>
+=======
+        <div class="subtext" style="margin: -4px 0 10px;">Changes here apply only to this load. A dot marks a load-specific or negotiated-driver value that differs from the ${escapeHtml(locationKey)} default.</div>
+>>>>>>> e020b80ff0c5722fad6376b6b9d41e559ad6d4b0
         ${defaultsHtml}
 
         <div class="rate-total-box">
@@ -5322,7 +5457,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     $("#modal-add-time-slots").classList.add("hidden");
   }
 
-  function submitAddTimeSlots() {
+  async function submitAddTimeSlots() {
     const slotRows = $all(".ats-slot-row", $("#ats-rows"));
     const newRows = [];
     slotRows.forEach((div) => {
@@ -5336,12 +5471,35 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         newRows.push(row);
       }
     });
-    closeAddTimeSlotsModal();
     if (!newRows.length) return;
+
+    // These rows used to exist only in browser memory. Put them on the
+    // visible sheet first so the normal unsaved-row guard can protect them,
+    // then await every INSERT before allowing this action to finish.
     const sheet = getSheet(state.activeLocation, state.activeDate);
-    newRows.forEach((r) => sheet.push(r));
+    newRows.forEach((row) => sheet.push(row));
+    renderBoardTable();
+
+    const submitBtn = $("#ats-submit");
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Saving…"; }
+    setDriverSyncStatus(`Saving ${newRows.length} time slot${newRows.length === 1 ? "" : "s"}…`, "");
+
+    try {
+      await Promise.all(newRows.map((row) => saveShiftNow(row)));
+    } finally {
+      if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = "Add Slots"; }
+    }
+
+    closeAddTimeSlotsModal();
     renderBoardTable();
     scrollQuickAddIntoView();
+
+    const failed = newRows.filter((row) => !row.dbId);
+    if (failed.length) {
+      warnAboutUnsavedRows();
+      return;
+    }
+    setDriverSyncStatus(`${newRows.length} time slot${newRows.length === 1 ? "" : "s"} saved.`, "success");
   }
 
   async function submitAddLoad() {
@@ -5490,6 +5648,29 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     }
   }
 
+
+  // Realtime echoes for an existing Available row must not rebuild the
+  // whole mini-table. A rebuild replaces the focused name input and closes
+  // its autocomplete roughly one debounce interval after typing begins,
+  // which looks like the dropdown is timing out. Refresh just this row's
+  // linked cells instead, leaving the active input and dropdown untouched.
+  function updateAvailableRowInPlace(row) {
+    const tr = document.getElementById(row.id);
+    if (!tr) return false;
+    const drv = row.driverId ? findDriver(row.driverId) : null;
+    const input = tr.querySelector("input[data-avail-row]");
+    if (input && document.activeElement !== input) input.value = drv ? drv.name : row.driverName;
+    const setText = (selector, value) => {
+      const el = tr.querySelector(selector);
+      if (el) el.textContent = value || "—";
+    };
+    setText(".col-cell .static-text", drv && drv.phone);
+    setText(".col-dispatcherPhone .static-text", drv && drv.dispatcherPhone);
+    setText(".col-email .static-text", drv && drv.email);
+    setText(".col-mc .static-text", drv && drv.mc);
+    setText(".col-rating .static-text", drv && drv.rating);
+    return true;
+  }
   function addAvailableRow() {
     getAvailableSheet(state.activeLocation, state.activeDate).push(blankAvailableRow());
     renderAvailableTable();
@@ -5547,7 +5728,19 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       for (const k in state.availableSheets) {
         const sheet = state.availableSheets[k];
         const idx = sheet.findIndex((r) => r.dbId === oldRow.id);
+<<<<<<< HEAD
         if (idx !== -1) { sheet.splice(idx, 1); if (k === availableSheetKey(state.activeLocation, state.activeDate)) renderAvailableTableKeepingFocus(); break; }
+=======
+        if (idx !== -1) {
+          sheet.splice(idx, 1);
+          if (k === availableSheetKey(state.activeLocation, state.activeDate)) {
+            const restoreFocus = captureFocusForRerender();
+            renderAvailableTable();
+            restoreFocus();
+          }
+          break;
+        }
+>>>>>>> e020b80ff0c5722fad6376b6b9d41e559ad6d4b0
       }
       return;
     }
@@ -5556,21 +5749,46 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const k = availableSheetKey(dbRow.location, dbRow.shift_date);
     if (!state.availableSheets[k]) return; // that day isn't cached in this tab yet — nothing to merge into
     const sheet = state.availableSheets[k];
-    const existing = sheet.find((r) => r.dbId === dbRow.id);
+    // The realtime INSERT can beat the matching HTTP response that assigns
+    // dbId to this tab's new row. Match the one pending local row by its
+    // exact name so the echo cannot create a duplicate.
+    const dbName = String(dbRow.driver_name || "").trim().toLowerCase();
+    const existing = sheet.find((r) => r.dbId === dbRow.id) ||
+      sheet.find((r) => !r.dbId && dbName && String(r.driverName || "").trim().toLowerCase() === dbName);
     if (existing) {
+<<<<<<< HEAD
       // Almost always this is the echo of our own save coming back. If the
       // cursor is still in that row, whatever is on screen is newer than
       // what the database just told us, so leave the row alone entirely
       // rather than typing the older text back over the person mid-word.
       if (activelyEditedAvailableRowId() === existing.id) return;
+=======
+      const activeInput = document.activeElement;
+      const editingThisRow = !!activeInput && activeInput.dataset && activeInput.dataset.availRow === existing.id;
+      const preservedDriverName = existing.driverName;
+      const preservedDriverId = existing.driverId;
+>>>>>>> e020b80ff0c5722fad6376b6b9d41e559ad6d4b0
       Object.assign(existing, availableRowFromDbRow(dbRow), { id: existing.id });
+      if (editingThisRow) {
+        existing.driverName = preservedDriverName;
+        existing.driverId = preservedDriverId;
+      }
+      if (k === availableSheetKey(state.activeLocation, state.activeDate)) updateAvailableRowInPlace(existing);
     } else {
       // Drop the lone starting blank row once real data arrives, same as the board's own sheets do
       const onlyBlank = sheet.length === 1 && !sheet[0].dbId && !sheet[0].driverName.trim();
       if (onlyBlank) sheet.length = 0;
       sheet.push(availableRowFromDbRow(dbRow));
+      if (k === availableSheetKey(state.activeLocation, state.activeDate)) {
+        const restoreFocus = captureFocusForRerender();
+        renderAvailableTable();
+        restoreFocus();
+      }
     }
+<<<<<<< HEAD
     if (k === availableSheetKey(state.activeLocation, state.activeDate)) renderAvailableTableKeepingFocus();
+=======
+>>>>>>> e020b80ff0c5722fad6376b6b9d41e559ad6d4b0
   }
 
   export function setupAvailableRealtimeSync(locationKey) {
@@ -5931,7 +6149,11 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     wireRowImageDropzone(
       boardTable,
       (id) => { const found = findTripAnywhere(id); return found ? found.trip : null; },
-      (trip) => { const found = findTripAnywhere(trip.id); return found ? saveTripNow(found.row, found.trip, found.tripNumber) : Promise.resolve(); },
+      (trip) => {
+        trip.autoRoutePlaceholder = false;
+        const found = findTripAnywhere(trip.id);
+        return found ? saveTripNow(found.row, found.trip, found.tripNumber) : Promise.resolve();
+      },
       renderBoardTable,
       (trip) => trip.routeId || trip.tripId || ""
     );
@@ -6159,6 +6381,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (t.dataset.trip && t.dataset.field) {
         const trip = found.row.trips.find((tr) => tr.id === t.dataset.trip);
         if (trip) {
+          trip.autoRoutePlaceholder = false;
           trip[t.dataset.field] = t.value;
           if (t.dataset.field === "dispatchTime" || t.dataset.field === "routeMiles") autoFillCalcTimes(rowId, trip);
           recalcRowCalcCellsInPlace(rowId);
@@ -6194,6 +6417,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         if (!found) return;
         const trip = found.row.trips.find((tr) => tr.id === t.dataset.trip);
         if (trip) {
+          trip.autoRoutePlaceholder = false;
           trip[t.dataset.field] = t.checked;
           const td = t.closest("td");
           td.classList.toggle(t.dataset.field === "backhaul" ? "flag-backhaul" : "flag-yes", t.checked);
@@ -6305,9 +6529,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     on("tg-close", "click", closeTextGroupModal);
     if ($("#modal-text-group")) $("#modal-text-group").addEventListener("click", (e) => { if (e.target.id === "modal-text-group") closeTextGroupModal(); });
     if ($("#modal-text-group")) $("#modal-text-group").addEventListener("change", (e) => {
-      if (!e.target.matches("input[name='tg-availability']")) return;
+      if (!e.target.matches("#tg-exclude-scheduled")) return;
       const wrap = $("#tg-day-wrap");
-      if (wrap) wrap.classList.toggle("tg-day-visible", e.target.value === "unscheduled");
+      if (wrap) wrap.classList.toggle("tg-day-visible", e.target.checked);
     });
   }
 

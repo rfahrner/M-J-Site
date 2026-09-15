@@ -32,5 +32,50 @@ jobs:
       - name: Audit dependencies
         run: npm audit --audit-level=high
 
+      - name: Validate driver PWA scripts
+        run: |
+          node --check public/driver/app.js
+          node --check public/driver/sw.js
+          node --input-type=module --check < paperwork-inbox-v2.js
+          node --input-type=module --check < paperwork-nav-full.js
+          node --check driverlist-deeplink.js
+          node --input-type=module --check < preshift-pro-text.js
+          node --input-type=module --check < boardrates.js
+          node --input-type=module --check < daily-rate-hierarchy.js
+          node --input-type=module --check < daily-rate-modal-sync.js
+          node --input-type=module --check < loadboard-toolbar-controls.js
+
       - name: Build site
         run: npm run build
+
+      - name: Verify driver PWA is published by the build
+        run: |
+          test -f dist/driver/index.html
+          test -f dist/driver/app.js
+          test -f dist/driver/sw.js
+          test -f dist/driver/manifest.webmanifest
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Prepare paperwork Edge Function type-check copy
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const sourcePath = 'supabase/functions/paperwork-submit/index.ts';
+          const checkPath = 'supabase/functions/paperwork-submit/.ci-check.ts';
+          const source = fs.readFileSync(sourcePath, 'utf8');
+          const checked = source.replaceAll('ReturnType<typeof createClient>', 'any');
+          fs.writeFileSync(checkPath, checked);
+          NODE
+
+      - name: Type-check paperwork Edge Function
+        run: deno check --node-modules-dir=auto supabase/functions/paperwork-submit/.ci-check.ts
+
+      - name: Type-check Carrier Docs intake wrapper
+        run: deno check --node-modules-dir=auto supabase/functions/paperwork-intake-v2/index.ts
+
+      - name: Type-check driver PWA gateway
+        run: deno check --node-modules-dir=auto supabase/functions/paperwork-pwa-submit/index.ts
