@@ -485,6 +485,7 @@ function viewRouteImage(rowId, imageIndex = 0) {
   const overlay = document.createElement("div");
   overlay.className = "overlay image-lightbox-overlay mdz-image-lightbox-overlay";
   overlay.id = "mdz-image-overlay";
+  overlay.dataset.viewerIndex = String(startIndex);
   overlay.innerHTML = `
     <div class="modal image-lightbox-content image-viewer-modal">
       <div class="modal-header image-viewer-header">
@@ -494,11 +495,17 @@ function viewRouteImage(rowId, imageIndex = 0) {
           <span class="image-viewer-zoom-level" data-viewer-zoom-level>100%</span>
           <button type="button" class="btn btn-ghost" data-viewer-zoom-in title="Zoom in">+</button>
           <button type="button" class="btn btn-ghost" data-viewer-reset title="Reset view">Fit</button>
+          <button type="button" class="btn btn-ghost" data-viewer-rotate title="Rotate 90 degrees">↻</button>
           <button type="button" class="modal-close" id="mdz-image-close">&times;</button>
         </div>
       </div>
       <div class="image-viewer-stage">
         <div class="mdz-lightbox-gallery image-viewer-gallery">${urls.map((url, i) => `<img src="${escapeHtml(url)}" alt="Route image ${i + 1}"${i === startIndex ? ' class="is-active-image"' : ''}>`).join("")}</div>
+      </div>
+      <div class="image-viewer-navigation">
+        <button type="button" class="btn btn-ghost" data-viewer-prev title="Previous image">‹</button>
+        <span data-viewer-page>1 / ${urls.length}</span>
+        <button type="button" class="btn btn-ghost" data-viewer-next title="Next image">›</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
