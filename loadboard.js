@@ -2218,7 +2218,6 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const preserved = stateKey ? existing[stateKey] : undefined;
     const preservedDriverId = existing.driverId;
     const preservedDriverName = existing.driverNameText;
-    const wasComplete = existing.shiftComplete;
     const fresh = shiftFromDbRow(dbRow);
 
     // A driver selection changes two values together: driverNameText and
@@ -2239,14 +2238,15 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     // Ewan's hidden link back after the name was erased, or leave a linked
     // phone/MC on a row whose visible driver name is blank.
     if (editingDriver || preserveDriverLink) existing.driverId = preservedDriverId;
-    if (wasComplete !== existing.shiftComplete) {
-      const restoreFocus = captureFocusForRerender();
-      renderBoardTable(); // needs to move to the top/bottom — a single-row rebuild can't reposition it
-      restoreFocus();
-    } else {
-      updateDriverLinkedCellsInPlace(existing.id);
-      recalcRowCalcCellsInPlace(existing.id);
-    }
+    // The database row is now the canonical state for every non-focused
+    // field. Rebuild the visible board so ordinary inputs (PRO #, notes,
+    // rate, shift times, etc.) update on the other dispatcher's screen too.
+    // The old in-place path refreshed only driver-linked and calculated
+    // cells, leaving the DOM's PRO input stale even though state and the
+    // database already contained the new number.
+    const restoreFocus = captureFocusForRerender();
+    renderBoardTable();
+    restoreFocus();
   }
 
   function handleRealtimeTripChange(payload) {
@@ -2276,7 +2276,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     // shouldn't silently undo either one.
     localTrip.hasStopTimes = preservedHasStopTimes;
     if (localTrip.routeImagePath === preservedImagePath) localTrip.routeImageUrl = preservedImageUrl;
-    recalcRowCalcCellsInPlace(parentRow.id);
+    // Trip fields have the same requirement as shift fields: route IDs,
+    // trailers, statuses, checkboxes, pills, and images must all repaint for
+    // other connected users, not just the calculated cells.
+    const restoreFocus = captureFocusForRerender();
+    renderBoardTable();
+    restoreFocus();
   }
 
   // Handles inserts, updates, AND deletes for atlanta_drivers — deletes
