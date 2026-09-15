@@ -2646,7 +2646,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       return;
     }
 
-    if (e.key !== "Tab") return;
+    if (e.key !== "Tab" && e.keyCode !== 9) return;
     const table = el.closest(tableSelector);
     if (!table) return;
     const tr = el.closest("tr");
@@ -2658,8 +2658,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const nextInRow = forward ? rowFields[idx + 1] : rowFields[idx - 1];
     if (nextInRow) {
       e.preventDefault();
-      nextInRow.focus();
-      if (nextInRow.select && nextInRow.type !== "checkbox") nextInRow.select();
+      requestAnimationFrame(() => { nextInRow.focus(); if (nextInRow.select && nextInRow.type !== "checkbox") nextInRow.select(); });
       return;
     }
     // ran out of fields on this row — drop to the next (or previous) row
@@ -2669,8 +2668,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       const target = forward ? fields[0] : fields[fields.length - 1];
       if (target) {
         e.preventDefault();
-        target.focus();
-        if (target.select && target.type !== "checkbox") target.select();
+        e.preventDefault();
+        requestAnimationFrame(() => { target.focus(); if (target.select && target.type !== "checkbox") target.select(); });
         return;
       }
       sib = forward ? sib.nextElementSibling : sib.previousElementSibling;
