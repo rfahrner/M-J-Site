@@ -2627,7 +2627,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // many non-editable calculated cells (plain <span> text) in among the
   // real inputs, and pinned/sticky columns don't reorder tab flow to
   // match — this makes tab order explicit instead of relying on that.
-  const EDITABLE_SELECTOR = 'input:not([disabled]):not([type="checkbox"]), textarea:not([disabled]), select:not([disabled])';
+  const EDITABLE_SELECTOR = 'input:not([disabled]):not([readonly]):not([type="checkbox"]):not([tabindex="-1"]), textarea:not([disabled]):not([readonly]):not([tabindex="-1"]), select:not([disabled]):not([tabindex="-1"])';
   export function handleRowAwareTab(e, tableSelector) {
     const el = e.target;
     if (!el.matches || !el.matches(EDITABLE_SELECTOR)) return;
