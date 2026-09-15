@@ -203,11 +203,22 @@ let accountingRecords = [];
     const dayTypeOptions = ["weekday", "weekend", "holiday"].map((d) => `<option value="${d}" ${d === (rec.day_type || "weekday") ? "selected" : ""}>${d[0].toUpperCase() + d.slice(1)}</option>`).join("");
     const ms = acctMilesStopsHtml(rec);
     const isDimmed = rec.hidden || rec.status === "released";
-    const rowStyle = isDimmed ? ` style="opacity:0.5;"` : "";
-    return `<tr id="acct-${rec.id}"${rowStyle}>
+    // A cancelled load is struck through across the whole row. It carries
+    // no money by design, so the only things worth reading on it are the
+    // driver, their details, and why it was cancelled -- the reason rides
+    // along in the title so it's one hover away without widening the table.
+    const isCancelled = rec.status === "cancelled";
+    const styleBits = [];
+    if (isDimmed) styleBits.push("opacity:0.5;");
+    if (isCancelled) styleBits.push("text-decoration:line-through; color:var(--slate-500);");
+    const rowStyle = styleBits.length ? ` style="${styleBits.join(" ")}"` : "";
+    const cancelTitle = isCancelled
+      ? ` title="Load cancelled — ${escapeHtml(rec.cancelled_reason || "no reason recorded")}"`
+      : "";
+    return `<tr id="acct-${rec.id}"${rowStyle}${cancelTitle}>
       <td>${escapeHtml(rec.shift_date)}</td>
       <td>${rec.aljex_load_number ? `<button type="button" class="cell-link-btn" style="width:auto; padding:2px 10px;" data-open-acct-load="${rec.id}">${escapeHtml(rec.aljex_load_number)} ↗</button>` : "—"}</td>
-      <td>${escapeHtml(rec.driver_name_text || "—")}</td>
+      <td>${escapeHtml(rec.driver_name_text || "—")}${isCancelled ? `<div class="subtext" style="text-decoration:none; color:var(--slate-500);">Cancelled — ${escapeHtml(rec.cancelled_reason || "no reason recorded")}</div>` : ""}</td>
       <td>${escapeHtml(rec.mc_dot || "—")}</td>
       ${showLevels ? `
       <td><select class="cell-input" data-action="acct-cost-level" data-id="${rec.id}">${levelOptions(rec.cost_level)}</select></td>

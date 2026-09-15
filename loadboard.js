@@ -364,6 +364,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       called_off_reason: row.calledOffReason || null,
       called_off_notes: row.calledOffNotes || null,
       called_off_at: row.calledOffAt || null,
+      // A cancelled LOAD is a separate event from a driver calling off:
+      // the load itself is dead, no money applies, and the driver is still
+      // free to run something else that day.
+      load_cancelled: !!row.loadCancelled,
+      load_cancelled_reason: row.loadCancelledReason || null,
+      load_cancelled_at: row.loadCancelledAt || null,
     };
   }
   function shiftFromDbRow(dbRow) {
@@ -403,6 +409,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       calledOffReason: dbRow.called_off_reason || "",
       calledOffNotes: dbRow.called_off_notes || "",
       calledOffAt: dbRow.called_off_at || null,
+      loadCancelled: !!dbRow.load_cancelled,
+      loadCancelledReason: dbRow.load_cancelled_reason || "",
+      loadCancelledAt: dbRow.load_cancelled_at || null,
       createdAt: dbRow.created_at || null,
       updatedAt: dbRow.updated_at || null,
       addedAt: null,
@@ -753,6 +762,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       timesheetReceived: false, timesheetStartTime: "", timesheetEndTime: "", trailerDropLocation: "", preShiftTextSentAt: null,
       createdAt: null, updatedAt: null, addedAt: null, sentToAccounting: false,
       calledOff: false, calledOffReason: "", calledOffNotes: "", calledOffAt: null,
+      loadCancelled: false, loadCancelledReason: "", loadCancelledAt: null,
       cellSnapshot: "", mcSnapshot: "", emailSnapshot: "", dispatcherPhoneSnapshot: "", ratingSnapshot: "",
       birm: false, routeType: "birm", hostlerHours: "", rateManual: false, rateOverrides: { tiers: {}, settings: {} },
       trips: [blankTrip()],
@@ -834,6 +844,51 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     // race is exactly how rows end up with a name and no link, so heal
     // here AND again when the driver list finishes arriving.
     healUnlinkedDriverRows(rows, locationKey);
+    collapseStaleLoadsOnLoad(rows, locationKey);
+  }
+
+  // Once a shift is more than 12 hours past its start time it's history
+  // rather than something anyone is still working, so Atlanta brings those
+  // loads up already collapsed into pills instead of laid out across full
+  // trip rows. 12 hours is the same mark the accounting sweep uses to
+  // decide a shift is finished, so the two agree about when a day is over.
+  //
+  // Display only, applied as the sheet lands: nothing is written back, and
+  // clicking a pill still opens the route exactly as it always did. That
+  // also means un-collapsing one is not sticky -- it comes back as a pill
+  // on the next load, which is the point.
+  const COLLAPSE_STALE_AFTER_MS = 12 * 60 * 60 * 1000;
+  const COLLAPSE_STALE_LOCATIONS = ["atlanta"];
+
+  function collapseStaleLoadsOnLoad(rows, locationKey) {
+    if (!COLLAPSE_STALE_LOCATIONS.includes(locationKey)) return 0;
+    const now = Date.now();
+    let collapsed = 0;
+    (rows || []).forEach((row) => {
+      if (!row || !row.shiftDate || !Array.isArray(row.trips)) return;
+      const start = keyToDate(row.shiftDate);
+      if (!start || isNaN(start.getTime())) return;
+      // parseHHMM handles both "14:00" and the bare "1400" people type, and
+      // returns null for everything else that lands in that column (x,
+      // ASAP, TONU, a route number typed in the wrong cell). When there's
+      // no usable time, count from the END of that day rather than the
+      // start: the shift can't have begun later than that, so a row still
+      // being filled in today never collapses out from under whoever is
+      // working it, while yesterday's blank-time rows still go to pills.
+      const startMin = parseHHMM(row.shiftStart);
+      start.setMinutes(start.getMinutes() + (startMin == null ? 23 * 60 + 59 : startMin));
+      if (now - start.getTime() < COLLAPSE_STALE_AFTER_MS) return;
+      row.trips.forEach((trip) => {
+        if (trip.minimized) return;
+        // A slot with no route or trip ID is an empty placeholder, not a
+        // load -- collapsing it would only hide the blank line people use
+        // to add the next route, and it wouldn't draw a pill anyway.
+        if (!String(trip.routeId || trip.tripId || "").trim()) return;
+        trip.minimized = true;
+        collapsed++;
+      });
+    });
+    return collapsed;
   }
   export function findDriver(id) { return state.drivers.find((d) => String(d.id) === String(id)) || null; }
   const standaloneLoadedRows = {}; // row.id -> row, for modal access from pages that don't have state.sheets (e.g. Accounting)
@@ -911,59 +966,6 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   const shiftSaveTimers = new Map();
   const tripSaveTimers = new Map();
 
-  // Every board page is its own HTML document, so switching boards is a
-  // full page teardown -- any setTimeout still counting down dies with it
-  // and whatever it was going to save is gone. Holding the pending work
-  // next to its timer means pagehide can run it instead of dropping it.
-  const pendingSaves = new Map(); // "namespace:key" -> the save to run
-
-  function debounceSave(timers, ns, key, fn) {
-    const pendingKey = `${ns}:${key}`;
-    clearTimeout(timers.get(key));
-    pendingSaves.set(pendingKey, fn);
-    timers.set(key, setTimeout(() => { pendingSaves.delete(pendingKey); fn(); }, SAVE_DEBOUNCE_MS));
-  }
-
-  export function flushPendingBoardSaves() {
-    [shiftSaveTimers, tripSaveTimers, availableSaveTimers].forEach((timers) => {
-      timers.forEach((t) => clearTimeout(t));
-      timers.clear();
-    });
-    const runs = [...pendingSaves.values()];
-    pendingSaves.clear();
-    runs.forEach((fn) => {
-      try { fn(); } catch (e) { console.error("flushPendingBoardSaves failed:", e); }
-    });
-  }
-
-  // Rows carrying real content that never got a database id. A row like
-  // that only exists in this tab: nothing else can see it and a reload
-  // won't bring it back, so it needs to be findable rather than silently
-  // dropped. Blank filler rows are ignored -- they're supposed to be empty.
-  const UNSAVED_CONTENT_FIELDS = ["shiftStart", "proNumber", "driverNameText", "notes", "etaShiftReport", "rate"];
-  function rowsWithUnsavedContent() {
-    const out = [];
-    Object.values(state.sheets || {}).forEach((rows) => {
-      (rows || []).forEach((r) => {
-        if (!r || r.dbId) return;
-        if (UNSAVED_CONTENT_FIELDS.some((f) => String(r[f] ?? "").trim() !== "")) out.push(r);
-      });
-    });
-    return out;
-  }
-
-  // Called after a flush so a failure surfaces on the board instead of
-  // only in the console.
-  function warnAboutUnsavedRows() {
-    const stranded = rowsWithUnsavedContent();
-    if (!stranded.length) return;
-    const labels = stranded
-      .map((r) => [r.shiftStart, r.driverNameText || r.proNumber].filter(Boolean).join(" ") || "a row")
-      .join(", ");
-    console.warn("[unsaved] rows never written to the database:", stranded);
-    setDriverSyncStatus(`${stranded.length} row(s) haven't saved to the database yet (${labels}). Don't leave this page — they only exist in this tab.`, "error");
-  }
-
   // Handles both create (row.dbId is null) and update (row.dbId is set)
   // transparently — callers never need to branch on which one applies.
   // ---------------- shared route-image upload/view/delete (all boards) ----------------
@@ -1009,6 +1011,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     }
   }
 
+  const IMAGE_LIGHTBOX_SCALE = 1.75; // 75% bigger than the image's natural size
+
   export function viewRowImage(row, label) {
     if (!row.routeImageUrl) return;
     const overlay = document.createElement("div");
@@ -1017,10 +1021,28 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     overlay.innerHTML = `
       <div class="modal image-lightbox-content">
         <div class="modal-header"><h3>Route — ${escapeHtml(label || "")}</h3><button class="modal-close" id="board-image-close">&times;</button></div>
-        <div class="modal-body" style="text-align:center; padding:12px;"><img src="${escapeHtml(row.routeImageUrl)}" alt="Route image"></div>
+        <div class="modal-body" style="text-align:center; padding:12px;"><img id="board-image-img" src="${escapeHtml(row.routeImageUrl)}" alt="Route image"></div>
         <div class="modal-footer"><button type="button" class="btn btn-ghost" id="board-image-delete" style="color:#b91c1c; border-color:#b91c1c;">Delete Image</button></div>
       </div>`;
     document.body.appendChild(overlay);
+
+    // The stylesheet only ever capped this image (max-width/max-height); it
+    // never scaled one up, so a manifest scan that comes in small rendered
+    // small no matter how much room the lightbox had. Draw it 75% larger
+    // than its natural size, still bounded by the viewport so a big scan
+    // can't run off screen. Height stays auto, so the aspect is untouched.
+    const imgEl = $("#board-image-img");
+    if (imgEl) {
+      const sizeUp = () => {
+        if (!imgEl.naturalWidth) return;
+        const target = Math.min(imgEl.naturalWidth * IMAGE_LIGHTBOX_SCALE, window.innerWidth * 0.95);
+        imgEl.style.width = Math.round(target) + "px";
+        imgEl.style.maxWidth = "95vw";
+      };
+      if (imgEl.complete) sizeUp();
+      else imgEl.addEventListener("load", sizeUp, { once: true });
+    }
+
     const close = () => overlay.remove();
     overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
     $("#board-image-close").addEventListener("click", close);
@@ -1474,35 +1496,13 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   }
 
 
-  // Rows that haven't reached the database yet have no dbId, so their
-  // first save is the INSERT that brings the row into existence. That one
-  // can't sit in a debounce timer: navigate away inside those 700ms and
-  // the row was never created at all -- not an edit lost, the whole row
-  // gone. A shift with just a start time typed in is the case that gets
-  // bitten, since typing a time takes about a second and then you move on.
-  // Once the row exists, edits debounce normally.
-  const shiftInsertsInFlight = new Map(); // row.id -> the INSERT currently running
   function scheduleShiftSave(row) {
     clearTimeout(shiftSaveTimers.get(row.id));
-    shiftSaveTimers.delete(row.id);
-    pendingSaves.delete(`shift:${row.id}`);
-
-    if (!row.dbId) {
-      // Keystrokes land faster than the INSERT round-trips, and every one
-      // of them still sees dbId as null -- without this guard each would
-      // fire its own INSERT and the row would be created several times.
-      const inFlight = shiftInsertsInFlight.get(row.id);
-      if (inFlight) { inFlight.then(() => scheduleShiftSave(row)); return; }
-      const p = saveShiftNow(row)
-        .then((dbId) => { if (!dbId) warnAboutUnsavedRows(); }) // insert didn't take -- say so on the board, don't fail silently
-        .finally(() => shiftInsertsInFlight.delete(row.id));
-      shiftInsertsInFlight.set(row.id, p);
-      return;
-    }
-    debounceSave(shiftSaveTimers, "shift", row.id, () => saveShiftNow(row));
+    shiftSaveTimers.set(row.id, setTimeout(() => saveShiftNow(row), SAVE_DEBOUNCE_MS));
   }
   function scheduleTripSave(row, trip, tripNumber) {
-    debounceSave(tripSaveTimers, "trip", trip.id, () => saveTripNow(row, trip, tripNumber));
+    clearTimeout(tripSaveTimers.get(trip.id));
+    tripSaveTimers.set(trip.id, setTimeout(() => saveTripNow(row, trip, tripNumber), SAVE_DEBOUNCE_MS));
   }
 
 
@@ -1700,6 +1700,16 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // drift from each other.
   function getEffectiveRateInfo(row) {
     const locationKey = row.location || state.activeLocation || "atlanta";
+    // A cancelled load carries no money at all -- not the tier rate, not a
+    // driver's usual rate, and explicitly not TONU. This sits ahead of
+    // every other path so nothing downstream can put a figure back on it.
+    if (row.loadCancelled) {
+      return {
+        total: 0, mode: "load-cancelled",
+        lines: [{ label: "Load cancelled", detail: row.loadCancelledReason || "No reason recorded", amount: 0 }],
+        note: null,
+      };
+    }
     const drv = row.driverId ? findDriver(row.driverId) : null;
     const driverOv = drv && drv.atlantaRateOverrides;
     const hasAtlantaOverrides = driverOv && (Object.keys(driverOv.tiers || {}).length || Object.keys(driverOv.settings || {}).length);
@@ -1866,6 +1876,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           <input class="cell-input" data-driver-ac="true" placeholder="Type driver name…"
             data-row="${row.id}" data-field="driverName" value="${escapeHtml(displayName)}">
           ${row.calledOff ? `<span title="${escapeHtml(row.calledOffNotes || "")}" style="display:inline-block; margin-left:4px; padding:1px 6px; border-radius:4px; background:#dc2626; color:#fff; font-size:10px; font-weight:700; white-space:nowrap; vertical-align:middle;">CANCELLED</span>` : ""}
+          ${row.loadCancelled ? `<span title="${escapeHtml(row.loadCancelledReason || "")}" style="display:inline-block; margin-left:4px; padding:1px 6px; border-radius:4px; background:#475569; color:#fff; font-size:10px; font-weight:700; white-space:nowrap; vertical-align:middle;">LOAD CANCELLED</span>` : ""}
         </div>
       </td>
         <td class="col-rate"${rs}>
@@ -1894,6 +1905,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const rowClasses = [
       row.tonu ? "is-tonu" : "",
       row.calledOff ? "is-called-off" : "",
+      row.loadCancelled ? "is-load-cancelled" : "",
       row.highlighted ? "is-row-pinned" : "",
       row.selected ? "is-row-selected" : "",
       row.addedAt ? "is-new" : "",
@@ -2561,9 +2573,28 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // match — this makes tab order explicit instead of relying on that.
   const EDITABLE_SELECTOR = 'input:not([disabled]):not([type="checkbox"]), textarea:not([disabled]), select:not([disabled])';
   export function handleRowAwareTab(e, tableSelector) {
-    if (e.key !== "Tab") return;
     const el = e.target;
     if (!el.matches || !el.matches(EDITABLE_SELECTOR)) return;
+
+    // Enter closes out the cell the way a spreadsheet does: the value is
+    // already in state (the input handler writes it on every keystroke),
+    // so this is about the field actually letting go instead of sitting
+    // there looking like the key did nothing.
+    //
+    // Left alone deliberately: Shift+Enter, so the notes boxes can still
+    // take a newline; Ctrl/Alt/Cmd+Enter, which belong to the browser; and
+    // an Enter the driver-name autocomplete already consumed to pick a
+    // suggestion, which it marks by calling preventDefault on its own
+    // handler attached to the input itself (that fires before this one).
+    if (e.key === "Enter") {
+      if (e.defaultPrevented || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (!el.closest(tableSelector)) return;
+      e.preventDefault();
+      el.blur();
+      return;
+    }
+
+    if (e.key !== "Tab") return;
     const table = el.closest(tableSelector);
     if (!table) return;
     const tr = el.closest("tr");
@@ -2734,6 +2765,84 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     row.calledOffAt = null;
     await saveShiftNow(row);
     logChange(row.dbId, labelForRow(row), "called_off", "true", "false");
+    renderBoardTable();
+  }
+
+  // Cancelling the LOAD, as opposed to the driver calling off. The load is
+  // dead: no rate, no TONU, and an accounting record is raised carrying the
+  // driver and the reason so it shows up struck through over there. The
+  // driver stays available for the rest of that day.
+  function openCancelLoadModal(rowId) {
+    const found = findRowAnywhere(rowId);
+    if (!found) return;
+    const row = found.row;
+    const drv = row.driverId ? findDriver(row.driverId) : null;
+    const driverLabel = drv ? drv.name : (row.driverNameText || "this load's driver");
+    const existing = document.getElementById("cancel-load-overlay");
+    if (existing) existing.remove();
+    const overlay = document.createElement("div");
+    overlay.className = "overlay";
+    overlay.id = "cancel-load-overlay";
+    overlay.innerHTML = `
+      <div class="modal">
+        <div class="modal-header">
+          <h3>Cancel Load</h3>
+          <button class="modal-close" id="cancel-load-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p style="margin:0 0 10px;">Cancelling the load itself — separate from ${escapeHtml(driverLabel)} calling off. No rate or TONU will be applied, and the driver stays available today.</p>
+          <div class="field">
+            <label for="cancel-load-reason">Reason for cancellation</label>
+            <textarea id="cancel-load-reason" rows="3" placeholder="Why was this load cancelled?"></textarea>
+            <div class="field-error" id="cancel-load-error" style="display:none;">Give a reason first.</div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" id="cancel-load-cancel">Never mind</button>
+          <button class="btn" id="cancel-load-submit">Cancel Load</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+    $("#cancel-load-close").addEventListener("click", close);
+    $("#cancel-load-cancel").addEventListener("click", close);
+    const reasonEl = $("#cancel-load-reason");
+    reasonEl.focus();
+    $("#cancel-load-submit").addEventListener("click", async () => {
+      const reasonText = reasonEl.value.trim();
+      // The reason is the entire point of the record on the accounting
+      // side, so an empty one is refused rather than saved blank.
+      if (!reasonText) { $("#cancel-load-error").style.display = ""; reasonEl.focus(); return; }
+      close();
+      await applyLoadCancellation(rowId, reasonText);
+    });
+  }
+
+  async function applyLoadCancellation(rowId, reasonText) {
+    const found = findRowAnywhere(rowId);
+    if (!found) return;
+    const row = found.row;
+    row.loadCancelled = true;
+    row.loadCancelledReason = reasonText;
+    row.loadCancelledAt = new Date().toISOString();
+    recomputeRowRate(row); // drops the rate to zero before the save goes out
+    await saveShiftNow(row);
+    logChange(row.dbId, labelForRow(row), "load_cancelled", "false", "true");
+    renderBoardTable();
+    setDriverSyncStatus("Load cancelled — sent to accounting with the reason, no money applied.", "success");
+  }
+
+  async function unmarkLoadCancelled(rowId) {
+    const found = findRowAnywhere(rowId);
+    if (!found) return;
+    const row = found.row;
+    row.loadCancelled = false;
+    row.loadCancelledReason = "";
+    row.loadCancelledAt = null;
+    await saveShiftNow(row);
+    recomputeRowRate(row); // rate comes back from the normal engine
+    logChange(row.dbId, labelForRow(row), "load_cancelled", "true", "false");
     renderBoardTable();
   }
 
@@ -3501,12 +3610,14 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // Every driver already on a board for a given day, across all three
   // load tables — a driver booked in Delaware isn't available for an
   // Atlanta shift, so "scheduled" deliberately means scheduled anywhere.
-  // Called-off shifts don't count: that driver's day is free again.
+  // Called-off shifts don't count: that driver's day is free again. Neither
+  // do cancelled loads -- the load is dead but the driver is still free to
+  // run something else that day.
   async function driverIdsScheduledOn(dateStr) {
     const scheduled = new Set();
     if (!supabaseClient || !dateStr) return scheduled;
     const [kroger, houston, mondelez] = await Promise.all([
-      supabaseClient.from(SHIFTS_TABLE).select("driver_id, called_off").eq("shift_date", dateStr).not("driver_id", "is", null),
+      supabaseClient.from(SHIFTS_TABLE).select("driver_id, called_off, load_cancelled").eq("shift_date", dateStr).not("driver_id", "is", null),
       supabaseClient.from("loads_houston").select("driver_id").eq("shift_date", dateStr).not("driver_id", "is", null),
       supabaseClient.from("mondelez_loads").select("driver_id").eq("shift_date", dateStr).not("driver_id", "is", null),
     ]);
@@ -3514,7 +3625,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     // Failing open would text drivers who are already booked, which is
     // worse than not sending — make the caller stop and show why.
     if (firstError) throw new Error(firstError.message || String(firstError));
-    (kroger.data || []).forEach((r) => { if (!r.called_off) scheduled.add(String(r.driver_id)); });
+    (kroger.data || []).forEach((r) => { if (!r.called_off && !r.load_cancelled) scheduled.add(String(r.driver_id)); });
     (houston.data || []).forEach((r) => scheduled.add(String(r.driver_id)));
     (mondelez.data || []).forEach((r) => scheduled.add(String(r.driver_id)));
     return scheduled;
@@ -3662,6 +3773,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const items = [
       { label: row.tonu ? "Un-TONU" : "TONU", action: () => toggleTonu(rowId) },
       { label: row.calledOff ? "Un-mark Cancellation" : "Cancellation", action: () => row.calledOff ? unmarkDriverCalledOff(rowId) : openCalledOffModal(rowId) },
+      { label: row.loadCancelled ? "Un-cancel Load" : "Cancel Load", action: () => row.loadCancelled ? unmarkLoadCancelled(rowId) : openCancelLoadModal(rowId) },
       { label: row.highlighted ? "Remove Highlight" : "Highlight", action: () => toggleRowPin(rowId) },
       { label: row.shiftComplete ? "Mark Shift Incomplete" : "Shift Complete", action: () => toggleShiftComplete(rowId) },
       { label: "Load Details", action: () => openLoadDetailsModal(rowId) },
@@ -3852,10 +3964,67 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     return `<fieldset class="rate-tier-box${overridden ? " is-overridden" : ""}"><legend>${label}${overridden ? ' <span class="rate-override-dot" title="Different from the default for this location">●</span>' : ""}</legend>${inputHtml}</fieldset>`;
   }
 
+  // Which tiers this load's routes actually land in. Needed because an
+  // override only counts as "applied" if it touches a tier the load really
+  // used -- a driver with a 61-140mi override running a 400mi route is
+  // still on the base rate for that route.
+  function tiersUsedByLoad(row, locationKey) {
+    const tiers = (getBoardRateTiers() && getBoardRateTiers()[locationKey]) || [];
+    const used = [];
+    (row.trips || []).forEach((t) => {
+      if (!String(t.routeId || t.tripId || "").trim()) return;
+      const miles = parseFloat(t.routeMiles);
+      if (isNaN(miles) || miles <= 0) return;
+      const tier = tiers.find((tr) => miles >= tr.min && miles <= tr.max);
+      if (tier) used.push(tier);
+    });
+    return used;
+  }
+
+  // The settings calcLoadRateBreakdown() actually reads on each board, so
+  // an override of something this board never consults doesn't get claimed
+  // as the rate in force.
+  function rateSettingKeysFor(row, locationKey) {
+    if (locationKey === "atlanta") {
+      return row.tonu
+        ? ["tonu_flat"]
+        : ["over_tier_per_mile", "stop_charge_free_stops", "stop_charge_per_stop"];
+    }
+    if (locationKey === "delaware") return ["flat_minimum", "per_mile"];
+    if (locationKey === "buildingc") return ["birm_flat", "hostler_hourly"];
+    return [];
+  }
+
+  // Names the rate that produced the number on this load. The engine
+  // resolves in a fixed order and this reports whichever step actually
+  // won, not merely which ones exist:
+  //   Override — a hand-typed total, or a per-load tier/setting override
+  //   Driver   — the driver's own rate card, or their usual flat rate
+  //   Base     — the location's standard tier/settings
+  // getEffectiveRateInfo() bypasses the calculation entirely when it falls
+  // through to a driver's usual rate, so that case is checked before any
+  // per-load override: those overrides were never consulted on that path.
+  function rateAppliedLabel(row, locationKey, breakdown) {
+    if (row.rateManual) return "Override";
+    if (breakdown && breakdown.mode === "driver-usual-rate") return "Driver";
+
+    const usedTiers = tiersUsedByLoad(row, locationKey);
+    const settingKeys = rateSettingKeysFor(row, locationKey);
+
+    if (usedTiers.some((t) => isTierOverridden(row, t.id))) return "Override";
+    if (settingKeys.some((k) => isSettingOverridden(row, k))) return "Override";
+
+    if (usedTiers.some((t) => isDriverTierOverridden(row, t.id))) return "Driver";
+    if (locationKey === "atlanta" && settingKeys.some((k) => isDriverSettingOverridden(row, k))) return "Driver";
+
+    return "Base";
+  }
+
   function rateSectionHtml(row) {
     const locationKey = row.location || state.activeLocation || "atlanta";
     const tiers = (getBoardRateTiers() && getBoardRateTiers()[locationKey]) || [];
     const breakdown = getEffectiveRateInfo(row);
+    const appliedRate = rateAppliedLabel(row, locationKey, breakdown);
     const val = (key, fallback) => effectiveSetting(row, locationKey, key, fallback);
     const isOv = (key) => isSettingOverridden(row, key) || isDriverSettingOverridden(row, key);
 
@@ -3916,6 +4085,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     return `
       <fieldset class="rate-section">
         <legend class="rate-section-header">Rate</legend>
+        <div class="rate-applied-line" style="margin: -2px 0 8px; font-weight: 700;">Rate Applied: <span class="rate-applied-value" data-rate-applied="${escapeHtml(appliedRate.toLowerCase())}">${escapeHtml(appliedRate)}</span></div>
         <div class="subtext" style="margin: -4px 0 10px;">These boxes apply to this load only — a dot means it's different from the ${escapeHtml(locationKey)} default.</div>
         ${defaultsHtml}
 
@@ -5289,7 +5459,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
   const availableSaveTimers = new Map();
   function scheduleAvailableRowSave(row, locationKey, dKey) {
-    debounceSave(availableSaveTimers, "available", row.id, () => saveAvailableRowNow(row, locationKey, dKey));
+    clearTimeout(availableSaveTimers.get(row.id));
+    availableSaveTimers.set(row.id, setTimeout(() => saveAvailableRowNow(row, locationKey, dKey), SAVE_DEBOUNCE_MS));
   }
 
   function availableRowHtml(row) {
@@ -5346,6 +5517,24 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     renderAvailableTable();
   }
 
+  // renderAvailableTable() rebuilds the whole tbody, which throws away the
+  // input the cursor is sitting in. Every other table in here redraws
+  // through captureFocusForRerender() for exactly that reason -- it even
+  // knows about data-avail-row already -- so route this section's redraws
+  // through it too. Without this, saving your own typing came straight back
+  // as a realtime echo about a second later and closed the field under you.
+  function renderAvailableTableKeepingFocus() {
+    const restoreFocus = captureFocusForRerender();
+    renderAvailableTable();
+    restoreFocus();
+  }
+
+  // Which Available row the cursor is in right now, if any.
+  function activelyEditedAvailableRowId() {
+    const el = document.activeElement;
+    return el && el.dataset && el.dataset.availRow ? el.dataset.availRow : null;
+  }
+
   // Keeps the Available list in sync when a second dispatcher adds,
   // edits, or removes a name on the same day — without this, each tab
   // only ever sees its own edits until the page is reloaded.
@@ -5358,7 +5547,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       for (const k in state.availableSheets) {
         const sheet = state.availableSheets[k];
         const idx = sheet.findIndex((r) => r.dbId === oldRow.id);
-        if (idx !== -1) { sheet.splice(idx, 1); if (k === availableSheetKey(state.activeLocation, state.activeDate)) renderAvailableTable(); break; }
+        if (idx !== -1) { sheet.splice(idx, 1); if (k === availableSheetKey(state.activeLocation, state.activeDate)) renderAvailableTableKeepingFocus(); break; }
       }
       return;
     }
@@ -5369,6 +5558,11 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const sheet = state.availableSheets[k];
     const existing = sheet.find((r) => r.dbId === dbRow.id);
     if (existing) {
+      // Almost always this is the echo of our own save coming back. If the
+      // cursor is still in that row, whatever is on screen is newer than
+      // what the database just told us, so leave the row alone entirely
+      // rather than typing the older text back over the person mid-word.
+      if (activelyEditedAvailableRowId() === existing.id) return;
       Object.assign(existing, availableRowFromDbRow(dbRow), { id: existing.id });
     } else {
       // Drop the lone starting blank row once real data arrives, same as the board's own sheets do
@@ -5376,7 +5570,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (onlyBlank) sheet.length = 0;
       sheet.push(availableRowFromDbRow(dbRow));
     }
-    if (k === availableSheetKey(state.activeLocation, state.activeDate)) renderAvailableTable();
+    if (k === availableSheetKey(state.activeLocation, state.activeDate)) renderAvailableTableKeepingFocus();
   }
 
   export function setupAvailableRealtimeSync(locationKey) {
@@ -6038,8 +6232,37 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     renderDriverList();
   }
 
+  // Which Driver List tab to land on depends on which board you clicked
+  // from. The nav link is one shared href on every page, so the board notes
+  // where you were on the way past and the Driver List reads it on arrival.
+  // Atlanta and Building C land on Preferred Drivers rather than the Atlanta
+  // tab -- Building C runs out of Atlanta's pool, so they follow each other.
+  const DRIVER_LIST_TAB_BY_ORIGIN = {
+    atlanta: "preferred",
+    buildingc: "preferred",
+    delaware: "delaware",
+    houston: "houston",
+    mondelez: "mondelez",
+  };
+  const DRIVER_LIST_ORIGIN_KEY = "dl-origin-location";
+
+  function rememberDriverListOrigin(info) {
+    if (!info || info.type === "driverlist") return; // landing on the list must not overwrite where we came from
+    const key = info.key || (info.type === "mondelez" ? "mondelez" : null);
+    if (!key) return;
+    try { sessionStorage.setItem(DRIVER_LIST_ORIGIN_KEY, key); }
+    catch (e) { /* storage blocked -- the default tab is a fine outcome */ }
+  }
+
+  function driverListStartTab() {
+    let origin = null;
+    try { origin = sessionStorage.getItem(DRIVER_LIST_ORIGIN_KEY); }
+    catch (e) { /* ignore */ }
+    return DRIVER_LIST_TAB_BY_ORIGIN[origin] || "atlanta";
+  }
+
   function initDriverListPage() {
-    state.driverListTab = "atlanta";
+    state.driverListTab = driverListStartTab();
     renderDriverList();
     setupDriverListRealtimeSync();
     if ($("#modal-location-notes")) {
@@ -6054,7 +6277,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         const btn = e.target.closest(".location-tab");
         if (btn) switchDriverListTab(btn.dataset.location);
       });
-      switchDriverListTab("atlanta");
+      switchDriverListTab(state.driverListTab || driverListStartTab());
     }
     if ($("#btn-add-driver")) $("#btn-add-driver").addEventListener("click", () => openAddDriverModal(false));
     $("#driverlist-table-body").addEventListener("click", (e) => {
@@ -6122,6 +6345,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     try { startAlertScanning(); } catch (e) { console.error("startAlertScanning() failed:", e); }
     try { wireModals(); } catch (e) { console.error("wireModals() failed:", e); }
     try { await loadBoardRateData(); } catch (e) { console.error("loadBoardRateData() failed:", e); }
+    rememberDriverListOrigin(info);
     try {
       if (info.type === "board") initBoardPage(info);
       else if (info.type === "houston-board") initHoustonBoardPage(info);
@@ -6136,24 +6360,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
     // A route ID typed a second before navigating away is still sitting
     // in the debounce timer — flush it rather than lose the sync.
-    // Same goes for the row and trip saves themselves: anything still
-    // waiting on its debounce gets written now rather than dying with the
-    // page. visibilitychange fires early enough for the requests to
-    // actually get out the door; pagehide is the backstop.
-    const flushEverything = () => { flushPendingBoardSaves(); flushQueuedUpdates(); };
-    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushEverything(); });
-    window.addEventListener("pagehide", flushEverything);
-
-    // Last line of defence. A row holding real content but no database id
-    // has not been written -- whatever the reason, a failed insert, a
-    // dropped connection, permissions. Leaving the page at that point
-    // loses it with nothing to recover from, so stop and ask instead of
-    // letting it go quietly.
-    window.addEventListener("beforeunload", (e) => {
-      if (!rowsWithUnsavedContent().length) return;
-      e.preventDefault();
-      e.returnValue = "";
-    });
+    window.addEventListener("pagehide", () => { flushQueuedUpdates(); });
   }
 
   document.addEventListener("DOMContentLoaded", init);

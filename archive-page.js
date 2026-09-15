@@ -511,23 +511,37 @@ async function runExport() {
   progressEl.classList.remove("hidden");
   progressEl.value = 0;
 
+  // Progress state lives out here, not inside the try. A catch block can't
+  // read variables scoped to the try it's attached to, which is the whole
+  // reason a failed export used to report nothing but the error text --
+  // every counter describing how far it got died with the scope. On a run
+  // that takes hours, "it stopped" without "where" is the difference
+  // between resuming and starting over.
+  const total = currentPreview.items.length;
+  const locationCounts = {};
+  let archiveDir = null;
+  let selectedLabel = "selected folder";
+  let exportedCount = 0;
+  let skippedCount = 0;
+  let position = 0;      // 1-based index of the load being worked on
+  let lastDone = null;   // last load actually finished
+  let stoppedOn = null;  // load in hand when it failed
+
   try {
     statusEl.textContent = "Choose the local Windows folder that should contain the Archive folder…";
     const chosenRoot = await window.showDirectoryPicker({ mode: "readwrite" });
-    const archiveDir = await getOrCreateDir(chosenRoot, "Archive");
+    archiveDir = await getOrCreateDir(chosenRoot, "Archive");
     const markerName = await verifyLocalWrite(chosenRoot, archiveDir);
-    const selectedLabel = chosenRoot.name || "selected folder";
+    selectedLabel = chosenRoot.name || "selected folder";
     statusEl.textContent = `Local write verified: ${selectedLabel}\\Archive\\${markerName}. Starting all-location archive export…`;
 
     const summariesByDay = new Map();
-    const total = currentPreview.items.length;
-    const locationCounts = {};
-    let exportedCount = 0;
-    let skippedCount = 0;
 
     for (let i = 0; i < total; i++) {
       const item = currentPreview.items[i];
       const loc = locationLabel(item);
+      position = i + 1;
+      stoppedOn = `${item.record.shift_date} — ${loadNumberFor(item)} (${item.customer} / ${loc})`;
       const existing = await findCompletedArchive(archiveDir, item);
       let result;
 
@@ -546,6 +560,8 @@ async function runExport() {
       const countKey = `${item.customer} / ${loc}`;
       locationCounts[countKey] = (locationCounts[countKey] || 0) + 1;
       progressEl.value = Math.round(((i + 1) / total) * 100);
+      lastDone = stoppedOn; // this one is on disk now, so it's the high-water mark
+      stoppedOn = null;
     }
 
     for (const { dir, rows } of summariesByDay.values()) {
@@ -571,10 +587,56 @@ async function runExport() {
     statusEl.textContent = `Export complete: ${total.toLocaleString()} loads confirmed in the local archive — ${exportedCount.toLocaleString()} written this run, ${skippedCount.toLocaleString()} already complete and skipped. In File Explorer, open ${selectedLabel}\\Archive. Nothing was deleted from Supabase.`;
   } catch (error) {
     if (error?.name === "AbortError") {
-      statusEl.textContent = "Export cancelled. Nothing was changed in Supabase.";
+      statusEl.textContent = `Export cancelled after ${(exportedCount + skippedCount).toLocaleString()} of ${total.toLocaleString()} loads. Nothing was changed in Supabase. Re-running picks up where this left off.`;
     } else {
       console.error("Archive export failed:", error);
-      statusEl.textContent = `Local export stopped: ${error.message || error}. No Supabase records were deleted. Files completed before the error are safe to keep.`;
+      const done = exportedCount + skippedCount;
+      const where = position
+        ? `at load ${position.toLocaleString()} of ${total.toLocaleString()}`
+        : "before the first load";
+      const onLoad = stoppedOn
+        ? ` It failed on ${stoppedOn}.`
+        : (lastDone ? ` The last load written was ${lastDone}.` : "");
+      const byLocation = Object.entries(locationCounts)
+        .map(([k, n]) => `${k}: ${n.toLocaleString()}`)
+        .join(", ");
+
+      statusEl.textContent =
+        `Local export stopped ${where} — ${error.message || error}.` +
+        onLoad +
+        ` ${done.toLocaleString()} load(s) are safely on disk (${exportedCount.toLocaleString()} written this run, ` +
+        `${skippedCount.toLocaleString()} already complete and skipped)` +
+        (byLocation ? ` — ${byLocation}.` : ".") +
+        ` No Supabase records were deleted, and everything already written is safe to keep.` +
+        ` Re-run the export and point it at the same folder: completed loads are detected and skipped, so it resumes from here rather than starting over.`;
+
+      // Leave the same detail on disk. The status line is one browser
+      // refresh away from being gone, and the whole complaint about this
+      // alert was not knowing afterwards how far the run actually got.
+      if (archiveDir) {
+        try {
+          await writeFile(archiveDir, "Last Archive Run (interrupted).json", JSON.stringify({
+            stopped_at: new Date().toISOString(),
+            error: String(error.message || error),
+            cutoff: currentPreview?.cutoff ?? null,
+            stopped_at_position: position,
+            loads_total: total,
+            loads_confirmed_on_disk: done,
+            loads_exported_this_run: exportedCount,
+            loads_skipped_existing: skippedCount,
+            failed_on_load: stoppedOn,
+            last_load_written: lastDone,
+            loads_by_location: locationCounts,
+            selected_folder_name: selectedLabel,
+            supabase_deleted: false,
+            resume_enabled: true,
+          }, null, 2) + "\n");
+        } catch (writeError) {
+          // Best effort only -- if the folder handle is what broke, this
+          // will fail too, and that must not replace the real error.
+          console.error("Could not write interrupted-run report:", writeError);
+        }
+      }
     }
   } finally {
     progressEl.classList.add("hidden");

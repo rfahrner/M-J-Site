@@ -708,6 +708,16 @@ tr.is-tonu td:not(.pin-select):not(.pin-text) span.static-text {
   text-decoration: line-through;
   color: var(--slate-500);
 }
+/* A cancelled load reads the same way a TONU does -- struck through and
+   greyed -- so it's obvious at a glance the load isn't running. The driver
+   name column is deliberately left alone: who it was assigned to is the
+   part still worth reading. */
+tr.is-load-cancelled td:not(.pin-select):not(.pin-text) .cell-input,
+tr.is-load-cancelled td:not(.pin-select):not(.pin-text) span.static-text {
+  text-decoration: line-through;
+  color: var(--slate-500);
+}
+tr.is-load-cancelled { background: rgba(71, 85, 105, 0.06); }
 /* status swatches for salvage / backhaul flags */
 .flag-yes { background: var(--amber-bg) !important; }
 .flag-backhaul { background: var(--blue-bg) !important; }
