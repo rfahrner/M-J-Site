@@ -1155,7 +1155,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     render();
   }
 
-  export function viewRowImage(row, label, imageIndex = 0) {
+  export function viewRowImage(row, label, imageIndex = 0, onDelete) {
     const imageUrls = (row.routeImageUrls || []).filter(Boolean);
     if (!imageUrls.length && row.routeImageUrl) imageUrls.push(row.routeImageUrl);
     if (!imageUrls.length) return;
@@ -1193,6 +1193,13 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
     const closeBtn = overlay.querySelector("#board-image-close");
     if (closeBtn) closeBtn.addEventListener("click", close);
+    const deleteBtn = overlay.querySelector("#board-image-delete");
+    if (deleteBtn) deleteBtn.addEventListener("click", () => {
+      if (confirm("Delete this route image? This can't be undone.")) {
+        close();
+        if (typeof onDelete === "function") onDelete(selectedIndex);
+      }
+    });
     document.addEventListener("keydown", function escHandler(e) {
       if (e.key === "Escape") { close(); document.removeEventListener("keydown", escHandler); }
     });
@@ -1225,17 +1232,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       const deleteBtn = e.target.closest("[data-action='delete-row-image']");
       if (viewBtn) {
         const row = getRowFn(viewBtn.dataset.rowImageId);
-        if (row) viewRowImage(row, labelFn ? labelFn(row) : "", Number(viewBtn.dataset.imageIndex || 0));
-        const delHandler = (ev) => {
-          if (ev.target.id === "board-image-delete") {
-            const overlay = document.getElementById("board-image-overlay");
-            if (overlay && confirm("Delete this route image? This can't be undone.")) {
-              overlay.remove();
-              if (row) deleteRowImage(row, Number(overlay.dataset.imageIndex || 0), saveRowFn, renderFn);
-            }
-          }
-        };
-        document.addEventListener("click", delHandler, { once: true });
+        if (row) viewRowImage(
+          row,
+          labelFn ? labelFn(row) : "",
+          Number(viewBtn.dataset.imageIndex || 0),
+          (imageIndex) => deleteRowImage(row, imageIndex, saveRowFn, renderFn),
+        );
         return;
       }
       if (deleteBtn) {
