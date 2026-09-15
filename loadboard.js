@@ -423,7 +423,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       emailSnapshot: dbRow.email_snapshot || "",
       dispatcherPhoneSnapshot: dbRow.dispatcher_phone_snapshot || "",
       ratingSnapshot: dbRow.driver_rating_snapshot || "",
-      trips: [blankTrip(), blankTrip(), blankTrip(), blankTrip(), blankTrip()],
+      trips: [blankTrip()],
     };
   }
   function tripToDbRow(trip, shiftDbId, tripNumber) {
@@ -4214,6 +4214,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       </fieldset>`;
   }
 
+  function loadDetailsTripSheetImagesHtml(row) {
+    const items = [];
+    (row.trips || []).forEach((trip, tripIndex) => { if (trip.routeImageUrl) items.push({ url: trip.routeImageUrl, label: `Route ${tripIndex + 1}` }); });
+    return items.map((item) => `<div class="ld-image-item"><img class="ld-image-thumb" data-inline-image-src="${escapeHtml(item.url)}" src="${escapeHtml(item.url)}" alt="${escapeHtml(item.label)}" title="Click to enlarge"><div class="subtext">${escapeHtml(item.label)}</div></div>`).join("");
+  }
+
   function renderLoadDetailsTabContent() {
     if (!loadDetailsState) return;
     const found = findRowAnywhere(loadDetailsState.rowId);
@@ -4385,13 +4391,13 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         `;
       }
     } else if (tab === "images") {
-      const gallery = loadDetailsState.attachments.length
-        ? loadDetailsState.attachments.map((a) => `
+      const attachmentGallery = loadDetailsState.attachments.map((a) => `
             <div class="ld-image-item">
-              <img class="ld-image-thumb" src="${escapeHtml(a.publicUrl || "")}" alt="${escapeHtml(a.file_name)}">
+              <img class="ld-image-thumb" data-inline-image-src="${escapeHtml(a.publicUrl || "")}" src="${escapeHtml(a.publicUrl || "")}" alt="${escapeHtml(a.file_name)}" title="Click to enlarge">
               <button type="button" class="ld-image-remove" data-remove-attachment="${a.id}" title="Remove">&times;</button>
-            </div>`).join("")
-        : `<div class="subtext">No trip sheet images uploaded yet.</div>`;
+            </div>`).join("");
+      const routeGallery = loadDetailsTripSheetImagesHtml(row);
+      const gallery = attachmentGallery + routeGallery || `<div class="subtext">No trip sheet images uploaded yet.</div>`;
       body.innerHTML = `
         <input type="file" id="ld-file-input" accept="image/*" multiple>
         <div class="ld-image-gallery" id="ld-image-gallery">${gallery}</div>
@@ -5903,6 +5909,15 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         if (e.target.dataset.rateSettingKey) commitRateBoxOverride("setting", e.target.dataset.rateSettingKey, e.target.value);
       });
       $("#ld-tab-content").addEventListener("click", (e) => {
+        const image = e.target.closest("[data-inline-image-src]");
+        if (image) {
+          const overlay = document.createElement("div"); overlay.className = "overlay image-lightbox-overlay"; overlay.id = "ld-inline-image-overlay";
+          overlay.innerHTML = `<div class="modal image-lightbox-content"><div class="modal-header"><h3>Trip Sheet Image</h3><button class="modal-close" id="ld-inline-image-close">&times;</button></div><div class="modal-body" style="text-align:center;padding:12px;"><img src="${escapeHtml(image.dataset.inlineImageSrc)}" alt="${escapeHtml(image.alt || "Trip Sheet Image")}"></div></div>`;
+          document.body.appendChild(overlay);
+          const close = () => overlay.remove(); overlay.addEventListener("click", (ev) => { if (ev.target === overlay) close(); });
+          $("#ld-inline-image-close").addEventListener("click", close);
+          return;
+        }
         const rmBtn = e.target.closest("[data-remove-attachment]");
         if (rmBtn) removeTripSheetImage(rmBtn.dataset.removeAttachment);
         const editBtn = e.target.closest("[data-ld-edit]");

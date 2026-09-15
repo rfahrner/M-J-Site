@@ -1427,3 +1427,5 @@ fieldset.rate-tier-box.is-overridden {
 .mdz-image-dropzone { min-width: 90px; min-height: 30px; gap: 4px; flex-wrap: wrap; }
 .mdz-lightbox-gallery { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
 .mdz-lightbox-gallery img { max-width: min(44vw, 420px); max-height: 70vh; object-fit: contain; }
+
+.image-lightbox-overlay { z-index: 300; }
