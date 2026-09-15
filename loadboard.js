@@ -2213,8 +2213,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (dbRow.shift_date >= state.minDate && dbRow.shift_date <= state.maxDate) {
       state.datesWithData.add(dbRow.shift_date);
     }
+    const locationKey = dbRow.location || state.activeLocation;
     if (dbRow.shift_date !== state.activeDate) return; // not the day currently being viewed
-    const rows = state.sheets[sheetKey(state.activeLocation, state.activeDate)];
+    const rows = state.sheets[sheetKey(locationKey, state.activeDate)];
     if (!rows) return; // this day isn't loaded in this tab yet — nothing to merge into
 
     const existing = rows.find((r) => r.dbId === dbRow.id);
@@ -2265,12 +2266,13 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (payload.eventType === "DELETE") return;
     const dbTrip = payload.new;
     if (!dbTrip) return;
-    const rows = state.sheets[sheetKey(state.activeLocation, state.activeDate)];
-    if (!rows) return;
-    const parentRow = rows.find((r) => r.dbId === dbTrip.shift_id);
+    let parentRow = null;
+    for (const sheet of Object.values(state.sheets)) { parentRow = sheet.find((r) => r.dbId === dbTrip.shift_id); if (parentRow) break; }
+    if (!parentRow) return;
     if (!parentRow) return; // this trip's shift isn't part of the currently-viewed day
     const idx = dbTrip.trip_number - 1;
     if (idx < 0 || idx > 4) return;
+    while (parentRow.trips.length <= idx) parentRow.trips.push(blankTrip());
     const localTrip = parentRow.trips[idx];
 
     const domField = currentlyEditedField(parentRow.id, localTrip.id);
@@ -2343,17 +2345,19 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
   function setupRealtimeSync(locationKey) {
     if (!supabaseClient) return;
-    const channel = supabaseClient.channel(`board-${locationKey}`);
-    channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_shifts", filter: `location=eq.${locationKey}` }, handleRealtimeShiftChange);
+    const channel = supabaseClient.channel("board-kroger");
+    // Listen to every Kroger location so a tab never misses a Delaware,
+    // Atlanta, or Building C change while its cache is being filled.
+    channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_shifts" }, handleRealtimeShiftChange);
     channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_trips" }, handleRealtimeTripChange);
     channel.on("postgres_changes", { event: "*", schema: "public", table: "atlanta_drivers" }, handleRealtimeDriverChange);
     channel.on("broadcast", { event: "row-editing" }, ({ payload }) => handleRemoteRowEditing(payload));
     channel.subscribe((status, err) => {
       if (status === "SUBSCRIBED") {
-        console.log(`Realtime connected for board-${locationKey}`);
+        console.log(`Realtime connected for all Kroger boards (opened from ${locationKey})`);
         setDriverSyncStatus(""); // clears any earlier "not connected" banner now that it's back
       } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
-        console.error(`Realtime subscription problem for board-${locationKey}:`, status, err);
+        console.error("Realtime subscription problem for all Kroger boards:", status, err);
         setDriverSyncStatus("Live updates aren't connected right now — you may need to refresh to see changes from other dispatchers.", "error");
       }
     });
