@@ -927,7 +927,8 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
 }
 /* Route image thumbnail (Mondelez) — small, clickable, opens the lightbox */
 .mdz-image-dropzone {
-  display: inline-flex; align-items: center; justify-content: center;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+  gap: 6px;
   min-width: 40px; min-height: 26px;
   border: 1.5px dashed var(--slate-300, #cbd5e1);
   border-radius: 6px;
@@ -1501,6 +1502,11 @@ fieldset.rate-tier-box.is-overridden {
   user-select: none;
 }
 .image-viewer-gallery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  justify-content: center;
+  align-items: center;
   width: 100%;
   max-width: 100%;
   max-height: 100%;
