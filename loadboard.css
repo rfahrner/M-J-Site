@@ -1522,3 +1522,16 @@ fieldset.rate-tier-box.is-overridden {
 .image-viewer-footer {
   flex: 0 0 auto;
 }
+.image-viewer-navigation {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex: 1 1 auto;
+}
+.image-viewer-navigation [data-viewer-page] {
+  min-width: 56px;
+  text-align: center;
+  color: var(--slate-600, #475569);
+  font-size: 13px;
+}

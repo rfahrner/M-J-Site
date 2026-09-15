@@ -1088,6 +1088,13 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const stage = overlay.querySelector(".image-viewer-stage");
     if (!stage) return;
 
+    const isGallery = targetEl.classList && targetEl.classList.contains("image-viewer-gallery");
+    const images = isGallery ? Array.from(targetEl.querySelectorAll("img")) : [targetEl];
+    if (!images.length) return;
+    let activeIndex = Number(overlay.dataset.viewerIndex || overlay.dataset.imageIndex || 0);
+    if (!Number.isFinite(activeIndex)) activeIndex = 0;
+    activeIndex = Math.max(0, Math.min(activeIndex, images.length - 1));
+    const rotations = images.map(() => 0);
     let scale = 1;
     let offsetX = 0;
     let offsetY = 0;
@@ -1095,13 +1102,26 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     let lastX = 0;
     let lastY = 0;
     const levelEl = overlay.querySelector("[data-viewer-zoom-level]");
+    const pageEl = overlay.querySelector("[data-viewer-page]");
+    const prevBtn = overlay.querySelector("[data-viewer-prev]");
+    const nextBtn = overlay.querySelector("[data-viewer-next]");
 
-    targetEl.style.transformOrigin = "center center";
-    targetEl.style.willChange = "transform";
-
+    const activeImage = () => images[activeIndex] || targetEl;
     const render = () => {
-      targetEl.style.transform = `translate3d(${offsetX}px, ${offsetY}px, 0) scale(${scale})`;
-      if (levelEl) levelEl.textContent = `${Math.round(scale * 100)}%`;
+      images.forEach((img, index) => {
+        img.hidden = index !== activeIndex;
+        img.classList.toggle("is-active-image", index === activeIndex);
+      });
+      const img = activeImage();
+      img.style.transformOrigin = "center center";
+      img.style.willChange = "transform";
+      img.style.transform = "translate3d(" + offsetX + "px, " + offsetY + "px, 0) scale(" + scale + ") rotate(" + rotations[activeIndex] + "deg)";
+      overlay.dataset.viewerIndex = String(activeIndex);
+      overlay.dataset.imageIndex = String(activeIndex);
+      if (levelEl) levelEl.textContent = Math.round(scale * 100) + "%";
+      if (pageEl) pageEl.textContent = (activeIndex + 1) + " / " + images.length;
+      if (prevBtn) prevBtn.classList.toggle("hidden", images.length <= 1);
+      if (nextBtn) nextBtn.classList.toggle("hidden", images.length <= 1);
     };
     const setScale = (next) => {
       scale = Math.min(4, Math.max(1, next));
@@ -1109,22 +1129,42 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       render();
     };
     const zoomBy = (factor) => setScale(scale * factor);
-    const reset = () => { scale = 1; offsetX = 0; offsetY = 0; render(); };
+    const reset = () => {
+      scale = 1;
+      offsetX = 0;
+      offsetY = 0;
+      rotations[activeIndex] = 0;
+      render();
+    };
+    const setActive = (nextIndex) => {
+      if (images.length <= 1) return;
+      activeIndex = (nextIndex + images.length) % images.length;
+      scale = 1;
+      offsetX = 0;
+      offsetY = 0;
+      render();
+    };
+    const rotate = () => {
+      rotations[activeIndex] = (rotations[activeIndex] + 90) % 360;
+      render();
+    };
 
     const zoomIn = overlay.querySelector("[data-viewer-zoom-in]");
     const zoomOut = overlay.querySelector("[data-viewer-zoom-out]");
     const resetBtn = overlay.querySelector("[data-viewer-reset]");
+    const rotateBtn = overlay.querySelector("[data-viewer-rotate]");
     if (zoomIn) zoomIn.addEventListener("click", () => zoomBy(1.25));
     if (zoomOut) zoomOut.addEventListener("click", () => zoomBy(0.8));
     if (resetBtn) resetBtn.addEventListener("click", reset);
+    if (rotateBtn) rotateBtn.addEventListener("click", rotate);
+    if (prevBtn) prevBtn.addEventListener("click", () => setActive(activeIndex - 1));
+    if (nextBtn) nextBtn.addEventListener("click", () => setActive(activeIndex + 1));
 
     stage.addEventListener("wheel", (e) => {
       e.preventDefault();
       zoomBy(e.deltaY < 0 ? 1.2 : 0.833333);
     }, { passive: false });
-
     stage.addEventListener("dblclick", () => setScale(scale > 1 ? 1 : 2));
-
     stage.addEventListener("pointerdown", (e) => {
       if (scale <= 1) return;
       dragging = true;
@@ -1164,6 +1204,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     overlay.className = "overlay image-lightbox-overlay";
     overlay.id = "board-image-overlay";
     overlay.dataset.imageIndex = String(selectedIndex);
+    overlay.dataset.viewerIndex = String(selectedIndex);
     overlay.innerHTML = `
       <div class="modal image-lightbox-content image-viewer-modal">
         <div class="modal-header image-viewer-header">
@@ -1173,6 +1214,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
             <span class="image-viewer-zoom-level" data-viewer-zoom-level>100%</span>
             <button type="button" class="btn btn-ghost" data-viewer-zoom-in title="Zoom in">+</button>
             <button type="button" class="btn btn-ghost" data-viewer-reset title="Reset view">Fit</button>
+            <button type="button" class="btn btn-ghost" data-viewer-rotate title="Rotate 90 degrees">↻</button>
             <button type="button" class="modal-close" id="board-image-close">&times;</button>
           </div>
         </div>
@@ -1182,6 +1224,11 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           </div>
         </div>
         <div class="modal-footer image-viewer-footer">
+          <div class="image-viewer-navigation">
+            <button type="button" class="btn btn-ghost" data-viewer-prev title="Previous image">‹</button>
+            <span data-viewer-page>1 / ${imageUrls.length}</span>
+            <button type="button" class="btn btn-ghost" data-viewer-next title="Next image">›</button>
+          </div>
           <button type="button" class="btn btn-ghost" id="board-image-delete" style="color:#b91c1c; border-color:#b91c1c;">Delete Image</button>
         </div>
       </div>`;
@@ -1197,7 +1244,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (deleteBtn) deleteBtn.addEventListener("click", () => {
       if (confirm("Delete this route image? This can't be undone.")) {
         close();
-        if (typeof onDelete === "function") onDelete(selectedIndex);
+        if (typeof onDelete === "function") onDelete(Number(overlay.dataset.imageIndex || selectedIndex));
       }
     });
     document.addEventListener("keydown", function escHandler(e) {
@@ -6120,7 +6167,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         const image = e.target.closest("[data-inline-image-src]");
         if (image) {
           const overlay = document.createElement("div"); overlay.className = "overlay image-lightbox-overlay"; overlay.id = "ld-inline-image-overlay";
-          overlay.innerHTML = `<div class="modal image-lightbox-content image-viewer-modal"><div class="modal-header image-viewer-header"><h3>Trip Sheet Image</h3><div class="image-viewer-toolbar"><button type="button" class="btn btn-ghost" data-viewer-zoom-out title="Zoom out">−</button><span class="image-viewer-zoom-level" data-viewer-zoom-level>100%</span><button type="button" class="btn btn-ghost" data-viewer-zoom-in title="Zoom in">+</button><button type="button" class="btn btn-ghost" data-viewer-reset title="Reset view">Fit</button><button class="modal-close" id="ld-inline-image-close">&times;</button></div></div><div class="image-viewer-stage"><img id="ld-inline-image" src="${escapeHtml(image.dataset.inlineImageSrc)}" alt="${escapeHtml(image.alt || "Trip Sheet Image")}"></div></div>`;
+          overlay.innerHTML = `<div class="modal image-lightbox-content image-viewer-modal"><div class="modal-header image-viewer-header"><h3>Trip Sheet Image</h3><div class="image-viewer-toolbar"><button type="button" class="btn btn-ghost" data-viewer-zoom-out title="Zoom out">−</button><span class="image-viewer-zoom-level" data-viewer-zoom-level>100%</span><button type="button" class="btn btn-ghost" data-viewer-zoom-in title="Zoom in">+</button><button type="button" class="btn btn-ghost" data-viewer-reset title="Reset view">Fit</button><button type="button" class="btn btn-ghost" data-viewer-rotate title="Rotate 90 degrees">↻</button><button class="modal-close" id="ld-inline-image-close">&times;</button></div></div><div class="image-viewer-stage"><img id="ld-inline-image" src="${escapeHtml(image.dataset.inlineImageSrc)}" alt="${escapeHtml(image.alt || "Trip Sheet Image")}"></div></div>`;
           document.body.appendChild(overlay);
           wireImageViewer(overlay, overlay.querySelector("#ld-inline-image"));
           const close = () => overlay.remove(); overlay.addEventListener("click", (ev) => { if (ev.target === overlay) close(); });
