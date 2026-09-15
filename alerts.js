@@ -348,7 +348,7 @@ import './paperwork-load-integration.js';
   export function wireAlertWidgetDrag(widget, header) {
     let dragging = false, moved = false, startX = 0, startY = 0, origLeft = 0, origTop = 0;
     header.addEventListener("mousedown", (e) => {
-      if (e.target.closest(".alert-widget-btn")) return; // don't start a drag from the min/close buttons
+      if (e.target.closest(".alert-widget-btn, .alert-action-btn")) return; // controls should not start a drag or collapse the widget
       dragging = true;
       moved = false;
       const rect = widget.getBoundingClientRect();
