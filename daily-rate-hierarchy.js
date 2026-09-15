@@ -327,27 +327,9 @@ function decorateLoadDetailsRatePanel() {
   if (!row) return;
   decoratingRatePanel = true;
   try {
-    const date = row.shiftDate || currentDate();
     const explanation = section.querySelector(":scope > .subtext");
-    const copy = `Rate card for ${date}. Date-specific location rates replace the permanent base for this day; negotiated driver rates are a floor; a manual total overrides both.`;
+    const copy = "Changes here apply only to this load. Date and location defaults are managed in Rate Settings; the driver's negotiated rate remains the minimum, and a manual total overrides the calculation.";
     if (explanation && explanation.textContent !== copy) explanation.textContent = copy;
-
-    const tiers = rates.getBoardRateTiers()?.[row.location || activeLocation] || [];
-    section.querySelectorAll("[data-rate-tier-id]").forEach((input) => {
-      const tier = tiers.find((item) => String(item.id) === String(input.dataset.rateTierId));
-      if (!tier) return;
-      const dayValue = rates.getDailyTierValue(row.location || activeLocation, date, tier);
-      if (document.activeElement !== input) input.value = dayValue;
-      input.title = `Today's location value. Permanent base: ${tier.rate}`;
-    });
-    section.querySelectorAll("[data-rate-setting-key]").forEach((input) => {
-      const def = (SETTING_DEFS[row.location || activeLocation] || []).find(([key]) => key === input.dataset.rateSettingKey);
-      const fallback = def?.[2] ?? 0;
-      const base = rates.getBaseSetting(row.location || activeLocation, input.dataset.rateSettingKey, fallback);
-      const dayValue = rates.getDailySettingValue(row.location || activeLocation, date, input.dataset.rateSettingKey, fallback);
-      if (document.activeElement !== input) input.value = dayValue;
-      input.title = `Today's location value. Permanent base: ${base}`;
-    });
 
     const breakdown = rates.calcLoadRateBreakdown(row.location || activeLocation, row);
     if (!row.rateManual) {
@@ -400,27 +382,6 @@ function installEventGuards() {
       openRateSettings();
       return;
     }
-  }, true);
-
-  // The old Load Details tier boxes were load-specific. Under the new
-  // hierarchy those boxes are the current day's location card, so capture
-  // their changes and save date-scoped values before the old handler sees it.
-  document.addEventListener("change", (event) => {
-    const input = event.target.closest?.("#ld-tab-content [data-rate-tier-id], #ld-tab-content [data-rate-setting-key]");
-    if (!input || !lb?.loadDetailsState) return;
-    const row = findStandardRow(lb.loadDetailsState.rowId);
-    if (!row) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    const date = row.shiftDate || currentDate();
-    const promise = input.dataset.rateTierId
-      ? rates.saveDailyTierRate(row.location || activeLocation, date, input.dataset.rateTierId, input.value)
-      : rates.saveDailySetting(row.location || activeLocation, date, input.dataset.rateSettingKey, input.value);
-    void promise.then(async (ok) => {
-      if (!ok) return;
-      await recalcAllActiveRows();
-      decorateLoadDetailsRatePanel();
-    });
   }, true);
 
   document.addEventListener("input", (event) => {
