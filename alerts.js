@@ -12,6 +12,7 @@ import './paperwork-load-integration.js';
   let boardAlerts = []; // current alerts, each with a stable key + firstSeenAt timestamp
   let alertFirstSeenAt = {}; // key -> Date, persists across scans so timestamps don't reset
   let alertScanTimer = null;
+  let alertUpdateListenerInstalled = false;
   let alertPanelExpanded = false;
   let alertPanelHasUnread = false;
   export function minsSinceMidnightNow() {
@@ -382,6 +383,10 @@ import './paperwork-load-integration.js';
   }
   export function startAlertScanning() {
     if (!$("#alert-widget")) injectAlertWidget();
+    if (!alertUpdateListenerInstalled) {
+      alertUpdateListenerInstalled = true;
+      window.addEventListener("dl-shift-updated", () => { refreshBoardAlerts(); });
+    }
     refreshBoardAlerts();
     if (alertScanTimer) clearInterval(alertScanTimer);
     alertScanTimer = setInterval(refreshBoardAlerts, 60 * 1000);
