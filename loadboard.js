@@ -1716,7 +1716,6 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // enters one; there is no dispatch-time or mileage-based fallback.
   function computeCalc(trip, row) {
     const dispatch = parseHHMM(trip.dispatchTime);
-    const miles = parseFloat(trip.routeMiles);
     const out = { etaNextDispatch: "", hosLeft: "", tripCallTime: "" };
     if (dispatch != null) out.tripCallTime = minsToClock(dispatch - 30);
 
