@@ -107,7 +107,7 @@ import './paperwork-load-integration.js';
             key: `preshift-escalate-${s.id}`, type: "preshift_escalate", location: s.location, shiftDbId: s.id,
             message: `${driverName} (${label}) — has not confirmed their ${clockLabel} shift today`,
             recipients: driverPhone ? [{ name: driverName, phone: driverPhone }] : [],
-            actionMessage: `This is D&L Transportation, ${driverName} — we still haven't heard from you about your ${clockLabel} shift today. Please call or text us right away.`,
+            actionMessage: `This is D&L Transportation, could we have an ETA for your ${clockLabel} kroger shift`,
           });
         } else if (minsUntilShift <= PRE_SHIFT_CALL_FOLLOWUP_MIN && minsUntilShift > -180) {
           // Stage 2: no ETA yet, prompt a call (no text button -- a text already went out in stage 1)
