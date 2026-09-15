@@ -2658,7 +2658,6 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const nextInRow = forward ? rowFields[idx + 1] : rowFields[idx - 1];
     if (nextInRow) {
       e.preventDefault();
-      e.preventDefault();
       requestAnimationFrame(() => { nextInRow.focus(); if (nextInRow.select && nextInRow.type !== "checkbox") nextInRow.select(); });
       return;
     }
