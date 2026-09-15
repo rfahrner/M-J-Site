@@ -2444,10 +2444,22 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     // off the row. An unrelated field changing elsewhere on this trip
     // shouldn't silently undo either one.
     localTrip.hasStopTimes = preservedHasStopTimes;
-    if (localTrip.routeImagePath === preservedImagePath) {
+    const imagePathsUnchanged =
+      JSON.stringify(localTrip.routeImagePaths || []) === JSON.stringify(preservedImagePaths || []);
+    if (imagePathsUnchanged && localTrip.routeImagePath === preservedImagePath) {
       localTrip.routeImagePaths = preservedImagePaths;
       localTrip.routeImageUrls = preservedImageUrls;
       localTrip.routeImageUrl = preservedImageUrls[0] || preservedImageUrl || "";
+    } else if ((localTrip.routeImagePaths || []).length) {
+      // A second user's upload can arrive here before a full sheet reload.
+      // Sign the new originals immediately so the gallery appears for every
+      // connected user, not just the uploader.
+      const imageTargets = localTrip.routeImagePaths.map((path, index) => ({ routeImageTarget: localTrip, index }));
+      batchSignImageUrls(BOARD_IMAGE_BUCKET, localTrip.routeImagePaths, imageTargets).then(() => {
+        const restoreFocus = captureFocusForRerender();
+        renderBoardTable();
+        restoreFocus();
+      });
     }
     // Trip fields have the same requirement as shift fields: route IDs,
     // trailers, statuses, checkboxes, pills, and images must all repaint for
