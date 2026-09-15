@@ -3138,7 +3138,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     $("#tg-group-tabs-wrap").classList.add("hidden"); // no group to pick — the checkboxes already picked them
     $("#tg-message").value = "";
     const dispatchModeCheckbox = $("#tg-dispatch-mode");
-    if (dispatchModeCheckbox) dispatchModeCheckbox.checked = true;
+    if (dispatchModeCheckbox) dispatchModeCheckbox.checked = false;
     $("#tg-setup-step").classList.remove("hidden");
     $("#tg-progress-step").classList.add("hidden");
     $("#tg-error").classList.add("hidden");
@@ -3153,7 +3153,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const rows = getSheet(state.activeLocation, state.activeDate).filter((r) => r.selected);
     const members = rows.map((r) => {
       const drv = r.driverId ? findDriver(r.driverId) : null;
-      return { name: drv ? drv.name : (r.driverNameText || "Unnamed"), phone: drv ? drv.phone : "", dispatcherPhone: drv ? drv.dispatcherPhone : "" };
+      return { name: drv ? drv.name : (r.driverNameText || "Unnamed"), phone: drv ? drv.phone : (r.cellSnapshot || ""), dispatcherPhone: drv ? drv.dispatcherPhone : "" };
     });
     beginTextBatchFlow(applyPhoneMode(members), "Selected Loads", message);
   }
@@ -3423,7 +3423,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const found = findRowAnywhere(rowId);
     if (!found) return;
     const drv = found.row.driverId ? findDriver(found.row.driverId) : null;
-    textDriverPhone(drv ? drv.phone : null);
+    textDriverPhone(drv ? drv.phone : (found.row.cellSnapshot || null));
   }
 
   function formatTextAddress(rawPhone) {
@@ -3595,7 +3595,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const msgEl = $("#tg-message");
     if (msgEl) msgEl.value = "";
     const dispatchModeCheckbox = $("#tg-dispatch-mode");
-    if (dispatchModeCheckbox) dispatchModeCheckbox.checked = true;
+    if (dispatchModeCheckbox) dispatchModeCheckbox.checked = false;
 
     // Both independent options default on whenever the modal opens.
     // The exclusion date starts on the user's current local date.
@@ -3622,7 +3622,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // pick the right number per member.
   function applyPhoneMode(members) {
     const checkbox = $("#tg-dispatch-mode");
-    const dispatchMode = checkbox ? checkbox.checked : true;
+    const dispatchMode = checkbox ? checkbox.checked : false;
     if (!dispatchMode) return members;
     return members.map((m) => {
       const dispatchPhone = m.dispatcherPhone && String(m.dispatcherPhone).trim();
