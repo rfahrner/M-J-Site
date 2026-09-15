@@ -6579,7 +6579,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         if (trip) {
           trip.autoRoutePlaceholder = false;
           trip[t.dataset.field] = t.value;
-remove auto-fill trigger          recalcRowCalcCellsInPlace(rowId);
+          recalcRowCalcCellsInPlace(rowId);
           scheduleTripSave(found.row, trip, found.row.trips.indexOf(trip) + 1);
           if (t.dataset.field === "routeMiles" || t.dataset.field === "stopCount") recomputeRowRate(found.row);
         }
