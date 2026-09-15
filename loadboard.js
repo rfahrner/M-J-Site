@@ -71,18 +71,16 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     { key: "trailerOut",  label: "Trailer #",         type: "text", pistachio: true },
     { key: "routeMiles",  label: "Miles",             type: "text", small: true, inputmode: "decimal", pistachio: true },
     { key: "stopCount",   label: "Stops",              type: "text", small: true, inputmode: "numeric", pistachio: true },
-    { key: "dispatchTime",label: "Dispatch Time",     type: "time", pistachio: true },
-    { key: "lastStopDepart",  label: "Last Stop Depart",   type: "time", pistachio: true, excludeLocations: ["delaware"] },
-    { key: "returnToDC",      label: "Return to DC",       type: "time", pistachio: true, excludeLocations: ["delaware"] },
-    { key: "salvage",     label: "Salvage",            type: "checkbox", group: "backhaul", pistachio: true, excludeLocations: ["delaware"] },
-    { key: "backhaul",    label: "B/Haul",             type: "checkbox", group: "backhaul", pistachio: true, excludeLocations: ["delaware"] },
-    { key: "salvageBhaulRefusedBy",  label: "Refused By",          type: "text", group: "backhaul", pistachio: true, excludeLocations: ["delaware"] },
-    { key: "backhaulTrailerNumber",  label: "B/Haul Trailer #",    type: "text", group: "backhaul", pistachio: true, excludeLocations: ["delaware"] },
-    { key: "returnEtaToDc",          label: "Return ETA to DC",    type: "time", group: "backhaul", pistachio: true, excludeLocations: ["delaware"] },
+    { key: "dispatchTime",  label: "Dispatch Time",     type: "time", pistachio: true },
+    { key: "lastStopDepart", label: "Last Stop Depart",   type: "time", pistachio: true, excludeLocations: ["delaware"] },
+    { key: "returnToDC",     label: "Return to DC",       type: "time", pistachio: true, excludeLocations: ["delaware"] },
+    { key: "salvage",        label: "Salvage",            type: "checkbox", group: "backhaul", pistachio: true, excludeLocations: ["delaware"] },
+    { key: "backhaul",       label: "B/Haul",             type: "checkbox", group: "backhaul", pistachio: true, excludeLocations: ["delaware"] },
+    { key: "backhaulTrailerNumber", label: "B/Haul Trailer #",    type: "text", group: "backhaul", pistachio: true, excludeLocations: ["delaware"] },
+    { key: "salvageBhaulRefusedBy", label: "Refused By",          type: "text", group: "backhaul", pistachio: true, excludeLocations: ["delaware"] },
+    { key: "returnEtaToDc",   label: "Return ETA to DC",    type: "time", group: "backhaul", pistachio: true, excludeLocations: ["delaware"] },
     { key: "routeImage",      label: "Image",              type: "image" },
     { key: "routeEstHours",   label: "Route Est Hours",    type: "text", small: true, inputmode: "decimal", group: "estimate", excludeLocations: ["delaware"] },
-    { key: "timeToFinalStop", label: "Time to Last Stop",  type: "text", small: true, inputmode: "decimal", group: "estimate", excludeLocations: ["delaware"] },
-    { key: "timeToDc",        label: "Time to DC",         type: "text", small: true, inputmode: "decimal", group: "estimate", excludeLocations: ["delaware"] },
     // Not in the latest specified order -- kept available (hidden by
     // default) rather than deleted, since removal wasn't explicit. Flagged
     // in chat; say the word if any of these should actually go.
@@ -93,15 +91,25 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     { key: "tripCallTime",    label: "Trip Call Time",     type: "calc", excludeLocations: ["delaware"] },
   ];
 
+  // Versioned so the new requested default replaces any prior per-browser order.
+  // Users can still drag columns afterward; this is the default shared by all boards.
+  const TRIP_COL_ORDER_STORAGE_KEY = "dl-trip-col-order-v2";
+  const DEFAULT_TRIP_COL_ORDER = [
+    "routeId", "tripId", "trailerOut", "routeMiles", "stopCount",
+    "dispatchTime", "lastStopDepart", "returnToDC", "salvage", "backhaul",
+    "backhaulTrailerNumber", "salvageBhaulRefusedBy", "returnEtaToDc", "routeImage",
+    "routeEstHours", "backhaulType", "etaToFinalStop", "estRouteComplete", "etaNextDispatch", "tripCallTime",
+  ];
+
   // Drag-to-reorder for the trip columns, persisted per-browser. Keeps
   // TRIP_SUBCOLS itself as the source of truth for which columns exist —
   // this is purely a display-order overlay on top of it, so adding or
   // removing a column in code later never gets silently lost: unknown
   // saved keys are dropped, and any column missing from a saved order
   // (newly added since) is appended at the end rather than hidden.
-  let tripColOrder = TRIP_SUBCOLS.map((c) => c.key);
+  let tripColOrder = DEFAULT_TRIP_COL_ORDER.slice();
   try {
-    const saved = JSON.parse(localStorage.getItem("dl-trip-col-order") || "null");
+    const saved = JSON.parse(localStorage.getItem(TRIP_COL_ORDER_STORAGE_KEY) || "null");
     if (Array.isArray(saved)) {
       const validKeys = new Set(TRIP_SUBCOLS.map((c) => c.key));
       const kept = saved.filter((k) => validKeys.has(k));
@@ -118,7 +126,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   }
 
   function saveTripColOrder() {
-    try { localStorage.setItem("dl-trip-col-order", JSON.stringify(tripColOrder)); } catch (e) { /* ignore quota errors */ }
+    try { localStorage.setItem(TRIP_COL_ORDER_STORAGE_KEY, JSON.stringify(tripColOrder)); } catch (e) { /* ignore quota errors */ }
   }
 
   function moveTripCol(key, beforeKey) {
@@ -6107,7 +6115,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           $("#columns-panel").innerHTML = buildColumnsPanelHtml();
         }
         if (e.target.id === "columns-reset-order") {
-          tripColOrder = TRIP_SUBCOLS.map((c) => c.key);
+          tripColOrder = DEFAULT_TRIP_COL_ORDER.slice();
           saveTripColOrder();
           renderBoardTable();
           $("#columns-panel").innerHTML = buildColumnsPanelHtml();
