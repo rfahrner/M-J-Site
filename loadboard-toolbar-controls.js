@@ -112,9 +112,12 @@ function init() {
   }
 
   // The same Load Details modal can be opened from a load board or Accounting.
-  // Use the same save verification / stop-time truth check in both places.
+  // Install the time-sheet completion behavior first so its capture listener
+  // normalizes the final values before the save-integrity guard snapshots them.
   if (driverListLocation() || currentFile() === 'accounting.html') {
-    import('./load-details-integrity.js').catch((e) => console.error('Failed to load Load Details integrity guard:', e));
+    import('./timesheet-completion-flow.js')
+      .then(() => import('./load-details-integrity.js'))
+      .catch((e) => console.error('Failed to load Load Details completion/integrity helpers:', e));
   }
 
   if (currentFile() === "mondelez.html") {
