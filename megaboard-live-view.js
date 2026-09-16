@@ -73,6 +73,19 @@ function keepCurrentRouteOnly(table) {
   });
 }
 
+function hideInactiveShiftRows(table) {
+  const statusIndex = headerIndex(table, 'Status');
+  [...table.querySelectorAll('tbody tr')].forEach((row) => {
+    if (row.classList.contains('mega-complete') || row.classList.contains('mega-tonu')) {
+      row.style.display = 'none';
+      return;
+    }
+    if (statusIndex < 0) return;
+    const status = normalizedCellText(row.children[statusIndex]).toLowerCase();
+    if (status === 'called off' || status === 'cancelled' || status === 'tonu') row.style.display = 'none';
+  });
+}
+
 function applyLiveView() {
   document.querySelectorAll('#mega-locations .mega-table').forEach((table) => {
     hideColumnByLabel(table, 'Rate');
@@ -80,6 +93,7 @@ function applyLiveView() {
   });
 
   document.querySelectorAll('#mega-locations .mega-standard-table').forEach(keepCurrentRouteOnly);
+  document.querySelectorAll('#mega-locations .mega-table').forEach(hideInactiveShiftRows);
 }
 
 let scheduled = false;
