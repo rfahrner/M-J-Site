@@ -137,6 +137,8 @@ function init() {
   if (currentFile() === 'accounting.html') {
     import('./accounting-route-images.js')
       .catch((e) => console.error('Failed to load Accounting route images:', e));
+    import('./accounting-audit-snapshots.js')
+      .catch((e) => console.error('Failed to load Accounting notes/change-history snapshots:', e));
   }
 
   if (currentFile() === "mondelez.html") {
