@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="loadboard.css">
   <link rel="stylesheet" href="megaboard.css">
   <link rel="stylesheet" href="megaboard-control-center.css">
+  <link rel="stylesheet" href="megaboard-rolling-window.css">
 </head>
 <body class="megaboard-page">
   <div class="topbar">
@@ -21,7 +22,7 @@
     <div class="mega-toolbar">
       <div>
         <h1>Megaboard</h1>
-        <div class="subtext">Every scheduled load from every live load board, grouped by location. Select one day or several days at the same time.</div>
+        <div class="subtext">Live operational view across every load board. A selected day also carries forward active overnight work and the next morning's 00:00–04:00 starts.</div>
       </div>
       <div class="mega-toolbar-actions">
         <button type="button" class="btn btn-ghost" id="mega-expand-all">Expand All</button>
@@ -34,7 +35,7 @@
       <div class="mega-filter-head">
         <div>
           <strong>Days to show</strong>
-          <div class="subtext">Available window: 7 days before today through 7 days after today.</div>
+          <div class="subtext">Available window: 7 days before today through 7 days after today. Each day includes live overnight carryover and early-AM handoff coverage.</div>
         </div>
         <div class="mega-filter-actions">
           <button type="button" class="btn btn-ghost" id="mega-today-only">Today</button>
@@ -73,5 +74,6 @@
   <script type="module" src="megaboard.js" defer></script>
   <script type="module" src="megaboard-control-center.js" defer></script>
   <script type="module" src="megaboard-live-view.js" defer></script>
+  <script type="module" src="megaboard-rolling-window.js" defer></script>
 </body>
 </html>
