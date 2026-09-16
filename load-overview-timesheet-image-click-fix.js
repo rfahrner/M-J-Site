@@ -1,3 +1,5 @@
+import './alert-text-button-fix.js';
+
 /*
  * Prevent the Load Details > Overview Time Sheet Image picker from
  * recursively re-clicking its own hidden file input.
