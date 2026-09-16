@@ -1,3 +1,4 @@
+import './site-nav-v2.js';
 import './preshift-pro-text.js';
 import './delaware-rate-tiers.js';
 import './daily-rate-hierarchy.js';
@@ -75,7 +76,7 @@ function normalizeBoardToolbar() {
   ensureDriverListButton();
   iconOnly(document.getElementById("btn-page-info"), "ⓘ", "Info");
   iconOnly(document.getElementById("btn-atlanta-rate-settings"), "$", "Rate Settings");
-  iconOnly(document.getElementById("btn-email-list"), "✉", "Email List");
+  iconOnly(document.getElementById("btn-email-list"), "$", "Rate Settings");
   document.getElementById("btn-add-load")?.remove();
   const empty = document.getElementById("board-empty-state");
   if (empty && /\+ Add Load/i.test(empty.textContent || "")) empty.textContent = "No loads yet for this day.";
