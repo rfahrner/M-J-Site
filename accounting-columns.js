@@ -10,6 +10,7 @@
    - Atlanta identifies routes by Trip ID; Delaware by Route ID.
    - By Driver totals line up with the Customer/Carrier header order.
    ================================================================ */
+import './accounting-pricing-v2.js';
 import { supabaseClient } from './loadboard.js';
 import { getAccountingRecordById } from './accounting.js';
 
