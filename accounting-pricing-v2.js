@@ -3,8 +3,11 @@
  *
  * Carrier Rate is owned by the load board and arrives in Accounting already
  * applied. The old Cost Level / Revenue Level controls no longer participate
- * in pricing. Atlanta keeps one small descriptive selector instead:
+ * in pricing. Atlanta keeps one descriptive Applied column instead:
  *   Base rate / Driver Rate / Daily Rate.
+ *
+ * Applied is display-only. It reports which rate source was used on the load
+ * board and cannot be changed from Accounting.
  *
  * The database now owns Atlanta Customer Rate calculation, so the UI treats
  * both Carrier Rate and Atlanta Customer Rate as calculated/read-only values.
@@ -20,13 +23,8 @@ function activeLocation() {
   return document.querySelector('#acct-location-tabs .location-tab.is-active')?.dataset.location || 'atlanta';
 }
 
-function appliedOptions(selected) {
-  const value = [1, 2, 3].includes(Number(selected)) ? Number(selected) : 1;
-  return [
-    [1, 'Base rate'],
-    [2, 'Driver Rate'],
-    [3, 'Daily Rate'],
-  ].map(([id, label]) => `<option value="${id}"${value === id ? ' selected' : ''}>${label}</option>`).join('');
+function appliedLabel(value) {
+  return ({ 1: 'Base rate', 2: 'Driver Rate', 3: 'Daily Rate' })[Number(value)] || 'Base rate';
 }
 
 function installStyles() {
@@ -39,8 +37,16 @@ function installStyles() {
       background: var(--slate-100, #eef1f6) !important;
       cursor: default;
     }
-    #accounting-table select[data-action="acct-applied-rate"] {
-      min-width: 104px;
+    #accounting-table .accounting-applied-label {
+      display: inline-block;
+      min-width: 92px;
+      padding: 3px 4px;
+      text-align: center;
+      font-size: 12.5px;
+      font-weight: 500;
+      color: inherit;
+      cursor: default;
+      user-select: text;
     }
   `;
   document.head.appendChild(style);
@@ -54,7 +60,7 @@ function normalizeHeader() {
   const cost = headers.find((th) => ['Cost Level', 'Applied'].includes(th.textContent.trim()));
   if (cost) {
     cost.textContent = 'Applied';
-    cost.title = 'Which load-board rate source was applied';
+    cost.title = 'Rate source applied on the load board';
   }
 
   const revenue = [...headRow.children].find((th) => th.textContent.trim() === 'Revenue Level');
@@ -72,19 +78,16 @@ function normalizeRow(row) {
   const revenueSelect = row.querySelector('[data-action="acct-revenue-level"]');
   if (revenueSelect) revenueSelect.closest('td')?.remove();
 
-  // Re-purpose the visual Cost Level cell only as the descriptive Applied
-  // source. Changing this never recalculates a dollar amount.
-  const applied = row.querySelector('[data-action="acct-cost-level"], [data-action="acct-applied-rate"]');
-  if (applied) {
-    applied.dataset.action = 'acct-applied-rate';
-    const selected = Number(rec.cost_level);
-    const expected = String([1, 2, 3].includes(selected) ? selected : 1);
-    if (applied.dataset.appliedOptions !== 'v2') {
-      applied.innerHTML = appliedOptions(expected);
-      applied.dataset.appliedOptions = 'v2';
+  // Applied is informational only. Replace the old Cost Level select with
+  // plain text so Accounting cannot alter which load-board rate was used.
+  const existingLabel = row.querySelector('[data-accounting-applied-label]');
+  const oldControl = row.querySelector('[data-action="acct-cost-level"], [data-action="acct-applied-rate"]');
+  const appliedCell = existingLabel?.closest('td') || oldControl?.closest('td');
+  if (appliedCell) {
+    const label = appliedLabel(rec.cost_level);
+    if (!existingLabel || existingLabel.textContent !== label || appliedCell.children.length !== 1) {
+      appliedCell.innerHTML = `<span class="accounting-applied-label" data-accounting-applied-label title="Rate source applied on the load board">${label}</span>`;
     }
-    if (applied.value !== expected) applied.value = expected;
-    applied.title = 'Label only — the dollar rate comes directly from the load board';
   }
 
   // A linked board record is the source of truth for carrier pay. Accounting
@@ -125,27 +128,6 @@ function scheduleNormalize() {
   requestAnimationFrame(normalizeTable);
 }
 
-async function saveAppliedSource(select) {
-  const id = Number(select.dataset.id);
-  const value = Number(select.value);
-  if (!id || ![1, 2, 3].includes(value) || !supabaseClient) return;
-  const rec = getAccountingRecordById(id);
-  const previous = rec?.cost_level;
-  if (rec) {
-    rec.cost_level = value;
-    rec.revenue_level = 99;
-  }
-  const { error } = await supabaseClient
-    .from(ACCOUNTING_TABLE)
-    .update({ cost_level: value, revenue_level: 99 })
-    .eq('id', id);
-  if (error) {
-    console.error('Could not save Applied rate source:', error);
-    if (rec) rec.cost_level = previous;
-    select.value = String([1, 2, 3].includes(Number(previous)) ? Number(previous) : 1);
-  }
-}
-
 async function refreshCalculatedRow(id) {
   if (!supabaseClient || !id) return;
   const { data, error } = await supabaseClient
@@ -163,6 +145,7 @@ async function refreshCalculatedRow(id) {
   const carrier = row.querySelector('[data-action="acct-carrier-pay"]');
   if (customer) customer.value = data.total_revenue == null ? '' : Number(data.total_revenue).toFixed(2);
   if (carrier) carrier.value = data.total_carrier_pay == null ? '' : Number(data.total_carrier_pay).toFixed(2);
+  normalizeRow(row);
 }
 
 function initAccountingPricingV2() {
@@ -170,17 +153,9 @@ function initAccountingPricingV2() {
   if (!table) return;
   installStyles();
 
-  // Capture changes before accounting.js's delegated listener. The Applied
-  // control has a new action name anyway, so the old Cost Level recalc path
-  // cannot fire.
   table.addEventListener('change', (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
-
-    if (target.dataset.action === 'acct-applied-rate') {
-      void saveAppliedSource(target);
-      return;
-    }
 
     if (target.dataset.action === 'acct-day-type' && activeLocation() === 'atlanta') {
       // accounting.js saves day_type; the DB trigger recalculates Customer
