@@ -134,6 +134,11 @@ function init() {
       .catch((e) => console.error('Failed to load Load Details completion/integrity helpers:', e));
   }
 
+  if (currentFile() === 'accounting.html') {
+    import('./accounting-route-images.js')
+      .catch((e) => console.error('Failed to load Accounting route images:', e));
+  }
+
   if (currentFile() === "mondelez.html") {
     import('./mondelez-completed-row-layout.js').catch((e) => console.error('Failed to load Mondelez completed-row layout:', e));
   }
