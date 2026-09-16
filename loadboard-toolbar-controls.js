@@ -76,7 +76,7 @@ function normalizeBoardToolbar() {
   ensureDriverListButton();
   iconOnly(document.getElementById("btn-page-info"), "ⓘ", "Info");
   iconOnly(document.getElementById("btn-atlanta-rate-settings"), "$", "Rate Settings");
-  iconOnly(document.getElementById("btn-email-list"), "$", "Rate Settings");
+  iconOnly(document.getElementById("btn-email-list"), "✉", "Email List");
   document.getElementById("btn-add-load")?.remove();
   const empty = document.getElementById("board-empty-state");
   if (empty && /\+ Add Load/i.test(empty.textContent || "")) empty.textContent = "No loads yet for this day.";
