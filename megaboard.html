@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Megaboard</title>
+  <link rel="stylesheet" href="loadboard.css">
+  <link rel="stylesheet" href="megaboard.css">
+</head>
+<body class="megaboard-page">
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <span>Dispatch</span>
+    </div>
+    <div class="tabs" id="tabs"></div>
+  </div>
+
+  <main class="mega-shell" id="megaboard-view">
+    <div class="mega-toolbar">
+      <div>
+        <h1>Megaboard</h1>
+        <div class="subtext">Every scheduled load from every live load board, grouped by location. Select one day or several days at the same time.</div>
+      </div>
+      <div class="mega-toolbar-actions">
+        <button type="button" class="btn btn-ghost" id="mega-expand-all">Expand All</button>
+        <button type="button" class="btn btn-ghost" id="mega-collapse-all">Collapse All</button>
+        <button type="button" class="btn" id="mega-refresh">Refresh</button>
+      </div>
+    </div>
+
+    <section class="mega-filter-card" aria-label="Megaboard date selection">
+      <div class="mega-filter-head">
+        <div>
+          <strong>Days to show</strong>
+          <div class="subtext">Available window: 7 days before today through 7 days after today.</div>
+        </div>
+        <div class="mega-filter-actions">
+          <button type="button" class="btn btn-ghost" id="mega-today-only">Today</button>
+          <button type="button" class="btn btn-ghost" id="mega-today-tomorrow">Today + Tomorrow</button>
+          <button type="button" class="btn btn-ghost" id="mega-all-days">All 15 Days</button>
+        </div>
+      </div>
+      <div class="mega-date-chips" id="mega-date-chips"></div>
+    </section>
+
+    <div class="mega-status-line" id="mega-status" role="status"></div>
+    <div class="mega-locations" id="mega-locations"></div>
+  </main>
+
+  <script src="supabase.min.js"></script>
+  <script type="module" src="megaboard.js" defer></script>
+</body>
+</html>
