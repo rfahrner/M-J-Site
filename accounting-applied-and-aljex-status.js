@@ -16,13 +16,33 @@ let fetchInFlight = false;
 let scheduled = false;
 let refreshTimer = null;
 
+function installAliasStyles() {
+  if (document.getElementById('accounting-carrier-alias-style')) return;
+  const style = document.createElement('style');
+  style.id = 'accounting-carrier-alias-style';
+  style.textContent = `
+    #accounting-table .accounting-applied-label.accounting-carrier-alias {
+      font-size:0 !important;
+    }
+    #accounting-table .accounting-applied-label.accounting-carrier-alias::after {
+      content:'Carrier rate';
+      font-size:12.5px;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
 function visibleRows() {
   return [...document.querySelectorAll('#accounting-table-body tr[id^="acct-"]')];
 }
 
 function normalizeAppliedLabels() {
+  // Do not rewrite textContent here: accounting-pricing-v2 also watches the
+  // table and would rewrite it back, causing an observer loop. Alias the old
+  // Driver Rate label visually instead while the underlying calculation stays
+  // untouched.
   document.querySelectorAll('#accounting-table [data-accounting-applied-label]').forEach((label) => {
-    if (/^driver rate$/i.test(label.textContent.trim())) label.textContent = 'Carrier rate';
+    label.classList.toggle('accounting-carrier-alias', /^driver rate$/i.test(label.textContent.trim()));
   });
 
   const heading = document.querySelector('#driverlist-view h1');
@@ -133,6 +153,7 @@ function init() {
   const table = document.getElementById('accounting-table');
   if (!table) return;
 
+  installAliasStyles();
   new MutationObserver(scheduleNormalize).observe(table, {
     childList: true,
     subtree: true,
