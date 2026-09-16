@@ -1,8 +1,9 @@
-// Rolling operational window for Megaboard.
-// The normal date view remains intact, but the selected day also surfaces:
-//   1) active carryover work from the prior evening/night, and
+// Rolling operational coverage for Megaboard.
+// A selected operational day includes:
+//   1) open route work carried over from the prior evening/night, and
 //   2) next-calendar-day starts from 00:00 through 04:00.
-// It also adds a compact live timeline for Today: active loads + what starts next.
+// These records are shown as route/load tables inside their location sections;
+// there is intentionally no separate "running now / running soon" people panel.
 
 const SUPABASE_URL = 'https://ygsapysqzwrpcimgvaqx.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_8b8bSIiYm5TzLTw0WG1pAw_5ZWW5ZPL';
@@ -11,23 +12,23 @@ const EARLY_AM_CUTOFF = 400;
 const CARRYOVER_EARLIEST = 1600;
 
 const STANDARD = {
-  atlanta: { key: 'kroger:atlanta', title: 'Atlanta', source: 'Kroger', href: 'index.html', timeZone: 'America/New_York' },
-  delaware: { key: 'kroger:delaware', title: 'Delaware', source: 'Kroger', href: 'dalaware.html', timeZone: 'America/New_York' },
-  buildingc: { key: 'kroger:buildingc', title: 'Building C', source: 'Kroger', href: 'buildingc.html', timeZone: 'America/New_York' },
+  atlanta: { key: 'kroger:atlanta', title: 'Atlanta', source: 'Kroger', href: 'index.html' },
+  delaware: { key: 'kroger:delaware', title: 'Delaware', source: 'Kroger', href: 'dalaware.html' },
+  buildingc: { key: 'kroger:buildingc', title: 'Building C', source: 'Kroger', href: 'buildingc.html' },
 };
-const HOUSTON = { key: 'kroger:houston', title: 'Houston', source: 'Kroger', href: 'houston.html', timeZone: 'America/Chicago' };
+const HOUSTON = { key: 'kroger:houston', title: 'Houston', source: 'Kroger', href: 'houston.html' };
 const MONDELEZ = {
-  westchester: { title: 'West Chester', timeZone: 'America/New_York' },
-  morris: { title: 'Morris', timeZone: 'America/Chicago' },
-  addison: { title: 'Addison', timeZone: 'America/Chicago' },
-  indianapolis: { title: 'Indianapolis', timeZone: 'America/Indiana/Indianapolis' },
-  louisville: { title: 'Louisville', timeZone: 'America/Kentucky/Louisville' },
-  spokane: { title: 'Spokane', timeZone: 'America/Los_Angeles' },
-  lasvegas: { title: 'Las Vegas', timeZone: 'America/Los_Angeles' },
-  boise: { title: 'Boise', timeZone: 'America/Boise' },
-  kent: { title: 'Kent', timeZone: 'America/Los_Angeles' },
-  saltlakecity: { title: 'Salt Lake City', timeZone: 'America/Denver' },
-  newberlin: { title: 'New Berlin', timeZone: 'America/Chicago' },
+  westchester: 'West Chester',
+  morris: 'Morris',
+  addison: 'Addison',
+  indianapolis: 'Indianapolis',
+  louisville: 'Louisville',
+  spokane: 'Spokane',
+  lasvegas: 'Las Vegas',
+  boise: 'Boise',
+  kent: 'Kent',
+  saltlakecity: 'Salt Lake City',
+  newberlin: 'New Berlin',
 };
 
 let client = null;
@@ -45,13 +46,26 @@ function esc(value) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
 }
+function text(value, fallback = '—') {
+  const raw = value == null ? '' : String(value).trim();
+  return raw || fallback;
+}
+function cell(value, className = '') {
+  return `<td${className ? ` class="${className}"` : ''}>${esc(text(value))}</td>`;
+}
 function pad(value) { return String(value).padStart(2, '0'); }
-function dateKey(date) { return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`; }
+function localDateKey(date = new Date()) {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
 function addDateKey(key, delta) {
   const [y, m, d] = key.split('-').map(Number);
   const date = new Date(y, m - 1, d, 12, 0, 0, 0);
   date.setDate(date.getDate() + delta);
-  return dateKey(date);
+  return localDateKey(date);
+}
+function prettyDate(key) {
+  const [y, m, d] = key.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 }
 function selectedDates() {
   return [...document.querySelectorAll('#mega-date-chips [data-mega-date].is-selected')]
@@ -63,12 +77,12 @@ function clockNumber(value) {
   const raw = String(value == null ? '' : value).trim();
   if (!raw) return null;
   const ampm = /\b(am|pm)\b/i.exec(raw)?.[1]?.toLowerCase() || null;
-  const match = raw.match(/(\d{1,2})(?:\s*:\s*(\d{2}))?/);
+  const colon = raw.match(/(\d{1,2})\s*:\s*(\d{2})/);
   let hour;
   let minute;
-  if (match && (raw.includes(':') || ampm)) {
-    hour = Number(match[1]);
-    minute = Number(match[2] || 0);
+  if (colon) {
+    hour = Number(colon[1]);
+    minute = Number(colon[2]);
   } else {
     const digits = raw.replace(/[^0-9]/g, '');
     if (!digits) return null;
@@ -87,42 +101,15 @@ function clockNumber(value) {
   if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
   return hour * 100 + minute;
 }
-function prettyClock(value) {
-  const n = clockNumber(value);
-  if (n == null) return String(value || '—');
-  const hour24 = Math.floor(n / 100);
-  const minute = n % 100;
-  const suffix = hour24 >= 12 ? 'PM' : 'AM';
-  const hour = hour24 % 12 || 12;
-  return `${hour}:${pad(minute)} ${suffix}`;
+function meaningfulTrip(trip) {
+  return !!String(trip?.route_id || trip?.trip_id || '').trim();
 }
-function meaningfulTrip(trip) { return !!String(trip?.route_id || trip?.trip_id || '').trim(); }
-function inactiveStandard(row) { return !!(row.shift_complete || row.tonu || row.called_off || row.load_cancelled); }
-function inactiveFlat(row) { return !!(row.shift_complete || row.tonu); }
-
-function timeZoneOffsetMs(date, timeZone) {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-  }).formatToParts(date);
-  const pick = (type) => Number(parts.find((part) => part.type === type)?.value || 0);
-  const asUtc = Date.UTC(pick('year'), pick('month') - 1, pick('day'), pick('hour') % 24, pick('minute'), pick('second'));
-  return asUtc - date.getTime();
+function inactiveStandard(row) {
+  return !!(row.shift_complete || row.tonu || row.called_off || row.load_cancelled);
 }
-function zonedDateTime(key, clockValue, timeZone) {
-  const n = clockNumber(clockValue);
-  if (n == null || !/^\d{4}-\d{2}-\d{2}$/.test(String(key || ''))) return null;
-  const [year, month, day] = key.split('-').map(Number);
-  const wallUtc = Date.UTC(year, month - 1, day, Math.floor(n / 100), n % 100, 0);
-  let guess = new Date(wallUtc);
-  let offset = timeZoneOffsetMs(guess, timeZone);
-  guess = new Date(wallUtc - offset);
-  const secondOffset = timeZoneOffsetMs(guess, timeZone);
-  if (secondOffset !== offset) guess = new Date(wallUtc - secondOffset);
-  return guess;
+function inactiveFlat(row) {
+  return !!(row.shift_complete || row.tonu);
 }
-
 function groupBy(rows, fn) {
   const map = new Map();
   (rows || []).forEach((row) => {
@@ -133,306 +120,280 @@ function groupBy(rows, fn) {
   return map;
 }
 function currentTrip(tripsByShift, shiftId) {
-  const trips = (tripsByShift.get(shiftId) || []).filter(meaningfulTrip)
+  const trips = (tripsByShift.get(shiftId) || [])
+    .filter(meaningfulTrip)
     .sort((a, b) => Number(a.trip_number || 0) - Number(b.trip_number || 0));
   if (!trips.length) return null;
   const open = trips.filter((trip) => !trip.complete && !trip.minimized);
   return open.length ? open[open.length - 1] : trips[trips.length - 1];
 }
-function profileName(profiles, driverId, fallback) {
-  const profile = driverId ? profiles.get(String(driverId)) : null;
-  return profile?.['Driver Name'] || fallback || 'Unassigned';
+function openCurrentTrip(tripsByShift, shiftId) {
+  const trips = (tripsByShift.get(shiftId) || [])
+    .filter(meaningfulTrip)
+    .sort((a, b) => Number(a.trip_number || 0) - Number(b.trip_number || 0));
+  const open = trips.filter((trip) => !trip.complete && !trip.minimized);
+  return open.length ? open[open.length - 1] : null;
 }
-
-function standardMeta(location) { return STANDARD[location] || null; }
+function profileFor(profiles, driverId) {
+  return driverId ? profiles.get(String(driverId)) || null : null;
+}
+function profileValue(profiles, driverId, column, fallback = '') {
+  const profile = profileFor(profiles, driverId);
+  const value = profile?.[column];
+  return value != null && String(value).trim() !== '' ? value : fallback;
+}
+function profileName(profiles, driverId, fallback = '') {
+  return profileValue(profiles, driverId, 'Driver Name', fallback);
+}
 function mondelezMeta(location) {
-  const base = MONDELEZ[location];
-  if (!base) return null;
-  return {
-    key: `mondelez:${location}`,
-    title: base.title,
-    source: 'Mondelez',
-    href: `mondelez.html?loc=${encodeURIComponent(location)}`,
-    timeZone: base.timeZone,
-  };
+  const title = MONDELEZ[location];
+  if (!title) return null;
+  return { key: `mondelez:${location}`, title, source: 'Mondelez', href: `mondelez.html?loc=${encodeURIComponent(location)}` };
 }
 
-function standardItem(shift, trip, profiles, kind, operationalDate) {
-  const meta = standardMeta(shift.location);
+function standardEntry(shift, trip, profiles, kind, operationalDate) {
+  const meta = STANDARD[shift.location];
   if (!meta) return null;
   const driverId = trip?.driver_id || shift.driver_id;
   return {
-    kind,
-    operationalDate,
-    meta,
+    type: 'standard', kind, operationalDate, meta,
     id: `standard:${shift.id}`,
-    driver: profileName(profiles, driverId, shift.driver_name_text),
-    load: shift.pro_number || shift.aljex_load_number || 'Load',
-    route: trip?.trip_id || trip?.route_id || '',
-    start: shift.shift_start,
-    shiftDate: shift.shift_date,
-    timeZone: meta.timeZone,
-    active: !inactiveStandard(shift),
+    shift, trip,
+    driverId,
+    driverName: profileName(profiles, driverId, shift.driver_name_text),
+    mc: profileValue(profiles, driverId, 'MC', shift.mc_snapshot),
+    cellPhone: profileValue(profiles, driverId, 'Driver Cell', shift.driver_cell_snapshot),
   };
 }
-function houstonItem(row, profiles, kind, operationalDate) {
+function houstonEntry(row, profiles, kind, operationalDate) {
   return {
-    kind,
-    operationalDate,
-    meta: HOUSTON,
-    id: `houston:${row.id}`,
-    driver: profileName(profiles, row.driver_id, row.driver_name),
-    load: row.aljex_number || 'Houston load',
-    route: '',
-    start: row.time,
-    shiftDate: row.shift_date,
-    timeZone: HOUSTON.timeZone,
-    active: !inactiveFlat(row),
+    type: 'houston', kind, operationalDate, meta: HOUSTON,
+    id: `houston:${row.id}`, row,
+    driverName: profileName(profiles, row.driver_id, row.driver_name),
+    phone: profileValue(profiles, row.driver_id, 'Driver Cell', row.driver_phone),
+    carrier: profileValue(profiles, row.driver_id, 'Carrier', row.carrier),
+    mc: profileValue(profiles, row.driver_id, 'MC', row.mc),
   };
 }
-function mondelezItem(row, profiles, kind, operationalDate) {
+function mondelezEntry(row, profiles, kind, operationalDate) {
   const meta = mondelezMeta(row.location);
   if (!meta) return null;
   return {
-    kind,
-    operationalDate,
-    meta,
-    id: `mondelez:${row.id}`,
-    driver: profileName(profiles, row.driver_id, row.driver_name),
-    load: row.aljex_number || row.delivery_group || 'Mondelez load',
-    route: row.delivery_group || '',
-    start: row.start_time,
-    shiftDate: row.shift_date,
-    timeZone: meta.timeZone,
-    active: !inactiveFlat(row),
+    type: 'mondelez', kind, operationalDate, meta,
+    id: `mondelez:${row.id}`, row,
+    driverName: profileName(profiles, row.driver_id, row.driver_name),
+    phone: profileValue(profiles, row.driver_id, 'Driver Cell', ''),
   };
 }
 
-function buildRollingItems(data, dates) {
+function buildOperationalEntries(data, dates) {
   const selected = new Set(dates);
-  const items = [];
+  const entries = [];
+
   for (const operationalDate of dates) {
     const prev = addDateKey(operationalDate, -1);
     const next = addDateKey(operationalDate, 1);
-    const includePrev = !selected.has(prev);
-    const includeNext = !selected.has(next);
 
-    if (includePrev) {
+    // Prior-day carryover: show route work that is still genuinely open. For
+    // standard boards the open route itself is the proof that it is still live.
+    if (!selected.has(prev)) {
       for (const shift of data.standardShifts) {
         if (shift.shift_date !== prev || inactiveStandard(shift)) continue;
-        const trip = currentTrip(data.tripsByShift, shift.id);
+        const trip = openCurrentTrip(data.tripsByShift, shift.id);
+        if (!trip) continue;
         const start = clockNumber(shift.shift_start);
-        const clearlyRunning = !!(trip && !trip.complete && (trip.dispatch_time || start == null || start >= CARRYOVER_EARLIEST));
-        if (!clearlyRunning && !(start != null && start >= CARRYOVER_EARLIEST)) continue;
-        const item = standardItem(shift, trip, data.profiles, 'carryover', operationalDate);
-        if (item) items.push(item);
+        const hasDispatch = !!String(trip.dispatch_time || '').trim();
+        if (!hasDispatch && start != null && start < CARRYOVER_EARLIEST) continue;
+        const entry = standardEntry(shift, trip, data.profiles, 'carryover', operationalDate);
+        if (entry) entries.push(entry);
       }
       for (const row of data.houstonRows) {
         const start = clockNumber(row.time);
         if (row.shift_date !== prev || inactiveFlat(row) || start == null || start < CARRYOVER_EARLIEST) continue;
-        items.push(houstonItem(row, data.profiles, 'carryover', operationalDate));
+        entries.push(houstonEntry(row, data.profiles, 'carryover', operationalDate));
       }
       for (const row of data.mondelezRows) {
         const start = clockNumber(row.start_time);
         if (row.shift_date !== prev || inactiveFlat(row) || start == null || start < CARRYOVER_EARLIEST) continue;
-        const item = mondelezItem(row, data.profiles, 'carryover', operationalDate);
-        if (item) items.push(item);
+        const entry = mondelezEntry(row, data.profiles, 'carryover', operationalDate);
+        if (entry) entries.push(entry);
       }
     }
 
-    if (includeNext) {
+    // Next-day handoff: the night shift needs the 00:00–04:00 work on the
+    // selected day's board even though its calendar date is technically next day.
+    if (!selected.has(next)) {
       for (const shift of data.standardShifts) {
         const start = clockNumber(shift.shift_start);
         if (shift.shift_date !== next || inactiveStandard(shift) || start == null || start > EARLY_AM_CUTOFF) continue;
-        const item = standardItem(shift, currentTrip(data.tripsByShift, shift.id), data.profiles, 'early', operationalDate);
-        if (item) items.push(item);
+        const entry = standardEntry(shift, currentTrip(data.tripsByShift, shift.id), data.profiles, 'early', operationalDate);
+        if (entry) entries.push(entry);
       }
       for (const row of data.houstonRows) {
         const start = clockNumber(row.time);
         if (row.shift_date !== next || inactiveFlat(row) || start == null || start > EARLY_AM_CUTOFF) continue;
-        items.push(houstonItem(row, data.profiles, 'early', operationalDate));
+        entries.push(houstonEntry(row, data.profiles, 'early', operationalDate));
       }
       for (const row of data.mondelezRows) {
         const start = clockNumber(row.start_time);
         if (row.shift_date !== next || inactiveFlat(row) || start == null || start > EARLY_AM_CUTOFF) continue;
-        const item = mondelezItem(row, data.profiles, 'early', operationalDate);
-        if (item) items.push(item);
+        const entry = mondelezEntry(row, data.profiles, 'early', operationalDate);
+        if (entry) entries.push(entry);
       }
     }
   }
+
   const seen = new Set();
-  return items.filter((item) => {
-    const key = `${item.operationalDate}|${item.id}|${item.kind}`;
+  return entries.filter((entry) => {
+    const key = `${entry.operationalDate}|${entry.id}|${entry.kind}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
 }
 
+function imageCell(path) {
+  return path ? '<span class="mega-image-yes" title="Image attached">▧</span>' : '—';
+}
+function statusPill(label, kind) {
+  return `<span class="mega-status-pill ${esc(kind || '')}">${esc(label)}</span>`;
+}
+function sourceBadge(entry) {
+  return entry.kind === 'carryover'
+    ? '<span class="mega-operational-badge carryover">OVERNIGHT</span>'
+    : '<span class="mega-operational-badge early">EARLY AM</span>';
+}
+function standardTable(entries) {
+  const hasNonDelaware = entries.some((entry) => entry.shift.location !== 'delaware');
+  const body = entries.map((entry) => {
+    const { shift, trip } = entry;
+    const building = shift.location === 'buildingc';
+    const nonDelaware = shift.location !== 'delaware';
+    return `<tr>
+      <td>${sourceBadge(entry)}</td>
+      ${cell(trip?.route_id, 'mega-trip-cell')}
+      ${cell(trip?.trip_id, 'mega-trip-cell')}
+      ${cell(trip?.trailer_out, 'mega-trip-cell')}
+      ${cell(trip?.route_miles, 'mega-trip-cell')}
+      ${cell(trip?.stop_count, 'mega-trip-cell')}
+      ${cell(trip?.dispatch_time, 'mega-trip-cell')}
+      ${hasNonDelaware ? cell(nonDelaware ? trip?.last_stop_depart : '', 'mega-trip-cell') : ''}
+      ${hasNonDelaware ? cell(nonDelaware ? trip?.return_to_dc : '', 'mega-trip-cell') : ''}
+      ${hasNonDelaware ? cell(nonDelaware ? trip?.return_eta_to_dc : '', 'mega-trip-cell') : ''}
+      <td class="mega-trip-cell">${imageCell(trip?.route_image_path)}</td>
+      ${cell(shift.pro_number, 'mega-load-cell')}
+      ${cell(entry.driverName, 'mega-load-cell')}
+      ${cell(entry.mc, 'mega-load-cell')}
+      ${cell(entry.cellPhone, 'mega-load-cell')}
+      ${cell(shift.shift_start, 'mega-load-cell')}
+      ${building ? cell(shift.route_type || (shift.birm ? 'BIRM' : ''), 'mega-load-cell') : ''}
+      <td class="mega-load-cell mega-notes-cell">${esc(text(shift.notes || shift.comments))}</td>
+      <td>${statusPill(entry.kind === 'carryover' ? 'Open' : 'Scheduled', entry.kind === 'carryover' ? 'open' : '')}</td>
+    </tr>`;
+  }).join('');
+
+  const buildingHeader = entries.some((entry) => entry.shift.location === 'buildingc') ? '<th>Route Type</th>' : '';
+  return `<div class="mega-table-scroll"><table class="mega-table mega-operational-table">
+    <thead><tr>
+      <th>Window</th><th>Route ID</th><th>Trip ID</th><th>Trailer #</th><th>Miles</th><th>Stops</th><th>Dispatch Time</th>
+      ${hasNonDelaware ? '<th>Last Stop Depart</th><th>Return to DC</th><th>Return ETA</th>' : ''}
+      <th>Image</th><th>PRO#</th><th>Driver</th><th>MC #</th><th>Cell</th><th>Shift Start</th>${buildingHeader}<th>Notes</th><th>Status</th>
+    </tr></thead><tbody>${body}</tbody>
+  </table></div>`;
+}
+function houstonTable(entries) {
+  const body = entries.map((entry) => {
+    const row = entry.row;
+    return `<tr>
+      <td>${sourceBadge(entry)}</td>
+      ${cell(row.aljex_number)}${cell(row.time)}${cell(row.ttc)}${cell(row.ttt)}
+      ${cell(entry.carrier)}${cell(entry.mc)}${cell(entry.driverName)}${cell(entry.phone)}
+      <td class="mega-notes-cell">${esc(text(row.comments))}</td>
+      <td class="mega-notes-cell">${esc(text(row.time_out_remarks))}</td>
+      <td>${imageCell(row.route_image_path)}</td><td>${statusPill(entry.kind === 'carryover' ? 'Open' : 'Scheduled', entry.kind === 'carryover' ? 'open' : '')}</td>
+    </tr>`;
+  }).join('');
+  return `<div class="mega-table-scroll"><table class="mega-table mega-operational-table">
+    <thead><tr><th>Window</th><th>Aljex #</th><th>Time</th><th>TTC</th><th>TTT</th><th>Carrier</th><th>MC #</th><th>Driver</th><th>Phone</th><th>Comments</th><th>Time Out / Remarks</th><th>Image</th><th>Status</th></tr></thead>
+    <tbody>${body}</tbody></table></div>`;
+}
+function mondelezTable(entries) {
+  const body = entries.map((entry) => {
+    const row = entry.row;
+    return `<tr>
+      <td>${sourceBadge(entry)}</td>
+      ${cell(row.delivery_group)}${cell(row.aljex_number)}${cell(row.trailer_number)}${cell(row.return_trailer_number)}${cell(row.miles)}${cell(row.stop_count)}${cell(row.start_time)}
+      ${cell(entry.driverName)}${cell(entry.phone)}
+      <td class="mega-notes-cell">${esc(text(row.notes))}</td>
+      <td>${imageCell(row.route_image_path)}</td><td>${statusPill(entry.kind === 'carryover' ? 'Open' : 'Scheduled', entry.kind === 'carryover' ? 'open' : '')}</td>
+    </tr>`;
+  }).join('');
+  return `<div class="mega-table-scroll"><table class="mega-table mega-operational-table">
+    <thead><tr><th>Window</th><th>DG# / Route</th><th>Aljex #</th><th>Trailer #</th><th>Return Trailer #</th><th>Miles</th><th>Stops</th><th>Start</th><th>Driver</th><th>Cell</th><th>Notes</th><th>Route Image</th><th>Status</th></tr></thead>
+    <tbody>${body}</tbody></table></div>`;
+}
+function renderOperationalBlock(entries, operationalDate) {
+  const carry = entries.filter((entry) => entry.kind === 'carryover').length;
+  const early = entries.filter((entry) => entry.kind === 'early').length;
+  const table = entries[0]?.type === 'standard'
+    ? standardTable(entries)
+    : entries[0]?.type === 'houston'
+      ? houstonTable(entries)
+      : mondelezTable(entries);
+  const summary = [
+    carry ? `${carry} overnight route${carry === 1 ? '' : 's'}` : '',
+    early ? `${early} early-AM route${early === 1 ? '' : 's'}` : '',
+  ].filter(Boolean).join(' · ');
+  return `<div class="mega-day-block mega-operational-extra" data-mega-operational-date="${esc(operationalDate)}">
+    <div class="mega-day-head"><span>Operational coverage for ${esc(prettyDate(operationalDate))}</span><span class="mega-day-count">${esc(summary)}</span></div>
+    ${table}
+  </div>`;
+}
+
 function removeInjected() {
-  document.querySelectorAll('.mega-rolling-ribbon').forEach((node) => node.remove());
+  document.querySelectorAll('.mega-operational-extra').forEach((node) => node.remove());
   document.querySelectorAll('.mega-location[data-mega-rolling-only="true"]').forEach((node) => node.remove());
+  document.getElementById('mega-live-timeline')?.remove();
 }
-function locationSection(item) {
-  return document.querySelector(`#mega-locations [data-mega-location="${CSS.escape(item.meta.key)}"]`);
+function locationSection(meta) {
+  return document.querySelector(`#mega-locations [data-mega-location="${CSS.escape(meta.key)}"]`);
 }
-function ensureRollingOnlySection(item) {
-  let section = locationSection(item);
+function ensureSection(entry) {
+  let section = locationSection(entry.meta);
   if (section) return section;
   const wrap = document.getElementById('mega-locations');
   if (!wrap) return null;
   section = document.createElement('section');
   section.className = 'mega-location';
-  section.dataset.megaLocation = item.meta.key;
+  section.dataset.megaLocation = entry.meta.key;
   section.dataset.megaRollingOnly = 'true';
   section.innerHTML = `<div class="mega-location-head">
-    <div class="mega-location-toggle mega-rolling-static-head">
-      <span class="mega-location-title">${esc(item.meta.title)}</span>
-      <span class="mega-source-badge">${esc(item.meta.source)}</span>
-      <span class="mega-count-badge">Rolling window</span>
+    <div class="mega-location-toggle mega-operational-static-head">
+      <span class="mega-location-chevron">▾</span>
+      <span class="mega-location-title">${esc(entry.meta.title)}</span>
+      <span class="mega-source-badge">${esc(entry.meta.source)}</span>
+      <span class="mega-count-badge">Operational coverage</span>
     </div>
-    <a class="mega-native-link" href="${esc(item.meta.href)}">Open native board ↗</a>
+    <a class="mega-native-link" href="${esc(entry.meta.href)}">Open native board ↗</a>
   </div><div class="mega-location-body"></div>`;
   wrap.appendChild(section);
   return section;
 }
-function renderRibbon(items, operationalDate) {
-  const carryover = items.filter((item) => item.kind === 'carryover');
-  const early = items.filter((item) => item.kind === 'early');
-  const rows = [...carryover, ...early];
-  if (!rows.length) return '';
-  return `<div class="mega-rolling-ribbon" data-mega-operational-date="${esc(operationalDate)}">
-    <div class="mega-rolling-ribbon-head">
-      <strong>Rolling window</strong>
-      <span>${carryover.length ? `${carryover.length} running from last night` : 'No carryover'}${early.length ? ` · ${early.length} early-AM start${early.length === 1 ? '' : 's'}` : ''}</span>
-    </div>
-    <div class="mega-rolling-list">${rows.map((item) => `<a class="mega-rolling-item ${item.kind}" href="${esc(item.meta.href)}" title="Open ${esc(item.meta.title)} board">
-      <span class="mega-rolling-tag">${item.kind === 'carryover' ? 'RUNNING' : 'EARLY AM'}</span>
-      <strong>${esc(item.driver)}</strong>
-      <span>${esc(item.load)}</span>
-      ${item.route ? `<span class="mega-rolling-route">${esc(item.route)}</span>` : ''}
-      <span class="mega-rolling-time">${esc(prettyClock(item.start))}${item.kind === 'early' ? ' tomorrow' : ' start'}</span>
-    </a>`).join('')}</div>
-  </div>`;
-}
-function injectRollingRibbons(items, dates) {
+function injectOperationalRoutes(entries) {
   removeInjected();
-  if (!items.length) return;
-  const byLocationDate = groupBy(items, (item) => `${item.meta.key}|${item.operationalDate}`);
-  const touchedSections = new Set();
-  for (const [, groupedItems] of byLocationDate) {
-    const first = groupedItems[0];
-    const section = ensureRollingOnlySection(first);
+  if (!entries.length) return;
+  const grouped = groupBy(entries, (entry) => `${entry.meta.key}|${entry.operationalDate}`);
+  for (const [, group] of grouped) {
+    const section = ensureSection(group[0]);
     const body = section?.querySelector('.mega-location-body');
     if (!body) continue;
-    if (!touchedSections.has(section)) {
-      body.querySelectorAll('.mega-rolling-ribbon').forEach((node) => node.remove());
-      touchedSections.add(section);
-    }
-    const html = renderRibbon(groupedItems, first.operationalDate);
-    if (!html) continue;
     const holder = document.createElement('div');
-    holder.innerHTML = html;
+    holder.innerHTML = renderOperationalBlock(group, group[0].operationalDate);
     body.insertBefore(holder.firstElementChild, body.firstChild);
   }
 }
 
-function isTodaySelected(dates) { return dates.includes(dateKey(new Date())); }
-function buildLiveTimeline(data, dates) {
-  if (!isTodaySelected(dates)) return { running: [], soon: [] };
-  const today = dateKey(new Date());
-  const yesterday = addDateKey(today, -1);
-  const tomorrow = addDateKey(today, 1);
-  const now = new Date();
-  const running = [];
-  const soon = [];
-
-  const consider = (item) => {
-    if (!item) return;
-    const startsAt = zonedDateTime(item.shiftDate, item.start, item.timeZone);
-    if (!startsAt) return;
-    if (item.shiftDate === yesterday && item.active) {
-      const n = clockNumber(item.start);
-      if (n != null && n >= CARRYOVER_EARLIEST) running.push({ ...item, startsAt });
-      return;
-    }
-    if (item.shiftDate === today) {
-      if (item.active && startsAt.getTime() <= now.getTime()) running.push({ ...item, startsAt });
-      else if (startsAt.getTime() > now.getTime()) soon.push({ ...item, startsAt });
-      return;
-    }
-    if (item.shiftDate === tomorrow) {
-      const n = clockNumber(item.start);
-      if (n != null && n <= EARLY_AM_CUTOFF) soon.push({ ...item, startsAt });
-    }
-  };
-
-  for (const shift of data.standardShifts) {
-    if (!STANDARD[shift.location] || inactiveStandard(shift)) continue;
-    consider(standardItem(shift, currentTrip(data.tripsByShift, shift.id), data.profiles, 'live', today));
-  }
-  for (const row of data.houstonRows) {
-    if (inactiveFlat(row)) continue;
-    consider(houstonItem(row, data.profiles, 'live', today));
-  }
-  for (const row of data.mondelezRows) {
-    if (inactiveFlat(row)) continue;
-    consider(mondelezItem(row, data.profiles, 'live', today));
-  }
-
-  const dedupe = (list) => {
-    const seen = new Set();
-    return list.filter((item) => {
-      if (seen.has(item.id)) return false;
-      seen.add(item.id);
-      return true;
-    });
-  };
-  return {
-    running: dedupe(running).sort((a, b) => a.startsAt - b.startsAt),
-    soon: dedupe(soon).sort((a, b) => a.startsAt - b.startsAt),
-  };
-}
-function timelineItem(item, kind) {
-  return `<a class="mega-live-item ${kind}" href="${esc(item.meta.href)}">
-    <span class="mega-live-dot"></span>
-    <div><strong>${esc(item.driver)}</strong><span>${esc(item.meta.title)} · ${esc(item.load)}${item.route ? ` · ${esc(item.route)}` : ''}</span></div>
-    <time>${esc(prettyClock(item.start))}</time>
-  </a>`;
-}
-function renderLiveTimeline(model, dates) {
-  const control = document.getElementById('mega-control-center');
-  if (!control) return;
-  let panel = document.getElementById('mega-live-timeline');
-  if (!panel) {
-    panel = document.createElement('div');
-    panel.id = 'mega-live-timeline';
-    panel.className = 'mega-live-timeline';
-    const head = control.querySelector('.mega-control-head');
-    if (head?.nextSibling) control.insertBefore(panel, head.nextSibling);
-    else control.appendChild(panel);
-  }
-  if (!isTodaySelected(dates)) {
-    panel.innerHTML = '<div class="mega-live-paused">Live timeline appears when <strong>Today</strong> is selected.</div>';
-    return;
-  }
-  const runningHtml = model.running.length
-    ? model.running.map((item) => timelineItem(item, 'running')).join('')
-    : '<div class="mega-live-empty">Nobody from the tracked boards is showing as actively running.</div>';
-  const soonHtml = model.soon.length
-    ? model.soon.map((item) => timelineItem(item, 'soon')).join('')
-    : '<div class="mega-live-empty">No additional starts are scheduled through the overnight 04:00 window.</div>';
-  panel.innerHTML = `<div class="mega-live-column">
-      <div class="mega-live-title"><strong>Running now</strong><span>${model.running.length}</span></div>
-      <div class="mega-live-scroll">${runningHtml}</div>
-    </div>
-    <div class="mega-live-column">
-      <div class="mega-live-title"><strong>Running soon</strong><span>${model.soon.length}</span></div>
-      <div class="mega-live-scroll">${soonHtml}</div>
-    </div>`;
-}
-
-async function fetchRollingData(dates) {
+async function fetchOperationalData(dates) {
   const queryDates = new Set();
   dates.forEach((key) => {
     queryDates.add(addDateKey(key, -1));
@@ -447,6 +408,7 @@ async function fetchRollingData(dates) {
   ]);
   const firstError = shiftResult.error || houstonResult.error || mondelezResult.error;
   if (firstError) throw firstError;
+
   const standardShifts = (shiftResult.data || []).filter((row) => STANDARD[row.location]);
   const shiftIds = standardShifts.map((row) => row.id);
   const tripResult = shiftIds.length
@@ -461,11 +423,15 @@ async function fetchRollingData(dates) {
   trips.forEach((row) => { if (row.driver_id) driverIds.add(Number(row.driver_id)); });
   (houstonResult.data || []).forEach((row) => { if (row.driver_id) driverIds.add(Number(row.driver_id)); });
   (mondelezResult.data || []).forEach((row) => { if (row.driver_id) driverIds.add(Number(row.driver_id)); });
+
   let profiles = [];
   if (driverIds.size) {
-    const profileResult = await client.from('atlanta_drivers').select('id,"Driver Name"').in('id', [...driverIds]).limit(5000);
+    const profileResult = await client.from('atlanta_drivers')
+      .select('id,"Driver Name","Driver Cell","MC","Carrier"')
+      .in('id', [...driverIds]).limit(5000);
     if (!profileResult.error) profiles = profileResult.data || [];
   }
+
   return {
     standardShifts,
     houstonRows: houstonResult.data || [],
@@ -475,24 +441,22 @@ async function fetchRollingData(dates) {
   };
 }
 
-async function refreshRollingWindow() {
+async function refreshOperationalWindow() {
   if (!client) return;
   const dates = selectedDates();
   if (!dates.length) return;
   const serial = ++refreshSerial;
   try {
-    const data = await fetchRollingData(dates);
+    const data = await fetchOperationalData(dates);
     if (serial !== refreshSerial) return;
-    const rollingItems = buildRollingItems(data, dates);
-    injectRollingRibbons(rollingItems, dates);
-    renderLiveTimeline(buildLiveTimeline(data, dates), dates);
+    injectOperationalRoutes(buildOperationalEntries(data, dates));
   } catch (error) {
-    console.error('Megaboard rolling window failed:', error);
+    console.error('Megaboard operational window failed:', error);
   }
 }
 function scheduleRefresh(delay = 180) {
   if (refreshTimer) clearTimeout(refreshTimer);
-  refreshTimer = setTimeout(refreshRollingWindow, delay);
+  refreshTimer = setTimeout(refreshOperationalWindow, delay);
 }
 function wireObservers() {
   const status = document.getElementById('mega-status');
@@ -503,32 +467,41 @@ function wireObservers() {
   const chips = document.getElementById('mega-date-chips');
   if (chips) {
     chipObserver = new MutationObserver(() => scheduleRefresh(100));
-    chipObserver.observe(chips, { attributes: true, subtree: true, attributeFilter: ['class', 'aria-pressed'] });
+    chipObserver.observe(chips, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'aria-pressed'] });
   }
 }
 function startRealtime() {
   if (!client || realtimeChannel) return;
-  realtimeChannel = client.channel('megaboard-rolling-window-v1')
+  realtimeChannel = client.channel('megaboard-operational-window-v2')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'loads_shifts' }, () => scheduleRefresh(250))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'loads_trips' }, () => scheduleRefresh(250))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'loads_houston' }, () => scheduleRefresh(250))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'mondelez_loads' }, () => scheduleRefresh(250))
     .subscribe();
 }
+
 async function init() {
-  if (!window.supabase) return;
-  client = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
-    auth: { persistSession: true, autoRefreshToken: true, storageKey: AUTH_STORAGE_KEY },
-  });
-  wireObservers();
-  await refreshRollingWindow();
-  startRealtime();
-  setInterval(() => scheduleRefresh(0), 60000);
+  try {
+    document.getElementById('mega-live-timeline')?.remove();
+    if (!window.supabase) return;
+    client = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+      auth: { persistSession: true, autoRefreshToken: true, storageKey: AUTH_STORAGE_KEY },
+    });
+    const { data } = await client.auth.getSession();
+    if (!data?.session) return;
+    wireObservers();
+    startRealtime();
+    scheduleRefresh(250);
+  } catch (error) {
+    console.error('Megaboard operational window init failed:', error);
+  }
 }
+
 window.addEventListener('beforeunload', () => {
+  if (statusObserver) statusObserver.disconnect();
+  if (chipObserver) chipObserver.disconnect();
   if (client && realtimeChannel) client.removeChannel(realtimeChannel);
-  statusObserver?.disconnect();
-  chipObserver?.disconnect();
 });
+
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
 else init();
