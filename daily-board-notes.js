@@ -15,6 +15,7 @@ const LOAD_BOARD_FILES = new Set(["", "index.html", "dalaware.html", "buildingc.
 
 let client = null;
 let loadingToken = 0;
+let indicatorToken = 0;
 
 function currentFile() {
   return location.pathname.split("/").pop() || "";
@@ -88,10 +89,11 @@ function ensureStyles() {
       display:block;
       width:17px;
       height:18px;
-      border:1.5px solid #5f5317;
+      border:1.5px solid #475569;
       border-radius:2px;
-      background:#f7df68;
+      background:#ffffff;
       box-shadow:0 1px 1px rgba(15,23,42,.12);
+      transition:background .14s ease, border-color .14s ease;
     }
     .daily-board-note-icon::before {
       content:"";
@@ -100,9 +102,10 @@ function ensureStyles() {
       right:-1.5px;
       width:6px;
       height:6px;
-      background:linear-gradient(225deg, #fff 49%, #d0b743 50%);
-      border-left:1px solid #5f5317;
-      border-bottom:1px solid #5f5317;
+      background:linear-gradient(225deg, #fff 49%, #cbd5e1 50%);
+      border-left:1px solid #475569;
+      border-bottom:1px solid #475569;
+      transition:background .14s ease, border-color .14s ease;
     }
     .daily-board-note-icon::after {
       content:"";
@@ -111,9 +114,22 @@ function ensureStyles() {
       right:3px;
       top:8px;
       height:1px;
+      background:#64748b;
+      box-shadow:0 3px 0 #64748b;
+      opacity:.75;
+    }
+    #btn-daily-board-notes.has-note .daily-board-note-icon {
+      background:#f7df68;
+      border-color:#5f5317;
+    }
+    #btn-daily-board-notes.has-note .daily-board-note-icon::before {
+      background:linear-gradient(225deg, #fff 49%, #d0b743 50%);
+      border-left-color:#5f5317;
+      border-bottom-color:#5f5317;
+    }
+    #btn-daily-board-notes.has-note .daily-board-note-icon::after {
       background:#8c7b28;
       box-shadow:0 3px 0 #8c7b28;
-      opacity:.75;
     }
     #modal-daily-board-notes .modal { width:min(680px, calc(100vw - 32px)); }
     #daily-board-notes-text {
@@ -163,6 +179,36 @@ function ensureModal() {
   return modal;
 }
 
+function setIndicator(hasNote) {
+  const button = document.getElementById("btn-daily-board-notes");
+  if (!button) return;
+  button.classList.toggle("has-note", !!hasNote);
+  button.title = hasNote ? "Daily Notes — note saved for this day" : "Daily Notes";
+  button.setAttribute("aria-label", hasNote ? "Daily Notes. A note is saved for this day." : "Daily Notes");
+}
+
+async function refreshNoteIndicator() {
+  const button = document.getElementById("btn-daily-board-notes");
+  if (!button) return;
+  const token = ++indicatorToken;
+  const c = getClient();
+  if (!c) {
+    setIndicator(false);
+    return;
+  }
+
+  const key = noteKey(boardScope(), selectedDate());
+  try {
+    const { data, error } = await c.from("location_notes").select("notes").eq("location", key).maybeSingle();
+    if (error) throw error;
+    if (token !== indicatorToken) return;
+    setIndicator(!!String(data?.notes || "").trim());
+  } catch (error) {
+    console.error("Daily notes indicator load failed:", error);
+    if (token === indicatorToken) setIndicator(false);
+  }
+}
+
 function installButton() {
   if (!isLoadBoardPage() || document.getElementById("btn-daily-board-notes")) return;
   const infoButton = document.getElementById("btn-page-info");
@@ -180,6 +226,8 @@ function installButton() {
   const emailButton = document.getElementById("btn-email-list");
   if (emailButton?.parentElement === infoButton.parentElement) emailButton.insertAdjacentElement("afterend", button);
   else infoButton.insertAdjacentElement("afterend", button);
+
+  refreshNoteIndicator();
 }
 
 async function openNotes() {
@@ -215,6 +263,7 @@ async function openNotes() {
     if (error) throw error;
     if (token !== loadingToken || modal.classList.contains("hidden")) return;
     text.value = data?.notes || "";
+    setIndicator(!!String(data?.notes || "").trim());
     status.textContent = "";
     text.disabled = false;
     requestAnimationFrame(() => text.focus());
@@ -253,6 +302,7 @@ async function saveNotes() {
       updated_at: new Date().toISOString(),
     }, { onConflict: "location" });
     if (error) throw error;
+    setIndicator(!!text.value.trim());
     status.className = "is-success";
     status.textContent = "Saved.";
     setTimeout(() => {
@@ -277,11 +327,26 @@ function normalizePlacement() {
   }
 }
 
+function installContextChangeListeners() {
+  document.addEventListener("change", (event) => {
+    if (event.target?.id === "date-input") setTimeout(refreshNoteIndicator, 0);
+  });
+  document.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) return;
+    if (target.closest("#date-prev, #date-next, #date-today, #date-dropdown [data-date], [data-mdz-tab]")) {
+      setTimeout(refreshNoteIndicator, 80);
+    }
+  });
+}
+
 function init() {
   if (!isLoadBoardPage()) return;
   ensureStyles();
   ensureModal();
   installButton();
+  installContextChangeListeners();
+  refreshNoteIndicator();
   const observer = new MutationObserver(normalizePlacement);
   observer.observe(document.documentElement, { childList: true, subtree: true });
 }
