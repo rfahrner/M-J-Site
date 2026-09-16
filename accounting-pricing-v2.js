@@ -1,21 +1,13 @@
 /*
  * Accounting pricing v2 presentation.
  *
- * Carrier Rate is owned by the load board and arrives in Accounting already
- * applied. The old Cost Level / Revenue Level controls no longer participate
- * in pricing. Atlanta keeps one descriptive Applied column instead:
- *   Base rate / Driver Rate / Daily Rate.
- *
- * Applied is display-only. It reports which rate source was used on the load
- * board and cannot be changed from Accounting.
- *
- * The database now owns Atlanta Customer Rate calculation, so the UI treats
- * both Carrier Rate and Atlanta Customer Rate as calculated/read-only values.
+ * Accounting receives the rate that was applied on the load board, but the
+ * dollar fields remain normal editable Accounting fields after they arrive.
+ * "Applied" is informational only: Base rate / Driver Rate / Daily Rate.
+ * Day Type and the old Revenue Level mechanic are no longer shown.
  */
-import { supabaseClient } from './loadboard.js';
 import { getAccountingRecordById } from './accounting.js';
 
-const ACCOUNTING_TABLE = 'loads_accounting';
 let scheduled = false;
 let applying = false;
 
@@ -32,39 +24,39 @@ function installStyles() {
   const style = document.createElement('style');
   style.id = 'accounting-pricing-v2-styles';
   style.textContent = `
-    #accounting-table input.accounting-board-rate,
-    #accounting-table input.accounting-customer-calculated {
-      background: var(--slate-100, #eef1f6) !important;
-      cursor: default;
-    }
     #accounting-table .accounting-applied-label {
-      display: inline-block;
-      min-width: 92px;
-      padding: 3px 4px;
-      text-align: center;
-      font-size: 12.5px;
-      font-weight: 500;
-      color: inherit;
-      cursor: default;
-      user-select: text;
+      display:block;
+      min-width:104px;
+      padding:7px 8px;
+      text-align:left;
+      white-space:nowrap;
+    }
+    #accounting-table input[data-action="acct-carrier-pay"],
+    #accounting-table input[data-action="acct-customer-rate"] {
+      cursor:text !important;
+      user-select:text;
     }
   `;
   document.head.appendChild(style);
+}
+
+function removeHeaderByText(headRow, text) {
+  const th = [...headRow.children].find((cell) => cell.textContent.trim() === text);
+  if (th) th.remove();
 }
 
 function normalizeHeader() {
   const headRow = document.querySelector('#accounting-table-head tr');
   if (!headRow) return;
 
-  const headers = [...headRow.children];
-  const cost = headers.find((th) => ['Cost Level', 'Applied'].includes(th.textContent.trim()));
+  const cost = [...headRow.children].find((th) => ['Cost Level', 'Applied'].includes(th.textContent.trim()));
   if (cost) {
     cost.textContent = 'Applied';
-    cost.title = 'Rate source applied on the load board';
+    cost.title = 'Rate source that was applied on the load board';
   }
 
-  const revenue = [...headRow.children].find((th) => th.textContent.trim() === 'Revenue Level');
-  if (revenue) revenue.remove();
+  removeHeaderByText(headRow, 'Revenue Level');
+  removeHeaderByText(headRow, 'Day Type');
 }
 
 function normalizeRow(row) {
@@ -73,40 +65,47 @@ function normalizeRow(row) {
   const rec = getAccountingRecordById(id);
   if (!rec) return;
 
-  // Remove the old Revenue Level control entirely. Day Type now chooses
-  // Core vs Holiday customer pricing in the database.
-  const revenueSelect = row.querySelector('[data-action="acct-revenue-level"]');
-  if (revenueSelect) revenueSelect.closest('td')?.remove();
+  // Old Revenue Level is gone.
+  row.querySelector('[data-action="acct-revenue-level"]')?.closest('td')?.remove();
 
-  // Applied is informational only. Replace the old Cost Level select with
-  // plain text so Accounting cannot alter which load-board rate was used.
-  const existingLabel = row.querySelector('[data-accounting-applied-label]');
-  const oldControl = row.querySelector('[data-action="acct-cost-level"], [data-action="acct-applied-rate"]');
-  const appliedCell = existingLabel?.closest('td') || oldControl?.closest('td');
-  if (appliedCell) {
-    const label = appliedLabel(rec.cost_level);
-    if (!existingLabel || existingLabel.textContent !== label || appliedCell.children.length !== 1) {
-      appliedCell.innerHTML = `<span class="accounting-applied-label" data-accounting-applied-label title="Rate source applied on the load board">${label}</span>`;
+  // Applied is display-only. It reports what arrived from the board and
+  // intentionally has no dropdown or change handler.
+  const oldAppliedControl = row.querySelector('[data-action="acct-cost-level"], [data-action="acct-applied-rate"]');
+  if (oldAppliedControl) {
+    const td = oldAppliedControl.closest('td');
+    if (td) {
+      const label = document.createElement('span');
+      label.className = 'accounting-applied-label';
+      label.dataset.accountingAppliedLabel = '1';
+      label.textContent = appliedLabel(rec.cost_level);
+      label.title = 'Informational only — this is what the load board applied';
+      td.replaceChildren(label);
     }
+  } else {
+    const label = row.querySelector('[data-accounting-applied-label]');
+    if (label) label.textContent = appliedLabel(rec.cost_level);
   }
 
-  // A linked board record is the source of truth for carrier pay. Accounting
-  // can see the applied dollar figure but cannot accidentally replace it with
-  // a second calculation.
+  // Day Type is no longer part of Accounting's workflow.
+  row.querySelector('[data-action="acct-day-type"]')?.closest('td')?.remove();
+
+  // These are ordinary editable Accounting inputs. The board value / customer
+  // formula provides the starting figure, but Accounting can click anywhere
+  // in the number and type exactly like any other text/number cell.
   const carrier = row.querySelector('[data-action="acct-carrier-pay"]');
-  if (carrier && (rec.source_shift_id || rec.source_houston_id)) {
-    carrier.readOnly = true;
-    carrier.classList.add('accounting-board-rate');
-    carrier.title = 'Applied on the load board';
+  if (carrier) {
+    carrier.readOnly = false;
+    carrier.removeAttribute('readonly');
+    carrier.classList.remove('accounting-board-rate');
+    carrier.title = 'Starts with the load-board rate; editable in Accounting';
   }
 
-  // Atlanta customer revenue is fully calculated from the supplied Kroger
-  // mileage tier + $50/stop + FSC*.133*miles formula.
   const customer = row.querySelector('[data-action="acct-customer-rate"]');
-  if (customer && rec.location === 'atlanta') {
-    customer.readOnly = true;
-    customer.classList.add('accounting-customer-calculated');
-    customer.title = 'Mileage tier + $50 per stop + FSC × .133 × miles';
+  if (customer) {
+    customer.readOnly = false;
+    customer.removeAttribute('readonly');
+    customer.classList.remove('accounting-customer-calculated');
+    customer.title = 'Starts with the calculated customer rate; editable in Accounting';
   }
 }
 
@@ -117,6 +116,10 @@ function normalizeTable() {
   try {
     if (activeLocation() === 'atlanta') normalizeHeader();
     document.querySelectorAll('#accounting-table-body tr[id^="acct-"]').forEach(normalizeRow);
+
+    const headRow = document.querySelector('#accounting-table-head tr');
+    const emptyCell = document.querySelector('#accounting-table-body tr:not([id^="acct-"]) > td[colspan]');
+    if (headRow && emptyCell) emptyCell.colSpan = headRow.children.length;
   } finally {
     applying = false;
   }
@@ -128,44 +131,10 @@ function scheduleNormalize() {
   requestAnimationFrame(normalizeTable);
 }
 
-async function refreshCalculatedRow(id) {
-  if (!supabaseClient || !id) return;
-  const { data, error } = await supabaseClient
-    .from(ACCOUNTING_TABLE)
-    .select('id,total_revenue,total_carrier_pay,total_cost,fsc_payment,day_type,cost_level,revenue_level')
-    .eq('id', id)
-    .maybeSingle();
-  if (error || !data) return;
-
-  const rec = getAccountingRecordById(id);
-  if (rec) Object.assign(rec, data);
-  const row = document.getElementById(`acct-${id}`);
-  if (!row) return;
-  const customer = row.querySelector('[data-action="acct-customer-rate"]');
-  const carrier = row.querySelector('[data-action="acct-carrier-pay"]');
-  if (customer) customer.value = data.total_revenue == null ? '' : Number(data.total_revenue).toFixed(2);
-  if (carrier) carrier.value = data.total_carrier_pay == null ? '' : Number(data.total_carrier_pay).toFixed(2);
-  normalizeRow(row);
-}
-
 function initAccountingPricingV2() {
   const table = document.getElementById('accounting-table');
   if (!table) return;
   installStyles();
-
-  table.addEventListener('change', (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLElement)) return;
-
-    if (target.dataset.action === 'acct-day-type' && activeLocation() === 'atlanta') {
-      // accounting.js saves day_type; the DB trigger recalculates Customer
-      // Rate in the same write. Re-read shortly after so the figure updates
-      // immediately even if realtime delivery is a beat behind.
-      const id = Number(target.dataset.id);
-      setTimeout(() => void refreshCalculatedRow(id), 250);
-    }
-  }, true);
-
   new MutationObserver(scheduleNormalize).observe(table, { childList: true, subtree: true });
   document.getElementById('acct-location-tabs')?.addEventListener('click', scheduleNormalize);
   scheduleNormalize();
