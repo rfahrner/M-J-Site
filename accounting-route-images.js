@@ -42,22 +42,25 @@ async function loadAccountingRouteImages(accountingId) {
     if (error) throw error;
     if (serial !== requestSerial || activeAccountingId !== id) return;
 
+    // Keep one group for every Accounting route, even if that route has no
+    // image. The Load Details route tabs are in the same route-number order,
+    // so retaining the empty groups lets us match an image to the exact tab
+    // instead of guessing from the visible label (labels can be duplicated).
+    activeRouteGroups = (routes || []).map((route) => ({
+      routeNumber: route.route_number,
+      sourceTripId: route.source_trip_id,
+      label: String(route.route_id || route.trip_id || `Route ${route.route_number || ''}`).trim(),
+      paths: parseImagePaths(route.route_image_path),
+      urls: [],
+    }));
+
     const refs = [];
-    (routes || []).forEach((route) => {
-      const paths = parseImagePaths(route.route_image_path);
-      if (!paths.length) return;
-      const label = String(route.route_id || route.trip_id || `Route ${route.route_number || ''}`).trim();
-      paths.forEach((path, imageIndex) => refs.push({
-        path,
-        routeNumber: route.route_number,
-        label,
-        imageIndex,
-      }));
+    activeRouteGroups.forEach((group, groupIndex) => {
+      group.paths.forEach((path, imageIndex) => refs.push({ path, groupIndex, imageIndex }));
     });
 
     if (!refs.length) {
-      activeRouteGroups = [];
-      injectAccountingRouteImages();
+      injectAccountingImages();
       return;
     }
 
@@ -67,27 +70,27 @@ async function loadAccountingRouteImages(accountingId) {
     if (signError) throw signError;
     if (serial !== requestSerial || activeAccountingId !== id) return;
 
-    const byRoute = new Map();
     refs.forEach((ref, index) => {
       const url = signed && signed[index] && signed[index].signedUrl;
-      if (!url) return;
-      const key = `${ref.routeNumber ?? ''}|${ref.label}`;
-      if (!byRoute.has(key)) byRoute.set(key, { label: ref.label, routeNumber: ref.routeNumber, urls: [] });
-      byRoute.get(key).urls.push(url);
+      if (!url || !activeRouteGroups[ref.groupIndex]) return;
+      activeRouteGroups[ref.groupIndex].urls[ref.imageIndex] = url;
     });
-    activeRouteGroups = [...byRoute.values()].filter((group) => group.urls.length);
-    injectAccountingRouteImages();
+    activeRouteGroups.forEach((group) => { group.urls = group.urls.filter(Boolean); });
+    injectAccountingImages();
   } catch (e) {
     console.error('Failed to load Accounting route images:', e);
   }
 }
 
-function injectAccountingRouteImages() {
+function injectAccountingTripSheetImages() {
   if (injecting || !activeAccountingId || !activeRouteGroups.length) return;
   const activeTab = document.querySelector('#ld-tabs .ld-tab.is-active[data-tab="images"]');
   const gallery = document.getElementById('ld-image-gallery');
   if (!activeTab || !gallery) return;
   if (gallery.querySelector('[data-accounting-route-image="true"]')) return;
+
+  const groupsWithImages = activeRouteGroups.filter((group) => group.urls.length);
+  if (!groupsWithImages.length) return;
 
   injecting = true;
   try {
@@ -95,7 +98,7 @@ function injectAccountingRouteImages() {
       if (child.classList.contains('subtext') && /no trip sheet images/i.test(child.textContent || '')) child.remove();
     });
 
-    activeRouteGroups.forEach((group) => {
+    groupsWithImages.forEach((group) => {
       group.urls.forEach((url, imageIndex) => {
         const item = document.createElement('div');
         item.className = 'ld-image-item';
@@ -127,6 +130,83 @@ function injectAccountingRouteImages() {
   }
 }
 
+function activeRouteGroup() {
+  const routeTabs = [...document.querySelectorAll('#ld-tabs .ld-tab[data-tab^="trip-"]')];
+  const activeTab = routeTabs.find((tab) => tab.classList.contains('is-active'));
+  if (!activeTab) return null;
+
+  const index = routeTabs.indexOf(activeTab);
+  if (index >= 0 && activeRouteGroups[index]) return activeRouteGroups[index];
+
+  // Fallback only. Normally the route-number order above is exact; matching
+  // by label covers older Accounting rows whose route list is incomplete.
+  const label = String(activeTab.textContent || '').trim();
+  return activeRouteGroups.find((group) => group.label === label) || null;
+}
+
+function injectAccountingRouteTabImages() {
+  if (injecting || !activeAccountingId || !activeRouteGroups.length) return;
+  const activeTab = document.querySelector('#ld-tabs .ld-tab.is-active[data-tab^="trip-"]');
+  const body = document.getElementById('ld-tab-content');
+  if (!activeTab || !body) return;
+
+  const group = activeRouteGroup();
+  if (!group || !group.urls.length) return;
+
+  // Every route tab already has the normal Image dropzone. Populate that
+  // same field with the Accounting copy rather than adding a second image
+  // section somewhere else in the modal.
+  const dropzone = body.querySelector('.mdz-image-dropzone[data-action="row-image-dropzone"]');
+  if (!dropzone) return;
+  if (dropzone.querySelector('[data-accounting-route-thumb="true"]')) return;
+
+  // If the core modal already has signed native thumbnails, do not duplicate
+  // them. This also makes the helper future-proof if the Accounting opener is
+  // later changed to hydrate route URLs directly.
+  if (dropzone.querySelector('.mdz-route-thumb')) return;
+
+  injecting = true;
+  try {
+    const hint = dropzone.querySelector('.mdz-upload-hint');
+    if (hint) hint.remove();
+    const fileInput = dropzone.querySelector('input[type="file"]');
+
+    group.urls.forEach((url, imageIndex) => {
+      const wrap = document.createElement('div');
+      wrap.className = 'mdz-thumb-wrap';
+      wrap.dataset.accountingRouteThumb = 'true';
+
+      const img = document.createElement('img');
+      img.className = 'mdz-route-thumb';
+      img.dataset.accountingRouteThumb = 'true';
+      img.src = url;
+      img.alt = `${group.label} image ${imageIndex + 1}`;
+      img.title = 'Click to view full size';
+      img.addEventListener('click', (event) => {
+        // The parent dropzone normally treats any unhandled click as an
+        // upload request. Stop this thumbnail click there and open the viewer.
+        event.preventDefault();
+        event.stopPropagation();
+        viewRowImage(
+          { routeImageUrls: group.urls.slice(), routeImageUrl: group.urls[0] || '' },
+          group.label,
+          imageIndex,
+        );
+      });
+
+      wrap.appendChild(img);
+      dropzone.insertBefore(wrap, fileInput || null);
+    });
+  } finally {
+    injecting = false;
+  }
+}
+
+function injectAccountingImages() {
+  injectAccountingTripSheetImages();
+  injectAccountingRouteTabImages();
+}
+
 function init() {
   if ((location.pathname.split('/').pop() || '') !== 'accounting.html') return;
 
@@ -137,13 +217,13 @@ function init() {
       return;
     }
 
-    const imagesTab = event.target.closest('#ld-tabs .ld-tab[data-tab="images"]');
-    if (imagesTab) setTimeout(injectAccountingRouteImages, 0);
+    const loadDetailsTab = event.target.closest('#ld-tabs .ld-tab');
+    if (loadDetailsTab) setTimeout(injectAccountingImages, 0);
   }, true);
 
   const modal = document.getElementById('modal-load-details');
   if (modal) {
-    const observer = new MutationObserver(() => injectAccountingRouteImages());
+    const observer = new MutationObserver(() => injectAccountingImages());
     observer.observe(modal, { childList: true, subtree: true });
   }
 }
