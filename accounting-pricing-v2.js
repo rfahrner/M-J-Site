@@ -11,10 +11,6 @@ import { getAccountingRecordById } from './accounting.js';
 let scheduled = false;
 let applying = false;
 
-function activeLocation() {
-  return document.querySelector('#acct-location-tabs .location-tab.is-active')?.dataset.location || 'atlanta';
-}
-
 function appliedLabel(value) {
   return ({ 1: 'Base rate', 2: 'Driver Rate', 3: 'Daily Rate' })[Number(value)] || 'Base rate';
 }
@@ -86,12 +82,12 @@ function normalizeRow(row) {
     if (label) label.textContent = appliedLabel(rec.cost_level);
   }
 
-  // Day Type is no longer part of Accounting's workflow.
+  // Day Type is no longer part of Accounting's workflow on any location tab.
   row.querySelector('[data-action="acct-day-type"]')?.closest('td')?.remove();
 
   // These are ordinary editable Accounting inputs. The board value / customer
   // formula provides the starting figure, but Accounting can click anywhere
-  // in the number and type exactly like any other text/number cell.
+  // in the number and type exactly like any other text cell.
   const carrier = row.querySelector('[data-action="acct-carrier-pay"]');
   if (carrier) {
     carrier.readOnly = false;
@@ -114,12 +110,19 @@ function normalizeTable() {
   if (applying) return;
   applying = true;
   try {
-    if (activeLocation() === 'atlanta') normalizeHeader();
+    normalizeHeader();
     document.querySelectorAll('#accounting-table-body tr[id^="acct-"]').forEach(normalizeRow);
 
     const headRow = document.querySelector('#accounting-table-head tr');
     const emptyCell = document.querySelector('#accounting-table-body tr:not([id^="acct-"]) > td[colspan]');
     if (headRow && emptyCell) emptyCell.colSpan = headRow.children.length;
+
+    // Keep the page explanation aligned with the simplified workflow.
+    const heading = document.querySelector('#driverlist-view h1');
+    const subtext = heading?.parentElement?.querySelector('.subtext');
+    if (subtext) {
+      subtext.textContent = 'Loads arrive automatically from the boards. Applied shows which board rate was used; Customer Rate and Carrier Rate remain editable in Accounting.';
+    }
   } finally {
     applying = false;
   }
