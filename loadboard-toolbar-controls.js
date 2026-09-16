@@ -6,7 +6,6 @@ import './unified-load-modals.js';
 import './houston-load-details-v2.js';
 import './board-row-hover-enhancements.js';
 import './daily-board-notes.js';
-import './load-details-integrity.js';
 
 const BOARD_LOCATION_BY_FILE = {
   "": "atlanta",
@@ -104,12 +103,13 @@ function init() {
   normalizeBoardToolbar();
   openRequestedDriverListTab();
 
-  // Every load board uses the same image cells and the same paged full-screen
-  // viewer. The viewer shows one original image at a time with Previous/Next
-  // controls instead of stacking/scaling a scrollable gallery.
+  // These modules import loadboard.js themselves, so load them only after the
+  // main board module has finished initializing rather than creating a static
+  // import cycle through alerts -> paperwork -> email-list -> toolbar.
   if (driverListLocation()) {
     import('./unified-board-image-cells.js').catch((e) => console.error('Failed to load shared image cells:', e));
     import('./image-gallery-scroll-fix.js').catch((e) => console.error('Failed to load paged image viewer:', e));
+    import('./load-details-integrity.js').catch((e) => console.error('Failed to load Load Details integrity guard:', e));
   }
 
   if (currentFile() === "mondelez.html") {
