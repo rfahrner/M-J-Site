@@ -1,7 +1,8 @@
 // Compact driver-status strip under each Megaboard location header.
 // Green = currently within the 12-hour operating window.
 // Orange = scheduled later today or in the next-day 00:00-04:00 handoff window.
-// Red = the shift has been completed or its 12-hour operating window has elapsed.
+// Red = a shift scheduled for today that has completed or aged past 12 hours.
+// Prior-day shifts only carry into this strip while they are still genuinely running.
 
 const SUPABASE_URL = 'https://ygsapysqzwrpcimgvaqx.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_8b8bSIiYm5TzLTw0WG1pAw_5ZWW5ZPL';
@@ -40,7 +41,7 @@ function esc(value) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
+    .replace(/\"/g, '&quot;')
     .replace(/'/g, '&#039;');
 }
 function norm(value) {
@@ -110,7 +111,14 @@ function addDateKey(key, delta) {
   return date.toISOString().slice(0, 10);
 }
 function formatStart(date, timeZone) {
-  return date.toLocaleTimeString('en-US', { timeZone, hour: 'numeric', minute: '2-digit' });
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(date);
+  const pick = (type) => parts.find((part) => part.type === type)?.value || '';
+  const hour = String(Number(pick('hour') || 0) % 24).padStart(2, '0');
+  return `${pick('month')}/${pick('day')} ${hour}${pick('minute')}`;
 }
 function isCancelledStandard(row) {
   return !!(row.tonu || row.called_off || row.load_cancelled);
@@ -171,6 +179,15 @@ function classify(startDate, complete, now) {
   if (startDate.getTime() > now.getTime()) return 'upcoming';
   return now.getTime() - startDate.getTime() <= MAX_RUNNING_HOURS * 3600000 ? 'running' : 'ended';
 }
+function statusBelongsInCurrentStrip(meta, shiftDate, status, now) {
+  const today = localDateKey(now, meta.timeZone);
+  const prev = addDateKey(today, -1);
+  const next = addDateKey(today, 1);
+  if (shiftDate === today) return true;
+  if (shiftDate === prev) return status === 'running';
+  if (shiftDate === next) return status === 'upcoming';
+  return false;
+}
 function pushDriver(map, item) {
   if (!item.name) return;
   const key = driverKey(item.driverId, item.name);
@@ -200,6 +217,7 @@ function buildModel(data) {
     const driverId = trip?.driver_id || shift.driver_id;
     const name = profileName(data.profiles, driverId, shift.driver_name_text);
     const status = classify(startDate, !!shift.shift_complete, now);
+    if (!statusBelongsInCurrentStrip(meta, shift.shift_date, status, now)) continue;
     pushDriver(getMap(locationKey), {
       status, startDate, driverId, name,
       startLabel: formatStart(startDate, meta.timeZone),
@@ -215,8 +233,10 @@ function buildModel(data) {
     const startDate = zonedDateTime(row.shift_date, row.time, meta.timeZone);
     if (!startDate) continue;
     const name = profileName(data.profiles, row.driver_id, row.driver_name);
+    const status = classify(startDate, !!row.shift_complete, now);
+    if (!statusBelongsInCurrentStrip(meta, row.shift_date, status, now)) continue;
     pushDriver(getMap(locationKey), {
-      status: classify(startDate, !!row.shift_complete, now), startDate,
+      status, startDate,
       driverId: row.driver_id, name, startLabel: formatStart(startDate, meta.timeZone),
       load: norm(row.aljex_number), route: '',
     });
@@ -229,8 +249,10 @@ function buildModel(data) {
     const startDate = zonedDateTime(row.shift_date, row.start_time, meta.timeZone);
     if (!startDate) continue;
     const name = profileName(data.profiles, row.driver_id, row.driver_name);
+    const status = classify(startDate, !!row.shift_complete, now);
+    if (!statusBelongsInCurrentStrip(meta, row.shift_date, status, now)) continue;
     pushDriver(getMap(locationKey), {
-      status: classify(startDate, !!row.shift_complete, now), startDate,
+      status, startDate,
       driverId: row.driver_id, name, startLabel: formatStart(startDate, meta.timeZone),
       load: norm(row.aljex_number), route: norm(row.delivery_group),
     });
@@ -252,11 +274,11 @@ function buildModel(data) {
 function chipHtml(item) {
   const label = item.status === 'running' ? 'RUNNING' : item.status === 'upcoming' ? 'UPCOMING' : 'ENDED';
   const details = [item.load, item.route].filter(Boolean).map((value) => `<span class="mega-driver-status-id">${esc(value)}</span>`).join('');
-  return `<div class="mega-driver-status-chip ${item.status}" title="${esc(`${label}: ${item.name} · ${item.startLabel} start`)}">
+  return `<div class="mega-driver-status-chip ${item.status}" title="${esc(`${label}: ${item.name} · ${item.startLabel}`)}">
     <span class="mega-driver-status-label">${label}</span>
     <strong>${esc(item.name)}</strong>
     ${details}
-    <span class="mega-driver-status-time">${esc(item.startLabel)} start</span>
+    <span class="mega-driver-status-time">${esc(item.startLabel)}</span>
   </div>`;
 }
 function sectionFor(locationKey) {
@@ -284,6 +306,14 @@ function ensureSection(locationKey) {
   wrap.appendChild(section);
   return section;
 }
+function enableWheelScroll(strip) {
+  strip.addEventListener('wheel', (event) => {
+    if (strip.scrollWidth <= strip.clientWidth) return;
+    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+    strip.scrollLeft += event.deltaY;
+    event.preventDefault();
+  }, { passive: false });
+}
 function observeDom() {
   const root = document.getElementById('mega-locations');
   if (!root || !domObserver) return;
@@ -304,6 +334,7 @@ function renderStrips() {
     const strip = document.createElement('div');
     strip.className = 'mega-driver-status-strip';
     strip.innerHTML = items.map(chipHtml).join('');
+    enableWheelScroll(strip);
     head.insertAdjacentElement('afterend', strip);
   });
   observeDom();
@@ -374,7 +405,7 @@ function installStyles() {
   const style = document.createElement('style');
   style.id = 'mega-driver-status-style';
   style.textContent = `
-    .mega-driver-status-strip { display:flex; align-items:center; gap:7px; overflow-x:auto; padding:6px 10px; background:#fff; border-bottom:1px solid #d8dee8; scrollbar-width:thin; }
+    .mega-driver-status-strip { display:flex; align-items:center; gap:7px; overflow-x:auto; overscroll-behavior-x:contain; padding:6px 10px; background:#fff; border-bottom:1px solid #d8dee8; scrollbar-width:thin; }
     .mega-driver-status-chip { display:inline-flex; align-items:center; gap:7px; flex:0 0 auto; min-height:30px; padding:4px 9px; border:1px solid #d0d7e2; border-left-width:4px; border-radius:6px; background:#fff; color:#172542; font-size:11px; white-space:nowrap; }
     .mega-driver-status-chip.running { border-left-color:#16a34a; background:#f7fdf8; }
     .mega-driver-status-chip.upcoming { border-left-color:#f59e0b; background:#fffbeb; }
@@ -384,7 +415,7 @@ function installStyles() {
     .mega-driver-status-chip.upcoming .mega-driver-status-label { background:#ffedd5; color:#c2410c; }
     .mega-driver-status-chip.ended .mega-driver-status-label { background:#fee2e2; color:#b91c1c; }
     .mega-driver-status-id, .mega-driver-status-time { color:#52647c; }
-    .mega-driver-status-time { margin-left:1px; }
+    .mega-driver-status-time { margin-left:1px; font-variant-numeric:tabular-nums; }
     .mega-driver-only-head { cursor:default; }
     .mega-location.is-collapsed > .mega-driver-status-strip { display:flex; }
   `;
@@ -405,7 +436,7 @@ async function init() {
   const { data } = await client.auth.getSession();
   if (!data?.session) return;
   await refreshData();
-  realtime = client.channel('megaboard-driver-status-v1')
+  realtime = client.channel('megaboard-driver-status-v2')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'loads_shifts' }, () => scheduleRefresh(200))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'loads_trips' }, () => scheduleRefresh(200))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'loads_houston' }, () => scheduleRefresh(200))
