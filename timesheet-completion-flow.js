@@ -15,6 +15,7 @@ import * as lb from './loadboard.js';
 
 let modalObserver = null;
 let currentCompletionGeneration = 0;
+let timesheetPreviewUrl = '';
 
 function allRows() {
   if (!lb?.state?.sheets) return [];
@@ -49,6 +50,53 @@ function hideLegacyDropLocation() {
   if (field) field.style.display = 'none';
 }
 
+function clearTimesheetPreviewUrl() {
+  if (!timesheetPreviewUrl) return;
+  URL.revokeObjectURL(timesheetPreviewUrl);
+  timesheetPreviewUrl = '';
+}
+
+function renderTimesheetImageCell(file = null) {
+  const zone = document.getElementById('tsc-timesheet-image-zone');
+  const input = document.getElementById('tsc-timesheet-image');
+  if (!zone || !input) return;
+
+  clearTimesheetPreviewUrl();
+  const oldPreview = zone.querySelector('.tsc-timesheet-preview');
+  const oldHint = zone.querySelector('.mdz-upload-hint');
+  if (oldPreview) oldPreview.remove();
+  if (oldHint) oldHint.remove();
+
+  if (file) {
+    timesheetPreviewUrl = URL.createObjectURL(file);
+    const wrap = document.createElement('div');
+    wrap.className = 'mdz-thumb-wrap tsc-timesheet-preview';
+    wrap.innerHTML = `
+      <img src="${timesheetPreviewUrl}" class="mdz-route-thumb" alt="Selected time sheet image" title="Selected time sheet image">
+      <button type="button" class="mdz-thumb-delete" data-tsc-delete-image title="Remove selected image">&times;</button>`;
+    zone.insertBefore(wrap, input);
+  } else {
+    const hint = document.createElement('span');
+    hint.className = 'mdz-upload-hint';
+    hint.textContent = 'Drop / paste / click';
+    zone.insertBefore(hint, input);
+  }
+}
+
+function setTimesheetFile(file) {
+  const input = document.getElementById('tsc-timesheet-image');
+  if (!input) return;
+  if (!file) {
+    input.value = '';
+    renderTimesheetImageCell();
+    return;
+  }
+  const dt = new DataTransfer();
+  dt.items.add(file);
+  input.files = dt.files;
+  renderTimesheetImageCell(file);
+}
+
 function ensureImageField() {
   const modal = document.getElementById('modal-timesheet-complete');
   if (!modal || document.getElementById('tsc-timesheet-image-field')) return;
@@ -59,26 +107,25 @@ function ensureImageField() {
   field.className = 'field';
   field.id = 'tsc-timesheet-image-field';
   field.innerHTML = `
-    <label for="tsc-timesheet-image">Time Sheet Image <span class="subtext">(optional)</span></label>
-    <label class="tsc-image-dropzone" for="tsc-timesheet-image" tabindex="0">
-      <span class="tsc-image-prompt">Drop / paste / click to add an image</span>
-      <span class="tsc-image-name subtext"></span>
-      <input type="file" accept="image/*" id="tsc-timesheet-image" class="tsc-hidden-file-input">
-    </label>`;
+    <label>Time Sheet Image <span class="subtext">(optional)</span></label>
+    <div class="mdz-image-dropzone" tabindex="0" id="tsc-timesheet-image-zone" title="Click to browse, or drag/paste an image here">
+      <span class="mdz-upload-hint">Drop / paste / click</span>
+      <input type="file" accept="image/*" id="tsc-timesheet-image" class="mdz-hidden-file-input">
+    </div>`;
   error.insertAdjacentElement('beforebegin', field);
 
-  const zone = field.querySelector('.tsc-image-dropzone');
+  const zone = field.querySelector('#tsc-timesheet-image-zone');
   const input = field.querySelector('#tsc-timesheet-image');
-  const name = field.querySelector('.tsc-image-name');
-  const setFile = (file) => {
-    if (!file) return;
-    const dt = new DataTransfer();
-    dt.items.add(file);
-    input.files = dt.files;
-    name.textContent = file.name;
-  };
-  input.addEventListener('change', () => {
-    name.textContent = input.files?.[0]?.name || '';
+  input.addEventListener('change', () => renderTimesheetImageCell(input.files?.[0] || null));
+  zone.addEventListener('click', (event) => {
+    if (event.target.closest('[data-tsc-delete-image]')) {
+      event.preventDefault();
+      event.stopPropagation();
+      setTimesheetFile(null);
+      return;
+    }
+    if (event.target.closest('img')) return;
+    input.click();
   });
   zone.addEventListener('dragover', (event) => {
     event.preventDefault();
@@ -88,13 +135,13 @@ function ensureImageField() {
   zone.addEventListener('drop', (event) => {
     event.preventDefault();
     zone.classList.remove('is-dragging');
-    setFile(event.dataTransfer?.files?.[0]);
+    setTimesheetFile(event.dataTransfer?.files?.[0] || null);
   });
   zone.addEventListener('paste', (event) => {
     const file = [...(event.clipboardData?.files || [])].find((f) => f.type.startsWith('image/'));
     if (file) {
       event.preventDefault();
-      setFile(file);
+      setTimesheetFile(file);
     }
   });
   zone.addEventListener('keydown', (event) => {
@@ -107,9 +154,8 @@ function ensureImageField() {
 
 function resetImageField() {
   const input = document.getElementById('tsc-timesheet-image');
-  const name = document.querySelector('#tsc-timesheet-image-field .tsc-image-name');
   if (input) input.value = '';
-  if (name) name.textContent = '';
+  renderTimesheetImageCell();
 }
 
 function syncCompletionModal() {
@@ -129,11 +175,10 @@ function installStyles() {
   const style = document.createElement('style');
   style.id = 'timesheet-completion-flow-styles';
   style.textContent = `
-    .tsc-hidden-file-input { position:absolute !important; width:1px !important; height:1px !important; opacity:0 !important; pointer-events:none !important; }
-    .tsc-image-dropzone { min-height:68px; border:1.5px dashed var(--slate-300,#cbd5e1); border-radius:8px; display:flex; flex-direction:column; justify-content:center; align-items:center; gap:4px; padding:10px; cursor:pointer; background:var(--slate-50,#f8fafc); text-align:center; }
-    .tsc-image-dropzone:hover, .tsc-image-dropzone.is-dragging { border-color:#2563eb; background:#eff6ff; }
-    .tsc-image-prompt { font-size:13px; font-weight:650; }
-    .tsc-image-name { overflow-wrap:anywhere; }
+    #tsc-timesheet-image-zone { min-height:42px; width:100%; }
+    #tsc-timesheet-image-zone.is-dragging { border-color:#2563eb !important; background:#eff6ff !important; }
+    #tsc-timesheet-image-zone .mdz-thumb-wrap { margin:0; }
+    #tsc-timesheet-image-zone .mdz-route-thumb { cursor:default; }
   `;
   document.head.appendChild(style);
 }
