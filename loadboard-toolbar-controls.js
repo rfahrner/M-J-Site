@@ -102,6 +102,14 @@ function init() {
   installStyles();
   normalizeBoardToolbar();
   openRequestedDriverListTab();
+
+  // Atlanta, Delaware and Building C already use the shared image-cell
+  // implementation in loadboard.js. This bridge upgrades the two flat-table
+  // boards (Houston + every Mondelez location) to that same implementation.
+  if (driverListLocation()) {
+    import('./unified-board-image-cells.js').catch((e) => console.error('Failed to load shared image cells:', e));
+  }
+
   if (currentFile() === "mondelez.html") {
     import('./mondelez-completed-row-layout.js').catch((e) => console.error('Failed to load Mondelez completed-row layout:', e));
   }
