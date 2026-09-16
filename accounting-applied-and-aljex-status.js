@@ -1,12 +1,16 @@
 /*
- * Small Accounting presentation guard:
- * - Driver Rate and Carrier rate are the same Accounting concept, so Applied
- *   only shows Base rate / Daily Rate / Carrier rate.
- * - Aljex load-number buttons stay visually neutral when the source load is
- *   complete. They turn red only when the system has already sent the load to
- *   Accounting but the source shift has not been marked complete yet.
+ * Stable Accounting presentation guard.
  *
- * Route/Trip pills keep their existing green/red closeout-status behavior.
+ * This module deliberately does NOT rewrite Applied text nodes and does NOT
+ * remove the status classes owned by accounting-columns.js. A second observer
+ * fighting those values caused the visible millisecond back-and-forth flicker.
+ *
+ * Instead:
+ * - Driver Rate is visually aliased to Carrier rate with CSS only.
+ * - Aljex load-number buttons are visually neutral when complete.
+ * - Aljex is red only when it was auto-sent to Accounting and its source shift
+ *   has not been marked complete.
+ * - Route/Trip pills keep their existing green/red closeout behavior.
  */
 import { supabaseClient } from './loadboard.js';
 import { getAccountingRecordById } from './accounting.js';
@@ -16,17 +20,31 @@ let fetchInFlight = false;
 let scheduled = false;
 let refreshTimer = null;
 
-function installAliasStyles() {
-  if (document.getElementById('accounting-carrier-alias-style')) return;
+function installStyles() {
+  if (document.getElementById('accounting-stable-status-styles')) return;
   const style = document.createElement('style');
-  style.id = 'accounting-carrier-alias-style';
+  style.id = 'accounting-stable-status-styles';
   style.textContent = `
     #accounting-table .accounting-applied-label.accounting-carrier-alias {
-      font-size:0 !important;
+      font-size: 0 !important;
     }
     #accounting-table .accounting-applied-label.accounting-carrier-alias::after {
-      content:'Carrier rate';
-      font-size:12.5px;
+      content: 'Carrier rate';
+      font-size: 12.5px;
+    }
+
+    /* The load number itself is not a green success indicator. Keep the main
+       status module's classes intact and override only the visual treatment. */
+    #accounting-table .acct-load-number.acct-pill-good,
+    #accounting-table .acct-load-number.acct-pill-bad:not(.acct-auto-incomplete) {
+      background: transparent !important;
+      border-color: var(--slate-400, #94a3b8) !important;
+      color: inherit !important;
+    }
+    #accounting-table .acct-load-number.acct-auto-incomplete {
+      background: #fee2e2 !important;
+      border-color: #dc2626 !important;
+      color: #991b1b !important;
     }
   `;
   document.head.appendChild(style);
@@ -37,19 +55,17 @@ function visibleRows() {
 }
 
 function normalizeAppliedLabels() {
-  // Do not rewrite textContent here: accounting-pricing-v2 also watches the
-  // table and would rewrite it back, causing an observer loop. Alias the old
-  // Driver Rate label visually instead while the underlying calculation stays
-  // untouched.
+  // Never change textContent here. accounting-pricing-v2 owns that text.
   document.querySelectorAll('#accounting-table [data-accounting-applied-label]').forEach((label) => {
-    label.classList.toggle('accounting-carrier-alias', /^driver rate$/i.test(label.textContent.trim()));
+    const isDriverRate = /^driver rate$/i.test(label.textContent.trim());
+    label.classList.toggle('accounting-carrier-alias', isDriverRate);
+    if (isDriverRate) {
+      label.setAttribute('aria-label', 'Carrier rate');
+      label.title = 'Carrier rate — carrier/driver-specific rate applied on the load board';
+    } else if (label.getAttribute('aria-label') === 'Carrier rate') {
+      label.removeAttribute('aria-label');
+    }
   });
-
-  const heading = document.querySelector('#driverlist-view h1');
-  const subtext = heading?.parentElement?.querySelector('.subtext');
-  if (subtext && /driver rate/i.test(subtext.textContent)) {
-    subtext.textContent = 'Loads arrive automatically from the boards. Applied shows whether the load used the location base, a daily rate, or a carrier rate; Customer Rate and Carrier Rate remain editable in Accounting.';
-  }
 }
 
 function loadNumberButton(row, accountingId) {
@@ -66,22 +82,20 @@ function applyLoadNumberStatus() {
     const button = loadNumberButton(row, rec.id);
     if (!button) continue;
 
-    // Aljex load numbers never use the green success treatment.
-    button.classList.remove('acct-pill-good');
+    // Mark the Aljex button once; CSS handles neutral-vs-red without deleting
+    // the good/bad classes that accounting-columns.js owns.
+    button.classList.add('acct-load-number');
 
     const shiftId = Number(rec.source_shift_id);
     const status = Number.isFinite(shiftId) ? shiftStatusById.get(shiftId) : null;
-    if (!status) {
-      // Non-standard/older rows do not get a status color from this guard.
-      button.classList.remove('acct-pill-bad');
-      continue;
-    }
+    const autoSentButIncomplete = !!status?.sent_to_accounting && !status?.shift_complete;
+    button.classList.toggle('acct-auto-incomplete', autoSentButIncomplete);
 
-    const autoSentButIncomplete = !!status.sent_to_accounting && !status.shift_complete;
-    button.classList.toggle('acct-pill-bad', autoSentButIncomplete);
-    button.title = autoSentButIncomplete
-      ? 'Automatically sent to Accounting before this load was marked complete'
-      : 'Open load details';
+    if (autoSentButIncomplete) {
+      button.title = 'Automatically sent to Accounting before this load was marked complete';
+    } else if (button.title?.startsWith('Automatically sent to Accounting')) {
+      button.title = 'Open load details';
+    }
   }
 }
 
@@ -127,16 +141,13 @@ function normalize() {
 function scheduleNormalize() {
   if (scheduled) return;
   scheduled = true;
-  // accounting-columns.js does its presentation work in one rAF. Running on
-  // the following frame makes this guard the final say on the Aljex button.
-  requestAnimationFrame(() => requestAnimationFrame(normalize));
+  requestAnimationFrame(normalize);
 }
 
 function invalidateShiftStatus() {
   shiftStatusById.clear();
   clearTimeout(refreshTimer);
   refreshTimer = setTimeout(() => void refreshShiftStatuses(true), 100);
-  scheduleNormalize();
 }
 
 function setupRealtime(attempt = 0) {
@@ -144,7 +155,7 @@ function setupRealtime(attempt = 0) {
     if (attempt < 50) setTimeout(() => setupRealtime(attempt + 1), 100);
     return;
   }
-  supabaseClient.channel('accounting-aljex-neutral-status-v1')
+  supabaseClient.channel('accounting-aljex-neutral-status-v2')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'loads_shifts' }, invalidateShiftStatus)
     .subscribe();
 }
@@ -152,13 +163,14 @@ function setupRealtime(attempt = 0) {
 function init() {
   const table = document.getElementById('accounting-table');
   if (!table) return;
+  installStyles();
 
-  installAliasStyles();
+  // Structural/text changes only. Do not observe class attributes: the main
+  // Accounting status module changes those classes and watching them here was
+  // the feedback loop.
   new MutationObserver(scheduleNormalize).observe(table, {
     childList: true,
     subtree: true,
-    attributes: true,
-    attributeFilter: ['class'],
   });
   document.getElementById('acct-location-tabs')?.addEventListener('click', scheduleNormalize);
   setupRealtime();
