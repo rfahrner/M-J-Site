@@ -8,6 +8,7 @@ import './board-row-hover-enhancements.js';
 import './daily-board-notes.js';
 import './board-cell-focus-guard.js';
 import './load-details-image-draft-guard.js';
+import './trip-save-upsert-guard.js';
 import './route-completion-integrity.js';
 
 const BOARD_LOCATION_BY_FILE = {
