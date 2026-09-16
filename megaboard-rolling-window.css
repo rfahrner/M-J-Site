@@ -1,140 +1,37 @@
-.mega-live-timeline {
-  display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:10px;
-  padding:10px 12px 12px;
-  border-top:1px solid #d8dee8;
-  background:#f8fafc;
+.mega-operational-extra {
+  border-top:2px solid #cbd5e1;
+  background:#fbfcfe;
 }
-.mega-live-column {
-  min-width:0;
-  background:#fff;
-  border:1px solid #d8dee8;
-  border-radius:7px;
-  overflow:hidden;
+.mega-operational-extra .mega-day-head {
+  background:#f1f5f9;
 }
-.mega-live-title {
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:10px;
-  padding:8px 10px;
-  border-bottom:1px solid #e3e8ef;
-  color:#172542;
-  font-size:12px;
+.mega-operational-table th:first-child,
+.mega-operational-table td:first-child {
+  position:sticky;
+  left:0;
+  z-index:1;
+  background:inherit;
 }
-.mega-live-title span {
+.mega-operational-badge {
   display:inline-flex;
-  min-width:22px;
-  height:22px;
   align-items:center;
   justify-content:center;
+  min-width:68px;
+  padding:3px 6px;
   border-radius:999px;
-  background:#eef1f6;
-  color:#344054;
-  font-size:11px;
-  font-weight:800;
-}
-.mega-live-scroll {
-  max-height:180px;
-  overflow-y:auto;
-}
-.mega-live-item {
-  display:grid;
-  grid-template-columns:10px minmax(0, 1fr) auto;
-  align-items:center;
-  gap:8px;
-  padding:8px 10px;
-  color:#172542;
-  text-decoration:none;
-  border-bottom:1px solid #eef1f5;
-}
-.mega-live-item:last-child { border-bottom:0; }
-.mega-live-item:hover { background:#f6f8fb; }
-.mega-live-dot {
-  width:8px;
-  height:8px;
-  border-radius:999px;
-  background:#667085;
-}
-.mega-live-item.running .mega-live-dot { background:#16a34a; box-shadow:0 0 0 3px rgba(22,163,74,.12); }
-.mega-live-item.soon .mega-live-dot { background:#d97706; box-shadow:0 0 0 3px rgba(217,119,6,.12); }
-.mega-live-item div { min-width:0; }
-.mega-live-item strong,
-.mega-live-item span { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.mega-live-item strong { font-size:12px; }
-.mega-live-item span { margin-top:2px; color:#667085; font-size:11px; }
-.mega-live-item time { font-size:11px; font-weight:800; color:#344054; white-space:nowrap; }
-.mega-live-empty,
-.mega-live-paused {
-  padding:12px;
-  color:#667085;
-  font-size:12px;
-}
-.mega-live-paused {
-  grid-column:1 / -1;
-  text-align:center;
-  border:1px dashed #c7d0dc;
-  border-radius:7px;
-  background:#fff;
-}
-
-.mega-rolling-ribbon {
-  margin:10px 12px 0;
-  border:1px solid #d7dee8;
-  border-radius:7px;
-  overflow:hidden;
-  background:#fff;
-}
-.mega-rolling-ribbon-head {
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:10px;
-  padding:7px 10px;
-  background:#f7f9fc;
-  border-bottom:1px solid #e0e6ee;
-  color:#344054;
-  font-size:11px;
-}
-.mega-rolling-ribbon-head strong { color:#172542; font-size:12px; }
-.mega-rolling-list {
-  display:flex;
-  flex-wrap:wrap;
-  gap:6px;
-  padding:8px;
-}
-.mega-rolling-item {
-  display:inline-flex;
-  align-items:center;
-  gap:7px;
-  min-height:30px;
-  padding:5px 8px;
-  border:1px solid #d8dee8;
-  border-radius:6px;
-  color:#172542;
-  text-decoration:none;
-  background:#fff;
-  font-size:11px;
-}
-.mega-rolling-item:hover { background:#f6f8fb; }
-.mega-rolling-item.carryover { border-left:4px solid #16a34a; }
-.mega-rolling-item.early { border-left:4px solid #d97706; }
-.mega-rolling-tag {
-  border-radius:999px;
-  padding:2px 6px;
   font-size:9px;
   font-weight:900;
-  letter-spacing:.04em;
-  background:#eef1f6;
-  color:#475467;
+  letter-spacing:.05em;
+  white-space:nowrap;
 }
-.mega-rolling-item.carryover .mega-rolling-tag { background:#dcfce7; color:#166534; }
-.mega-rolling-item.early .mega-rolling-tag { background:#fef3c7; color:#92400e; }
-.mega-rolling-route { color:#536174; font-weight:700; }
-.mega-rolling-time { color:#667085; white-space:nowrap; }
-.mega-rolling-static-head { cursor:default; }
-
-@media (max-width:1200px) {
-  .mega-live-timeline { grid-template-columns:1fr; }
+.mega-operational-badge.carryover {
+  background:#dcfce7;
+  color:#166534;
+}
+.mega-operational-badge.early {
+  background:#fef3c7;
+  color:#92400e;
+}
+.mega-operational-static-head {
+  cursor:default;
 }
