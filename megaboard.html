@@ -6,6 +6,7 @@
   <title>Megaboard</title>
   <link rel="stylesheet" href="loadboard.css">
   <link rel="stylesheet" href="megaboard.css">
+  <link rel="stylesheet" href="megaboard-control-center.css">
 </head>
 <body class="megaboard-page">
   <div class="topbar">
@@ -44,11 +45,32 @@
       <div class="mega-date-chips" id="mega-date-chips"></div>
     </section>
 
+    <section class="mega-control-card" id="mega-control-center" aria-label="Megaboard control center">
+      <div class="mega-control-head">
+        <div class="mega-control-title">
+          <strong>Control Center</strong>
+          <div class="subtext">What needs attention, what is coming up, and what just changed across the selected day(s).</div>
+        </div>
+        <div class="mega-control-tabs" role="tablist" aria-label="Control Center views">
+          <button type="button" class="mega-control-tab is-active" data-mega-cc-tab="upcoming" role="tab" aria-selected="true">
+            Upcoming <span class="mega-control-count" id="mega-cc-upcoming-count">0</span>
+          </button>
+          <button type="button" class="mega-control-tab" data-mega-cc-tab="activity" role="tab" aria-selected="false">
+            Activity <span class="mega-control-count" id="mega-cc-activity-count">0</span>
+          </button>
+        </div>
+      </div>
+      <div class="mega-control-body" id="mega-control-body">
+        <div class="mega-cc-loading">Loading Control Center…</div>
+      </div>
+    </section>
+
     <div class="mega-status-line" id="mega-status" role="status"></div>
     <div class="mega-locations" id="mega-locations"></div>
   </main>
 
   <script src="supabase.min.js"></script>
   <script type="module" src="megaboard.js" defer></script>
+  <script type="module" src="megaboard-control-center.js" defer></script>
 </body>
 </html>
