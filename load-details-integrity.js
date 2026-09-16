@@ -1,15 +1,9 @@
 /*
  * Load Details integrity guard.
- *
- * Two jobs live here:
- *  1) Treat stop-time documentation from the database as the source of truth
- *     for completed-route pills and the visible Stop In/Out box. This avoids
- *     the stale client-side hasStopTimes flag leaving a fully documented route
- *     red until a full page refresh.
- *  2) Verify a modal Save after the normal handler runs and idempotently retry
- *     the captured route + stop values. trip_stops has a unique
- *     (trip_id, stop_number) key, so the retry cannot create duplicates. A
- *     transient failure on one stop can no longer leave the modal half-saved.
+ * - Reconciles completed-route pill validation from the actual DB stop rows.
+ * - Removes stale Stop In/Out red styling when every expected pair is present.
+ * - Verifies modal saves and idempotently retries the captured route/stop data
+ *   so one transient stop-row failure cannot leave a half-saved modal.
  */
 import { supabaseClient, state, setDriverSyncStatus } from './loadboard.js';
 
@@ -25,53 +19,49 @@ function value(id) {
 }
 
 function checked(id) {
-  const el = document.getElementById(id);
-  return !!(el && el.checked);
+  return !!document.getElementById(id)?.checked;
+}
+
+function boolish(raw) {
+  if (raw === true) return true;
+  if (raw === false || raw == null) return false;
+  const text = String(raw).trim().toLowerCase();
+  if (!text || ['false', '0', 'no', 'null', 'undefined'].includes(text)) return false;
+  return true;
 }
 
 function nullableNumber(raw) {
   const text = String(raw == null ? '' : raw).trim();
   if (!text) return null;
-  const n = Number(text);
-  return Number.isFinite(n) ? n : null;
+  const number = Number(text);
+  return Number.isFinite(number) ? number : null;
 }
 
 function currentProNumber() {
   const title = document.getElementById('ld-title')?.textContent || '';
-  const fromTitle = title.replace(/^Load\s*#/i, '').replace(/^\s*\(not assigned\)\s*$/i, '').trim();
-  if (fromTitle) return fromTitle;
-
-  // Fallback for an open modal whose title was created before a PRO was typed.
-  const activeTrip = document.querySelector('#ld-tabs .ld-tab.is-active[data-tab^="trip-"]');
-  const localTripId = activeTrip?.dataset.tab?.slice(5);
-  if (localTripId) {
-    const routeInput = document.querySelector(`#board-table [data-trip="${CSS.escape(localTripId)}"]`);
-    const tr = routeInput?.closest('tr');
-    const parentId = tr?.dataset.parentRow || tr?.id;
-    const proInput = parentId ? document.querySelector(`#${CSS.escape(parentId)} [data-field="proNumber"]`) : null;
-    if (proInput?.value?.trim()) return proInput.value.trim();
-  }
-  return '';
+  const titleValue = title.replace(/^Load\s*#/i, '').replace(/^\s*\(not assigned\)\s*$/i, '').trim();
+  if (titleValue) return titleValue;
+  return document.querySelector('#board-table [data-field="proNumber"]:focus')?.value?.trim() || '';
 }
 
 function tripNumberForLocalId(localId) {
-  const tripTabs = [...document.querySelectorAll('#ld-tabs .ld-tab[data-tab^="trip-"]')];
-  const index = tripTabs.findIndex((tab) => tab.dataset.tab === `trip-${localId}`);
+  const tabs = [...document.querySelectorAll('#ld-tabs .ld-tab[data-tab^="trip-"]')];
+  const index = tabs.findIndex((tab) => tab.dataset.tab === `trip-${localId}`);
   return index >= 0 ? index + 1 : null;
 }
 
-function captureStops(stopCount) {
-  const stops = [];
-  for (let i = 0; i < stopCount; i++) {
-    const timeIn = document.querySelector(`#ld-tab-content [data-stop-field="timeIn"][data-stop-index="${i}"]`);
-    const timeOut = document.querySelector(`#ld-tab-content [data-stop-field="timeOut"][data-stop-index="${i}"]`);
-    stops.push({
-      stop_number: i + 1,
+function captureStops(count) {
+  const result = [];
+  for (let index = 0; index < count; index++) {
+    const timeIn = document.querySelector(`#ld-tab-content [data-stop-field="timeIn"][data-stop-index="${index}"]`);
+    const timeOut = document.querySelector(`#ld-tab-content [data-stop-field="timeOut"][data-stop-index="${index}"]`);
+    result.push({
+      stop_number: index + 1,
       time_in: timeIn ? String(timeIn.value || '').trim() || null : null,
       time_out: timeOut ? String(timeOut.value || '').trim() || null : null,
     });
   }
-  return stops;
+  return result;
 }
 
 function captureModalSave(button) {
@@ -93,26 +83,26 @@ function captureModalSave(button) {
     };
   }
 
-  const stopCountRaw = value('ld-tr-stopCount');
-  const stopCount = Math.max(0, parseInt(stopCountRaw, 10) || 0);
+  const stopCountText = value('ld-tr-stopCount');
+  const stopCount = Math.max(0, parseInt(stopCountText, 10) || 0);
+  const complete = checked('ld-tr-complete');
   return {
     ...base,
-    localTripId: key,
     tripNumber: tripNumberForLocalId(key),
     route: {
       route_id: value('ld-tr-routeId') || null,
       trip_id: value('ld-tr-tripId') || null,
       trailer_out: value('ld-tr-trailerOut') || null,
       route_miles: nullableNumber(value('ld-tr-routeMiles')),
-      stop_count: nullableNumber(stopCountRaw),
+      stop_count: nullableNumber(stopCountText),
       notes: value('ld-tr-notes') || null,
       dispatch_time: value('ld-tr-dispatch-time') || null,
       return_eta_to_dc: value('ld-tr-return-eta') || null,
-      ppwk_received: checked('ld-tr-ppwk-received'),
+      ppwk_received: complete ? 'true' : (checked('ld-tr-ppwk-received') ? 'true' : 'false'),
       checked_in: checked('ld-tr-checked-in'),
       return_drop_location: value('ld-tr-drop-location') || null,
-      complete: checked('ld-tr-complete'),
-      minimized: checked('ld-tr-complete'),
+      complete,
+      minimized: complete,
     },
     stops: captureStops(stopCount),
   };
@@ -131,9 +121,6 @@ async function resolveShiftId(snapshot) {
   let { data, error } = await query;
   if (error) throw error;
 
-  // A modal opened from the currently-selected board day should resolve here.
-  // If the date changed while the modal was open, fall back to the newest exact
-  // PRO/location match rather than throwing away the safety retry.
   if (!data?.length && snapshot.shiftDate) {
     const fallback = await supabaseClient
       .from(SHIFTS)
@@ -145,7 +132,7 @@ async function resolveShiftId(snapshot) {
     if (fallback.error) throw fallback.error;
     data = fallback.data;
   }
-  return data?.length ? data[0].id : null;
+  return data?.[0]?.id || null;
 }
 
 async function verifyOverviewSave(snapshot) {
@@ -159,39 +146,51 @@ async function verifyOverviewSave(snapshot) {
   if (error) throw error;
 }
 
-async function verifyTripSave(snapshot) {
-  if (!snapshot.tripNumber) return;
-  const shiftId = await resolveShiftId(snapshot);
-  if (!shiftId) return;
-
-  let { data: tripRows, error: tripLookupError } = await supabaseClient
+async function findOrCreateTrip(shiftId, snapshot) {
+  const lookup = await supabaseClient
     .from(TRIPS)
     .select('id')
     .eq('shift_id', shiftId)
     .eq('trip_number', snapshot.tripNumber)
     .limit(1);
-  if (tripLookupError) throw tripLookupError;
+  if (lookup.error) throw lookup.error;
+  if (lookup.data?.[0]?.id) return lookup.data[0].id;
 
-  let tripId = tripRows?.[0]?.id || null;
-  if (tripId) {
-    const { error } = await supabaseClient.from(TRIPS).update(snapshot.route).eq('id', tripId);
-    if (error) throw error;
-  } else {
-    const { data, error } = await supabaseClient.from(TRIPS).insert({
-      ...snapshot.route,
-      shift_id: shiftId,
-      trip_number: snapshot.tripNumber,
-    }).select('id').limit(1);
-    if (error) throw error;
-    tripId = data?.[0]?.id || null;
-  }
+  const inserted = await supabaseClient.from(TRIPS).insert({
+    ...snapshot.route,
+    shift_id: shiftId,
+    trip_number: snapshot.tripNumber,
+  }).select('id').limit(1);
+  if (!inserted.error && inserted.data?.[0]?.id) return inserted.data[0].id;
 
-  if (tripId && snapshot.stops.length) {
+  // If the normal save and the verification save raced to create the same
+  // trip, re-read the winner rather than reporting a false failure.
+  const retry = await supabaseClient
+    .from(TRIPS)
+    .select('id')
+    .eq('shift_id', shiftId)
+    .eq('trip_number', snapshot.tripNumber)
+    .limit(1);
+  if (retry.error) throw retry.error;
+  if (retry.data?.[0]?.id) return retry.data[0].id;
+  throw inserted.error || new Error('Trip row could not be resolved after save.');
+}
+
+async function verifyTripSave(snapshot) {
+  if (!snapshot.tripNumber) return;
+  const shiftId = await resolveShiftId(snapshot);
+  if (!shiftId) return;
+  const tripId = await findOrCreateTrip(shiftId, snapshot);
+
+  const tripUpdate = await supabaseClient.from(TRIPS).update(snapshot.route).eq('id', tripId);
+  if (tripUpdate.error) throw tripUpdate.error;
+
+  if (snapshot.stops.length) {
     const payload = snapshot.stops.map((stop) => ({ ...stop, trip_id: tripId }));
-    const { error } = await supabaseClient
+    const stopUpdate = await supabaseClient
       .from(STOPS)
       .upsert(payload, { onConflict: 'trip_id,stop_number' });
-    if (error) throw error;
+    if (stopUpdate.error) throw stopUpdate.error;
   }
 }
 
@@ -209,36 +208,33 @@ async function verifyCapturedSave(snapshot) {
 }
 
 function editStopPanelComplete() {
-  const countEl = document.getElementById('ld-tr-stopCount');
-  if (!countEl) return null;
-  const count = Math.max(0, parseInt(countEl.value, 10) || 0);
+  const countElement = document.getElementById('ld-tr-stopCount');
+  if (!countElement) return null;
+  const count = Math.max(0, parseInt(countElement.value, 10) || 0);
   if (count === 0) return true;
-  for (let i = 0; i < count; i++) {
-    const timeIn = document.querySelector(`#ld-tab-content [data-stop-field="timeIn"][data-stop-index="${i}"]`);
-    const timeOut = document.querySelector(`#ld-tab-content [data-stop-field="timeOut"][data-stop-index="${i}"]`);
+  for (let index = 0; index < count; index++) {
+    const timeIn = document.querySelector(`#ld-tab-content [data-stop-field="timeIn"][data-stop-index="${index}"]`);
+    const timeOut = document.querySelector(`#ld-tab-content [data-stop-field="timeOut"][data-stop-index="${index}"]`);
     if (!timeIn?.value?.trim() || !timeOut?.value?.trim()) return false;
   }
   return true;
 }
 
 function staticStopPanelComplete(fieldset) {
-  const stopRows = [...fieldset.querySelectorAll('.ld-stop-row')].filter((row) => {
-    const label = row.children?.[0]?.textContent?.trim() || '';
-    return /^Stop\s+\d+/i.test(label);
-  });
-  if (!stopRows.length) return null;
-  return stopRows.every((row) => {
-    const inText = row.children?.[1]?.textContent || '';
-    const outText = row.children?.[2]?.textContent || '';
-    const inVal = inText.replace(/^\s*In:\s*/i, '').trim();
-    const outVal = outText.replace(/^\s*Out:\s*/i, '').trim();
-    return !!inVal && inVal !== '—' && !!outVal && outVal !== '—';
+  const rows = [...fieldset.querySelectorAll('.ld-stop-row')].filter((row) =>
+    /^Stop\s+\d+/i.test(row.children?.[0]?.textContent?.trim() || '')
+  );
+  if (!rows.length) return null;
+  return rows.every((row) => {
+    const timeIn = (row.children?.[1]?.textContent || '').replace(/^\s*In:\s*/i, '').trim();
+    const timeOut = (row.children?.[2]?.textContent || '').replace(/^\s*Out:\s*/i, '').trim();
+    return !!timeIn && timeIn !== '—' && !!timeOut && timeOut !== '—';
   });
 }
 
 function repairVisibleStopPanel() {
-  const fieldset = [...document.querySelectorAll('#ld-tab-content fieldset')].find((fs) =>
-    /^Stop In\/Out Times$/i.test(fs.querySelector('legend')?.textContent?.trim() || '')
+  const fieldset = [...document.querySelectorAll('#ld-tab-content fieldset')].find((item) =>
+    /^Stop In\/Out Times$/i.test(item.querySelector('legend')?.textContent?.trim() || '')
   );
   if (!fieldset) return;
   const complete = document.getElementById('ld-tr-stopCount')
@@ -256,24 +252,24 @@ function stopPairsComplete(trip, stopRows) {
   const count = Math.max(0, parseInt(trip.stop_count, 10) || 0);
   if (count === 0) return true;
   const byNumber = new Map((stopRows || []).map((stop) => [Number(stop.stop_number), stop]));
-  for (let n = 1; n <= count; n++) {
-    const stop = byNumber.get(n);
+  for (let number = 1; number <= count; number++) {
+    const stop = byNumber.get(number);
     if (!stop || !String(stop.time_in || '').trim() || !String(stop.time_out || '').trim()) return false;
   }
   return true;
 }
 
-function tripMissingFromDb(trip, stopRows, location) {
+function missingDocumentation(trip, stopRows, location) {
   const missing = [];
   if (location === 'delaware') {
     if (!imagePresent(trip.route_image_path)) missing.push('an image');
     return missing;
   }
-  if (!trip.ppwk_received) missing.push('paperwork confirmation');
+  if (!boolish(trip.ppwk_received)) missing.push('paperwork confirmation');
   if (!stopPairsComplete(trip, stopRows)) missing.push('stop times');
   if (!imagePresent(trip.route_image_path)) missing.push('an image');
   if (!String(trip.return_drop_location || '').trim()) missing.push('a drop location');
-  if (!trip.checked_in) missing.push('load checked in');
+  if (!boolish(trip.checked_in)) missing.push('load checked in');
   return missing;
 }
 
@@ -286,21 +282,24 @@ async function reconcileVisiblePills() {
 
   pillRepairRunning = true;
   try {
-    const { data: shifts, error: shiftError } = await supabaseClient
+    const shiftResult = await supabaseClient
       .from(SHIFTS)
       .select('id,pro_number')
       .eq('location', state.activeLocation)
       .eq('shift_date', state.activeDate);
-    if (shiftError) throw shiftError;
-    const shiftIds = (shifts || []).map((s) => s.id);
+    if (shiftResult.error) throw shiftResult.error;
+    const shifts = shiftResult.data || [];
+    const shiftIds = shifts.map((shift) => shift.id);
     if (!shiftIds.length) return;
 
-    const { data: trips, error: tripError } = await supabaseClient
+    const tripResult = await supabaseClient
       .from(TRIPS)
       .select('id,shift_id,route_id,trip_id,stop_count,ppwk_received,checked_in,return_drop_location,route_image_path,complete')
       .in('shift_id', shiftIds);
-    if (tripError) throw tripError;
-    const tripIds = (trips || []).map((t) => t.id);
+    if (tripResult.error) throw tripResult.error;
+    const trips = tripResult.data || [];
+    const tripIds = trips.map((trip) => trip.id);
+
     let stops = [];
     if (tripIds.length) {
       const stopResult = await supabaseClient
@@ -312,9 +311,9 @@ async function reconcileVisiblePills() {
     }
 
     const shiftByPro = new Map();
-    (shifts || []).forEach((s) => {
-      const key = String(s.pro_number || '').trim();
-      if (key && !shiftByPro.has(key)) shiftByPro.set(key, s.id);
+    shifts.forEach((shift) => {
+      const key = String(shift.pro_number || '').trim();
+      if (key && !shiftByPro.has(key)) shiftByPro.set(key, shift.id);
     });
     const stopsByTrip = new Map();
     stops.forEach((stop) => {
@@ -329,20 +328,20 @@ async function reconcileVisiblePills() {
       const shiftId = shiftByPro.get(pro);
       if (!shiftId) return;
       const label = pill.textContent.trim();
-      const trip = (trips || []).find((candidate) =>
+      const trip = trips.find((candidate) =>
         candidate.shift_id === shiftId &&
         (String(candidate.route_id || '').trim() === label || String(candidate.trip_id || '').trim() === label)
       );
-      if (!trip || !trip.complete) return;
-      const missing = tripMissingFromDb(trip, stopsByTrip.get(trip.id) || [], state.activeLocation);
-      const undocumented = missing.length > 0;
-      pill.classList.toggle('trip-chip-undocumented', undocumented);
-      pill.title = undocumented
+      if (!trip || !boolish(trip.complete)) return;
+
+      const missing = missingDocumentation(trip, stopsByTrip.get(trip.id) || [], state.activeLocation);
+      pill.classList.toggle('trip-chip-undocumented', missing.length > 0);
+      pill.title = missing.length
         ? `Closed out but missing: ${missing.join(', ')} — click to restore`
         : 'Closed out — click to restore';
     });
   } catch (error) {
-    console.warn('[load-details-integrity] could not reconcile completed pills:', error);
+    console.warn('[load-details-integrity] completed-pill reconciliation failed:', error);
   } finally {
     pillRepairRunning = false;
   }
@@ -350,12 +349,10 @@ async function reconcileVisiblePills() {
 
 function schedulePillRepair(delay = 250) {
   clearTimeout(pillTimer);
-  pillTimer = setTimeout(reconcileVisiblePills, delay);
+  pillTimer = setTimeout(() => void reconcileVisiblePills(), delay);
 }
 
 function init() {
-  // Capture before loadboard.js's normal click handler has a chance to rerender
-  // the modal and destroy the exact values the user just submitted.
   document.addEventListener('click', (event) => {
     const button = event.target.closest?.('[data-ld-save]');
     if (!button) return;
@@ -363,11 +360,10 @@ function init() {
     if (snapshot) setTimeout(() => void verifyCapturedSave(snapshot), 700);
   }, true);
 
-  const observer = new MutationObserver(() => {
+  new MutationObserver(() => {
     repairVisibleStopPanel();
     schedulePillRepair();
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
+  }).observe(document.body, { childList: true, subtree: true });
 
   repairVisibleStopPanel();
   schedulePillRepair(50);
