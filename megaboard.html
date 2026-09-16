@@ -22,7 +22,7 @@
     <div class="mega-toolbar">
       <div>
         <h1>Megaboard</h1>
-        <div class="subtext">Route-focused operational view across every load board. A selected day also includes open overnight routes and the next morning's 00:00–04:00 starts.</div>
+        <div class="subtext">Current operational routes across every live load board, including overnight carryover and the next morning's 00:00–04:00 handoff window.</div>
       </div>
       <div class="mega-toolbar-actions">
         <button type="button" class="btn btn-ghost" id="mega-expand-all">Expand All</button>
@@ -31,11 +31,11 @@
       </div>
     </div>
 
-    <section class="mega-filter-card" aria-label="Megaboard date selection">
+    <section class="mega-filter-card" aria-label="Megaboard date selection" hidden>
       <div class="mega-filter-head">
         <div>
           <strong>Days to show</strong>
-          <div class="subtext">Available window: 7 days before today through 7 days after today. Each selected day includes overnight route carryover and early-AM handoff coverage.</div>
+          <div class="subtext">Internal date selector retained for the current operational feed.</div>
         </div>
         <div class="mega-filter-actions">
           <button type="button" class="btn btn-ghost" id="mega-today-only">Today</button>
@@ -50,7 +50,7 @@
       <div class="mega-control-head">
         <div class="mega-control-title">
           <strong>Control Center</strong>
-          <div class="subtext">What needs attention, what is coming up, and what just changed across the selected day(s).</div>
+          <div class="subtext">What needs attention, what is coming up, and what just changed in the current operational window.</div>
         </div>
         <div class="mega-control-tabs" role="tablist" aria-label="Control Center views">
           <button type="button" class="mega-control-tab is-active" data-mega-cc-tab="upcoming" role="tab" aria-selected="true">
@@ -75,5 +75,6 @@
   <script type="module" src="megaboard-control-center.js" defer></script>
   <script type="module" src="megaboard-live-view.js" defer></script>
   <script type="module" src="megaboard-rolling-window.js" defer></script>
+  <script type="module" src="megaboard-current-focus.js" defer></script>
 </body>
 </html>
