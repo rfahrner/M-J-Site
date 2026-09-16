@@ -24,6 +24,25 @@ function installStyles() {
       font-family: inherit !important;
       cursor: pointer !important;
     }
+    .tabs > .tab-btn,
+    .tabs > .tab-btn-disabled {
+      flex: 0 0 auto;
+    }
+    .tab-btn-disabled {
+      border: none;
+      background: transparent;
+      color: #000;
+      opacity: .45;
+      padding: 0 16px;
+      height: 100%;
+      display: inline-flex;
+      align-items: center;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: .01em;
+      white-space: nowrap;
+      cursor: default;
+    }
     #site-nav-v2-portal {
       display:none;
       position:fixed;
