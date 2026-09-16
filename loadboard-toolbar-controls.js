@@ -121,6 +121,7 @@ function init() {
     import('./timesheet-completion-flow.js')
       .then(() => Promise.all([
         import('./timesheet-image-preview.js'),
+        import('./load-overview-timesheet-image.js'),
         import('./load-details-integrity.js'),
       ]))
       .catch((e) => console.error('Failed to load Load Details completion/integrity helpers:', e));
