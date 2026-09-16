@@ -164,15 +164,30 @@ async function uploadTimesheetImage(row, file) {
   }
 }
 
+async function finishCompletionArtifacts(row, file) {
+  // submitTimesheetModal() still assigns the hidden compatibility value to the
+  // old shift-level field. Clear that immediately so "Not required" never
+  // becomes real operational data.
+  row.trailerDropLocation = '';
+  if (row.dbId && lb?.supabaseClient) {
+    try {
+      const { error } = await lb.supabaseClient.from('loads_shifts').update({ trailer_drop_location: null }).eq('id', row.dbId);
+      if (error) throw error;
+    } catch (error) {
+      console.warn('[timesheet-completion-flow] could not clear legacy trailer drop value:', error);
+    }
+  }
+  if (file) await uploadTimesheetImage(row, file);
+}
+
 function watchForCompletion(before, file) {
-  if (!file) return;
   const generation = ++currentCompletionGeneration;
   const started = Date.now();
   const poll = () => {
     if (generation !== currentCompletionGeneration) return;
     const row = newlyCompletedRow(before);
     if (row) {
-      void uploadTimesheetImage(row, file);
+      void finishCompletionArtifacts(row, file);
       return;
     }
     if (Date.now() - started < 10000) setTimeout(poll, 75);
