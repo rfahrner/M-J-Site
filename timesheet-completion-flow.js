@@ -7,11 +7,12 @@
  * - Entering both time-sheet times in Load Details > Overview and saving
  *   marks the whole load complete (and collapses its trips) in the same save.
  *
- * This lives beside loadboard.js instead of duplicating the modal markup on
- * every board page.
+ * This module itself is loaded dynamically after loadboard.js finishes, so a
+ * normal static import back to loadboard.js is safe here and lets all capture
+ * listeners be installed before the integrity guard is imported.
  */
+import * as lb from './loadboard.js';
 
-let lb = null;
 let modalObserver = null;
 let currentCompletionGeneration = 0;
 
@@ -265,10 +266,7 @@ function installOverviewCompletionHooks() {
   }, true);
 }
 
-async function init() {
-  // This module is intentionally loaded after the main board module finishes
-  // evaluating (see loadboard-toolbar-controls.js), avoiding an ESM cycle.
-  lb = await import('./loadboard.js');
+function init() {
   installStyles();
   syncCompletionModal();
   installOverviewCompletionHooks();
@@ -292,5 +290,5 @@ async function init() {
   }
 }
 
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init(), { once: true });
-else void init();
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
+else init();
