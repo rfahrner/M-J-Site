@@ -109,6 +109,11 @@ function init() {
   if (driverListLocation()) {
     import('./unified-board-image-cells.js').catch((e) => console.error('Failed to load shared image cells:', e));
     import('./image-gallery-scroll-fix.js').catch((e) => console.error('Failed to load paged image viewer:', e));
+  }
+
+  // The same Load Details modal can be opened from a load board or Accounting.
+  // Use the same save verification / stop-time truth check in both places.
+  if (driverListLocation() || currentFile() === 'accounting.html') {
     import('./load-details-integrity.js').catch((e) => console.error('Failed to load Load Details integrity guard:', e));
   }
 
