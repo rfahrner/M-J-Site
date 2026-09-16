@@ -6,6 +6,7 @@ import './unified-load-modals.js';
 import './houston-load-details-v2.js';
 import './board-row-hover-enhancements.js';
 import './daily-board-notes.js';
+import './board-cell-focus-guard.js';
 
 const BOARD_LOCATION_BY_FILE = {
   "": "atlanta",
