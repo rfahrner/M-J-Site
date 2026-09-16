@@ -103,11 +103,12 @@ function init() {
   normalizeBoardToolbar();
   openRequestedDriverListTab();
 
-  // Atlanta, Delaware and Building C already use the shared image-cell
-  // implementation in loadboard.js. This bridge upgrades the two flat-table
-  // boards (Houston + every Mondelez location) to that same implementation.
+  // Every load board uses the same image cells and the same paged full-screen
+  // viewer. The viewer shows one original image at a time with Previous/Next
+  // controls instead of stacking/scaling a scrollable gallery.
   if (driverListLocation()) {
     import('./unified-board-image-cells.js').catch((e) => console.error('Failed to load shared image cells:', e));
+    import('./image-gallery-scroll-fix.js').catch((e) => console.error('Failed to load paged image viewer:', e));
   }
 
   if (currentFile() === "mondelez.html") {
