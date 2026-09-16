@@ -119,6 +119,12 @@ function init() {
   // Install the time-sheet completion behavior first so its capture listener
   // normalizes the final values before the save-integrity guard snapshots them.
   if (driverListLocation() || currentFile() === 'accounting.html') {
+    // Rehydrate an existing route's DB id before any modal image upload. This
+    // is deliberately a dynamic, isolated helper: if it ever fails to load,
+    // the rest of the site continues normally.
+    import('./trip-db-id-rehydration.js')
+      .catch((e) => console.error('Failed to load trip id rehydration helper:', e));
+
     import('./timesheet-completion-flow.js')
       .then(() => Promise.all([
         import('./timesheet-image-preview.js'),
