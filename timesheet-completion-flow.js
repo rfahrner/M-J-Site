@@ -264,12 +264,16 @@ async function init() {
       if (event.target?.id === 'tsc-start' || event.target?.id === 'tsc-end') autoCheckReceived();
     }, true);
     modal.addEventListener('click', validateAndPrepareCompleteClick, true);
+    let wasHidden = modal.classList.contains('hidden');
     modalObserver = new MutationObserver(() => {
-      const wasHidden = modal.classList.contains('hidden');
-      syncCompletionModal();
-      if (!wasHidden) resetImageField();
+      const hidden = modal.classList.contains('hidden');
+      if (wasHidden && !hidden) {
+        syncCompletionModal();
+        resetImageField();
+      }
+      wasHidden = hidden;
     });
-    modalObserver.observe(modal, { attributes: true, attributeFilter: ['class'], childList: true, subtree: true });
+    modalObserver.observe(modal, { attributes: true, attributeFilter: ['class'] });
   }
 }
 
