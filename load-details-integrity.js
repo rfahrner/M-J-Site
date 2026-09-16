@@ -98,7 +98,7 @@ function captureModalSave(button) {
       notes: value('ld-tr-notes') || null,
       dispatch_time: value('ld-tr-dispatch-time') || null,
       return_eta_to_dc: value('ld-tr-return-eta') || null,
-      ppwk_received: complete ? 'true' : (checked('ld-tr-ppwk-received') ? 'true' : 'false'),
+      ppwk_received: checked('ld-tr-ppwk-received') ? 'true' : 'false',
       checked_in: checked('ld-tr-checked-in'),
       return_drop_location: value('ld-tr-drop-location') || null,
       complete,
@@ -163,8 +163,6 @@ async function findOrCreateTrip(shiftId, snapshot) {
   }).select('id').limit(1);
   if (!inserted.error && inserted.data?.[0]?.id) return inserted.data[0].id;
 
-  // If the normal save and the verification save raced to create the same
-  // trip, re-read the winner rather than reporting a false failure.
   const retry = await supabaseClient
     .from(TRIPS)
     .select('id')
