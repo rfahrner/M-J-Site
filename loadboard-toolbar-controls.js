@@ -118,7 +118,10 @@ function init() {
   // normalizes the final values before the save-integrity guard snapshots them.
   if (driverListLocation() || currentFile() === 'accounting.html') {
     import('./timesheet-completion-flow.js')
-      .then(() => import('./load-details-integrity.js'))
+      .then(() => Promise.all([
+        import('./timesheet-image-preview.js'),
+        import('./load-details-integrity.js'),
+      ]))
       .catch((e) => console.error('Failed to load Load Details completion/integrity helpers:', e));
   }
 
