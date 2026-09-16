@@ -45,12 +45,39 @@
       .image-viewer-stage .image-viewer-gallery img.is-active-image {
         display: block !important;
       }
+      .image-viewer-pager {
+        position: fixed;
+        left: 50%;
+        bottom: 18px;
+        transform: translateX(-50%);
+        z-index: 100001;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 7px 10px;
+        border: 1px solid rgba(148, 163, 184, .55);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, .96);
+        box-shadow: 0 6px 18px rgba(15, 23, 42, .24);
+        backdrop-filter: blur(6px);
+      }
+      .image-viewer-pager .btn {
+        min-width: 36px;
+        height: 32px;
+        padding: 0 10px !important;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 20px;
+        line-height: 1;
+      }
       .image-viewer-page-count {
-        min-width: 48px;
+        min-width: 54px;
         text-align: center;
         font-size: 12px;
         font-weight: 700;
-        color: var(--slate-500, #64748b);
+        color: var(--slate-700, #334155);
         white-space: nowrap;
       }
     `;
@@ -65,12 +92,15 @@
   function wirePagedViewer(overlay) {
     if (!overlay || overlay.dataset.galleryPagerWired === '1') return;
     const gallery = overlay.querySelector('.image-viewer-gallery');
-    const toolbar = overlay.querySelector('.image-viewer-toolbar');
-    if (!gallery || !toolbar) return;
+    if (!gallery) return;
     const images = [...gallery.querySelectorAll('img')];
     if (images.length < 2) return;
 
     overlay.dataset.galleryPagerWired = '1';
+
+    const pager = document.createElement('div');
+    pager.className = 'image-viewer-pager';
+    pager.dataset.viewerPager = '1';
 
     const previous = document.createElement('button');
     previous.type = 'button';
@@ -92,10 +122,8 @@
     next.setAttribute('aria-label', 'Next image');
     next.textContent = '›';
 
-    const close = toolbar.querySelector('.modal-close');
-    toolbar.insertBefore(previous, close || null);
-    toolbar.insertBefore(count, close || null);
-    toolbar.insertBefore(next, close || null);
+    pager.append(previous, count, next);
+    overlay.appendChild(pager);
 
     const refresh = () => {
       const index = activeIndex(images);
