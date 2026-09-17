@@ -16,6 +16,8 @@ The load board should behave like a very simple spreadsheet:
 
 The user explicitly said: "I just typed a number 3 times and every time it was deleting itself" and "I want to go from one cell to the next — I don't need anything crazy."
 
+LATEST OBSERVATION: the failure now occurs **while the user is still typing**, before Tab. The user gets halfway through entering a number in a lower route row and focus suddenly jumps to the **same column in the row above**. This strongly suggests a realtime/save-triggered rerender or focus restoration is firing mid-edit, not merely bad Tab navigation.
+
 ## Reproduction pattern
 
 This has been easiest to reproduce on a standard Kroger board (Atlanta in particular) when one shift has multiple route/trip rows.
@@ -24,9 +26,10 @@ Example:
 
 1. Open a load with at least two visible route rows.
 2. Click the `Trip ID` input on the SECOND route row.
-3. Type a value such as `1293405`.
-4. Wait briefly and/or press `Tab`.
-5. Observed failures have included:
+3. Begin typing a value such as `1293405`.
+4. **Without pressing Tab**, continue typing for a moment.
+5. Current observed failure: partway through typing, focus jumps to the same Trip ID column on the FIRST route row; the partially typed value may then disappear/revert.
+6. Waiting briefly and/or pressing `Tab` has also produced:
    - typed value disappears/reverts,
    - focus jumps to the same column in the FIRST route row,
    - the visible input looked focused in route 2 while row/focus logic behaved as though route 1 was active.
@@ -93,7 +96,7 @@ if (domField) localTrip[domField] = preserved;
 
 If `domField` is wrongly `null`, an incoming realtime payload can overwrite the local value that the dispatcher just typed.
 
-This is the best concrete explanation found so far for values disappearing specifically on second/subsequent route rows.
+The new mid-typing jump makes this even more likely: a realtime event can arrive during the 700ms debounce window, merge stale DB state, redraw the table, and the board's generic focus restore can land on the first physical row for that shift/column.
 
 A minimal correction to investigate is to make `currentlyEditedField` identify the active cell directly from its data attributes instead of requiring the active input to be contained by `document.getElementById(rowId)`, e.g. logically:
 
@@ -123,6 +126,8 @@ Even after fixing `currentlyEditedField`, there may still be a race after the us
 4. User presses Tab and focus moves to the next cell.
 5. A stale/in-flight realtime `loads_trips` payload arrives before the local save is authoritative.
 6. Because the previous field is no longer the active field, realtime merge may overwrite the locally dirty value.
+
+There is now also evidence for the same race **before blur**: if `currentlyEditedField` misidentifies route 2+ as not being actively edited, stale realtime can overwrite the field while the user is still typing.
 
 So please inspect whether the robust solution should be a VERY SMALL dirty-field / pending-save guard rather than more focus restoration.
 
@@ -182,6 +187,7 @@ The user reports the problem is still present after these attempts.
    - `scheduleTripSave`
    - `saveTripNow`
    - `renderBoardTable`
+   - `captureFocusForRerender` / any generic restoreFocus logic
    - `handleRowAwareTab`
    - generation of multi-trip row HTML / `data-row`, `data-trip`, `data-field`
 2. `simple-board-grid.js`
@@ -193,7 +199,9 @@ The user reports the problem is still present after these attempts.
 Please do not consider this fixed until all of these work on a load with 2+ open routes:
 
 1. Click route 2 `Trip ID`.
-2. Type a new number.
+2. Slowly type a new 7+ digit number **without pressing Tab**.
+   - Focus must not jump to route 1 midway through typing.
+   - Every keystroke remains in route 2.
 3. Wait 2+ seconds without touching anything.
    - Value remains exactly as typed.
 4. Press Tab repeatedly through Trailer #, Miles, Stops, Dispatch Time.
