@@ -3462,7 +3462,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const rows = getSheet(state.activeLocation, state.activeDate).filter((r) => r.selected);
     const members = rows.map((r) => {
       const drv = r.driverId ? findDriver(r.driverId) : null;
-      return { name: drv ? drv.name : (r.driverNameText || "Unnamed"), phone: drv ? drv.phone : (r.cellSnapshot || ""), dispatcherPhone: drv ? drv.dispatcherPhone : "" };
+      return drv
+        ? { ...drv }
+        : { name: r.driverNameText || "Unnamed", phone: r.cellSnapshot || "", dispatcherPhone: "" };
     });
     beginTextBatchFlow(applyPhoneMode(members), "Selected Loads", message);
   }
@@ -3747,6 +3749,83 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     return `${withCountryCode}@textbetter.com`;
   }
 
+  // DNU is a hard recipient block, not just a Driver List filter. Keep the
+  // explicit names as a fail-safe in case a duplicate/legacy record loses its
+  // rating. Nathaneil is an existing misspelling of Nathaniel in the data.
+  const NEVER_TEXT_DRIVER_NAMES = new Set([
+    "nathaniel davis",
+    "nathaneil davis",
+    "muarrem lazaj",
+  ]);
+
+  function normalizedTextRecipientName(value) {
+    return String(value || "")
+      .replace(/\s+\(dispatch\)\s*$/i, "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, " ");
+  }
+
+  function textPhoneKeys(value) {
+    const matches = String(value || "").match(/\d[\d\s().-]{8,}\d/g) || [];
+    const keys = new Set();
+    matches.forEach((match) => {
+      let digits = match.replace(/\D/g, "");
+      if (digits.length === 11 && digits.startsWith("1")) digits = digits.slice(1);
+      if (digits.length === 10) keys.add(digits);
+    });
+    return keys;
+  }
+
+  function setsIntersect(a, b) {
+    for (const value of a) if (b.has(value)) return true;
+    return false;
+  }
+
+  function isNeverTextDriver(driver) {
+    const rating = String(driver && driver.rating || "").trim().toUpperCase();
+    const name = normalizedTextRecipientName(driver && driver.name);
+    return rating.includes("DNU") || NEVER_TEXT_DRIVER_NAMES.has(name);
+  }
+
+  function neverTextRules() {
+    const directDnu = (state.drivers || []).filter(isNeverTextDriver);
+    const blockedNames = new Set(NEVER_TEXT_DRIVER_NAMES);
+    const blockedMcs = new Set();
+    const blockedPhones = new Set();
+
+    directDnu.forEach((driver) => {
+      const name = normalizedTextRecipientName(driver.name);
+      if (name) blockedNames.add(name);
+      const mc = String(driver.mc || "").trim();
+      if (mc) blockedMcs.add(mc);
+      textPhoneKeys(driver.phone).forEach((phone) => blockedPhones.add(phone));
+    });
+
+    return { blockedNames, blockedMcs, blockedPhones };
+  }
+
+  function filterNeverTextRecipients(recipients) {
+    const rules = neverTextRules();
+    const allowed = [];
+    const blocked = [];
+
+    (Array.isArray(recipients) ? recipients : []).filter(Boolean).forEach((recipient) => {
+      const name = normalizedTextRecipientName(recipient.name);
+      const mc = String(recipient.mc || "").trim();
+      const phones = textPhoneKeys(recipient.phone);
+      const dispatcherPhones = textPhoneKeys(recipient.dispatcherPhone);
+      const isBlocked = isNeverTextDriver(recipient)
+        || rules.blockedNames.has(name)
+        || (mc && rules.blockedMcs.has(mc))
+        || setsIntersect(phones, rules.blockedPhones)
+        || setsIntersect(dispatcherPhones, rules.blockedPhones);
+      (isBlocked ? blocked : allowed).push(recipient);
+    });
+
+    return { allowed, blocked };
+  }
+
   let sendTextModalState = null; // { rawPhone }
 
   function updateSendTextCounter() {
@@ -3766,7 +3845,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   }
 
   export function openSendTextModal(recipients, prefilledMessage, markShiftIdsOnSent) {
-    const safeRecipients = Array.isArray(recipients) ? recipients.filter(Boolean) : [];
+    const filtered = filterNeverTextRecipients(recipients);
+    const safeRecipients = filtered.allowed;
     const withPhone = safeRecipients.filter((r) => formatTextAddress(r.phone));
     // De-dupe by normalized phone — several drivers can share the same
     // dispatcher (or even the same cell), and nobody should get texted
@@ -3780,13 +3860,20 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       deduped.push(r);
     });
     if (!deduped.length) {
-      setDriverSyncStatus("No phone number on file for this driver.", "error");
+      setDriverSyncStatus(
+        filtered.blocked.length
+          ? "That recipient is marked DNU and cannot be texted."
+          : "No phone number on file for this driver.",
+        "error",
+      );
       return;
     }
     sendTextModalState = { recipients: deduped, markShiftIdsOnSent: markShiftIdsOnSent || null };
     $("#send-text-phone-display").textContent = deduped.map((r) => r.name || r.phone).join(", ");
     $("#send-text-message").value = prefilledMessage || "";
-    $("#send-text-status").textContent = "";
+    $("#send-text-status").textContent = filtered.blocked.length
+      ? `${filtered.blocked.length} DNU recipient${filtered.blocked.length === 1 ? " was" : "s were"} removed.`
+      : "";
     updateSendTextCounter();
     $("#modal-send-text").classList.remove("hidden");
     $("#send-text-message").focus();
@@ -3826,6 +3913,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (!sendTextModalState) return;
     const message = $("#send-text-message").value.trim();
     if (!message) { $("#send-text-status").textContent = "Type a message first."; return; }
+    const filtered = filterNeverTextRecipients(sendTextModalState.recipients);
+    sendTextModalState.recipients = filtered.allowed;
+    if (!sendTextModalState.recipients.length) {
+      $("#send-text-status").textContent = "This recipient is marked DNU and cannot be texted.";
+      return;
+    }
     const sendBtn = $("#send-text-submit");
     sendBtn.disabled = true;
     $("#send-text-status").textContent = "Sending…";
@@ -3845,6 +3938,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       $("#send-text-status").innerHTML = `Couldn't send automatically (${escapeHtml(String(e.message || e))}). <button type="button" class="btn btn-ghost" id="send-text-fallback" style="margin-left:6px;">Open in email instead</button>`;
       const fallbackBtn = $("#send-text-fallback");
       if (fallbackBtn) fallbackBtn.addEventListener("click", async () => {
+        const filteredFallback = filterNeverTextRecipients(sendTextModalState.recipients);
+        sendTextModalState.recipients = filteredFallback.allowed;
+        if (!sendTextModalState.recipients.length) {
+          $("#send-text-status").textContent = "This recipient is marked DNU and cannot be texted.";
+          return;
+        }
         const addrs = sendTextModalState.recipients.map((r) => formatTextAddress(r.phone)).join(",");
         const a = document.createElement("a");
         a.href = `mailto:${addrs}?body=${encodeURIComponent(message)}`;
@@ -3903,7 +4002,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       const classes = availableDriverClasses();
       selectEl.innerHTML = [
         `<option value="ALL">All Drivers</option>`,
-        ...classes.map((c) => `<option value="${c}">${c === "DNU" ? "DNU" : "Rating " + c}</option>`),
+        ...classes.filter((c) => c !== "DNU").map((c) => `<option value="${c}">Rating ${c}</option>`),
       ].join("");
       selectEl.value = "ALL";
     }
@@ -3948,11 +4047,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
   export function beginTextBatchFlow(members, label, message) {
     const errEl = $("#tg-error");
+    const filtered = filterNeverTextRecipients(members);
     const withPhone = [];
     const skipped = [];
     const deduped = [];
     const seenPhones = new Set();
-    members.forEach((d) => {
+    filtered.allowed.forEach((d) => {
       const normalized = formatTextAddress(d.phone);
       if (!normalized) { skipped.push(d); return; }
       if (seenPhones.has(normalized)) { deduped.push(d); return; } // shares a number with someone already queued -- don't text it twice
@@ -3961,7 +4061,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     });
 
     if (withPhone.length === 0) {
-      errEl.textContent = `No one in ${label} has a phone number on file.`;
+      errEl.textContent = filtered.blocked.length
+        ? `No textable recipients remain in ${label}; every matching recipient is marked DNU.`
+        : `No one in ${label} has a phone number on file.`;
       errEl.classList.remove("hidden");
       return;
     }
@@ -3970,7 +4072,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const batches = [];
     for (let i = 0; i < withPhone.length; i += GROUP_BATCH_SIZE) batches.push(withPhone.slice(i, i + GROUP_BATCH_SIZE));
 
-    groupTextState = { groupKey: label, message, batches, batchIndex: 0, skipped, deduped, totalSent: 0 };
+    groupTextState = { groupKey: label, message, batches, batchIndex: 0, skipped, deduped, blocked: filtered.blocked, totalSent: 0 };
     $("#tg-setup-step").classList.add("hidden");
     $("#tg-progress-step").classList.remove("hidden");
     renderGroupTextProgress();
@@ -4116,11 +4218,14 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const dedupedNote = s.deduped && s.deduped.length
       ? `<div class="calc-note" style="margin-top:4px;">${s.deduped.length} driver(s) share a number with someone already in this batch, so only one text went to that number: ${escapeHtml(s.deduped.map((d) => d.name).join(", "))}</div>`
       : "";
+    const blockedNote = s.blocked && s.blocked.length
+      ? `<div class="calc-note" style="margin-top:4px;">${s.blocked.length} DNU recipient(s) were blocked: ${escapeHtml(s.blocked.map((d) => d.name).join(", "))}</div>`
+      : "";
 
     if (isDone) {
       $("#tg-progress-body").innerHTML = `
         <div class="subtext" style="font-weight:700; font-size:14px;">All done — ${s.totalSent} driver(s) in ${escapeHtml(s.groupKey)} texted across ${s.batches.length} batch(es).</div>
-        ${skipNote}${dedupedNote}`;
+        ${skipNote}${dedupedNote}${blockedNote}`;
       $("#tg-send-now").classList.add("hidden");
       $("#tg-open-batch").classList.add("hidden");
       $("#tg-confirm-sent").classList.add("hidden");
@@ -4131,7 +4236,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     $("#tg-progress-body").innerHTML = `
       <div class="subtext" style="font-weight:700;">Batch ${s.batchIndex + 1} of ${s.batches.length} — ${batch.length} recipient(s)</div>
       <div class="subtext" style="margin-top:6px;">${escapeHtml(batch.map((d) => d.name).join(", "))}</div>
-      ${skipNote}${dedupedNote}
+      ${skipNote}${dedupedNote}${blockedNote}
       <div class="calc-note" style="margin-top:10px;" id="tg-batch-status">Click "Send Now" to send this batch automatically, or fall back to Outlook if needed.</div>
     `;
     $("#tg-send-now").classList.remove("hidden");
@@ -4144,9 +4249,18 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   export async function sendCurrentGroupBatchDirect() {
     const s = groupTextState;
     if (!s) return;
-    const batch = s.batches[s.batchIndex];
+    const queuedBatch = s.batches[s.batchIndex];
+    const filtered = filterNeverTextRecipients(queuedBatch);
+    const batch = filtered.allowed;
+    if (filtered.blocked.length) s.blocked.push(...filtered.blocked);
+    s.batches[s.batchIndex] = batch;
     const btn = $("#tg-send-now");
     const statusEl = $("#tg-batch-status");
+    if (!batch.length) {
+      s.batchIndex += 1;
+      renderGroupTextProgress();
+      return;
+    }
     btn.disabled = true;
     if (statusEl) statusEl.textContent = "Sending…";
     try {
@@ -4170,7 +4284,16 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   export function openCurrentGroupBatch() {
     const s = groupTextState;
     if (!s) return;
-    const batch = s.batches[s.batchIndex];
+    const queuedBatch = s.batches[s.batchIndex];
+    const filtered = filterNeverTextRecipients(queuedBatch);
+    const batch = filtered.allowed;
+    if (filtered.blocked.length) s.blocked.push(...filtered.blocked);
+    s.batches[s.batchIndex] = batch;
+    if (!batch.length) {
+      s.batchIndex += 1;
+      renderGroupTextProgress();
+      return;
+    }
     const addrs = batch.map((d) => formatTextAddress(d.phone)).join(",");
     const a = document.createElement("a");
     a.href = `mailto:${addrs}?body=${encodeURIComponent(s.message)}`;

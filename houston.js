@@ -278,7 +278,7 @@ export const HOUSTON_TABLE = "loads_houston";
     const rows = getHoustonSheet(state.activeDate).filter((r) => r.selected);
     const members = rows.map((r) => {
       const drv = r.driverId ? findDriver(r.driverId) : null;
-      return { name: drv ? drv.name : (r.driverName || "Unnamed"), phone: drv ? drv.phone : r.driverPhone };
+      return drv ? { ...drv } : { name: r.driverName || "Unnamed", phone: r.driverPhone };
     });
     beginTextBatchFlow(members, "Selected Loads", message);
   }
