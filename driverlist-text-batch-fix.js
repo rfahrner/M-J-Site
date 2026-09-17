@@ -20,6 +20,64 @@ function isDnuDriver(driver) {
   return String(driver?.rating || '').trim().toUpperCase().includes('DNU');
 }
 
+function mcKey(value) {
+  return String(value || '').trim();
+}
+
+function phoneKeys(value) {
+  const text = String(value || '');
+  const matches = text.match(/\d[\d\s().-]{8,}\d/g) || [];
+  const out = new Set();
+  matches.forEach((match) => {
+    let digits = match.replace(/\D/g, '');
+    if (digits.length === 11 && digits.startsWith('1')) digits = digits.slice(1);
+    if (digits.length === 10) out.add(digits);
+  });
+  return out;
+}
+
+function intersects(a, b) {
+  for (const value of a) if (b.has(value)) return true;
+  return false;
+}
+
+// A DNU applies to more than the one driver record during mass texting:
+//   1) the DNU driver is excluded;
+//   2) the DNU driver's MC/carrier is excluded;
+//   3) if the DNU driver's cell number is used as another driver's dispatcher
+//      number, that other driver is excluded too.
+// This is intentionally a texting rule only; it does not rewrite unrelated
+// driver profiles just because they share an MC.
+function usableDriversForMassText(drivers) {
+  const directDnu = drivers.filter(isDnuDriver);
+  if (!directDnu.length) return drivers;
+
+  const blockedMcs = new Set();
+  const blockedDriverPhones = new Set();
+  directDnu.forEach((driver) => {
+    const mc = mcKey(driver.mc);
+    if (mc) blockedMcs.add(mc);
+    phoneKeys(driver.phone).forEach((phone) => blockedDriverPhones.add(phone));
+  });
+
+  return drivers.filter((driver) => {
+    if (isDnuDriver(driver)) return false;
+
+    const mc = mcKey(driver.mc);
+    if (mc && blockedMcs.has(mc)) return false;
+
+    const dispatcherPhones = phoneKeys(driver.dispatcherPhone);
+    if (intersects(dispatcherPhones, blockedDriverPhones)) return false;
+
+    // Duplicate driver records can exist under slightly different names. If a
+    // non-DNU duplicate carries the exact cell number of a DNU record, treat
+    // it as the same do-not-text contact.
+    if (intersects(phoneKeys(driver.phone), blockedDriverPhones)) return false;
+
+    return true;
+  });
+}
+
 function initDriverListTextBatchFix() {
   const modal = document.getElementById('modal-text-group');
   const openBtn = document.getElementById('btn-text-group');
@@ -53,18 +111,18 @@ function initDriverListTextBatchFix() {
     setTimeout(resetSetupButtons, 0);
   });
 
-  // "All Drivers" means all usable drivers. DNU is an explicit do-not-use
-  // classification, so keep every DNU record out of the recipient pool while
-  // loadboard.js builds the batch. includes('DNU') also catches any older
-  // free-text value such as "Hard DNU" until that profile is edited into the
-  // new fixed rating dropdown.
+  // "All Drivers" means all usable drivers. Build the batch from a temporary
+  // filtered list so DNU contacts, their MC/carrier, and drivers whose
+  // dispatcher number belongs to a DNU driver can never slip into the group.
+  // Restore the complete Driver List immediately after loadboard.js has built
+  // its recipient copy; the visible Driver List itself remains unchanged.
   modal.addEventListener('click', (event) => {
     if (!event.target.closest('#tg-start')) return;
     const groupSelect = document.getElementById('tg-group-select');
     if (groupSelect?.value !== 'ALL' || !Array.isArray(state.drivers)) return;
 
     const fullDriverList = state.drivers;
-    const usableDrivers = fullDriverList.filter((driver) => !isDnuDriver(driver));
+    const usableDrivers = usableDriversForMassText(fullDriverList);
     if (usableDrivers.length === fullDriverList.length) return;
 
     state.drivers = usableDrivers;
