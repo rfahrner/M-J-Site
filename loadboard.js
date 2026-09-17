@@ -1365,15 +1365,19 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (!supabaseClient) return null;
     try {
       const payload = shiftToDbRow(row, row.location || state.activeLocation, row.shiftDate || state.activeDate);
+      // Captured before the round trip: what the acknowledgement will mean.
+      const sent = snapshotDirtyFields(dirtyShiftFields, row.id, row);
       if (row.dbId) {
         const { error } = await supabaseClient.from(SHIFTS_TABLE).update(payload).eq("id", row.dbId);
         if (error) { console.error("Failed to save row:", error); setDriverSyncStatus(`Couldn't save changes to this row (${error.message}).`, "error"); return null; }
+        confirmDirtyFieldsSaved(dirtyShiftFields, row.id, sent, row);
         queueAljexSync(row.dbId, row.location);
         return row.dbId;
       }
       const { data, error } = await supabaseClient.from(SHIFTS_TABLE).insert(payload).select();
       if (error) { console.error("Failed to create row:", error); setDriverSyncStatus(`Couldn't save this row (${error.message}).`, "error"); return null; }
       row.dbId = data[0].id;
+      confirmDirtyFieldsSaved(dirtyShiftFields, row.id, sent, row);
       queueAljexSync(row.dbId, row.location);
       return row.dbId;
     } catch (e) {
@@ -1389,15 +1393,19 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       const shiftDbId = row.dbId || (await saveShiftNow(row)); // a trip can't exist without its parent shift
       if (!shiftDbId) return null;
       const payload = tripToDbRow(trip, shiftDbId, tripNumber);
+      // Captured before the round trip: what the acknowledgement will mean.
+      const sent = snapshotDirtyFields(dirtyTripFields, trip.id, trip);
       if (trip.dbId) {
         const { error } = await supabaseClient.from(TRIPS_TABLE).update(payload).eq("id", trip.dbId);
         if (error) { console.error("Failed to save load:", error); setDriverSyncStatus(`Couldn't save this load (${error.message}).`, "error"); return null; }
+        confirmDirtyFieldsSaved(dirtyTripFields, trip.id, sent, trip);
         queueAljexSync(shiftDbId, row.location); // route_id lives here — this is the Ref# feed
         return trip.dbId;
       }
       const { data, error } = await supabaseClient.from(TRIPS_TABLE).insert(payload).select();
       if (error) { console.error("Failed to create load:", error); setDriverSyncStatus(`Couldn't save this load (${error.message}).`, "error"); return null; }
       trip.dbId = data[0].id;
+      confirmDirtyFieldsSaved(dirtyTripFields, trip.id, sent, trip);
       queueAljexSync(shiftDbId, row.location);
       return trip.dbId;
     } catch (e) {
@@ -1709,6 +1717,75 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   function scheduleTripSave(row, trip, tripNumber) {
     clearTimeout(tripSaveTimers.get(trip.id));
     tripSaveTimers.set(trip.id, setTimeout(() => saveTripNow(row, trip, tripNumber), SAVE_DEBOUNCE_MS));
+  }
+
+  /* ---- fields changed locally that the database has not confirmed yet ----
+   *
+   * Saves are debounced by SAVE_DEBOUNCE_MS, so for most of a second after a
+   * keystroke the database still holds the OLD value. Every realtime payload
+   * that lands inside that window therefore carries that old value, and they
+   * land constantly while someone is typing -- the echo of this board's own
+   * previous save is the ordinary case, never mind a second dispatcher.
+   *
+   * The merge handlers used to decide what to protect by asking what was
+   * focused at that instant. That loses the value the moment the dispatcher
+   * Tabs onward: the cell just left is no longer focused, so a stale echo
+   * overwrites it in memory, and then the debounced save writes that stale
+   * value back to the database. Nothing about the cursor can fix this; it is
+   * a question of which copy is newer.
+   *
+   * So protection is keyed to "changed here, not yet acknowledged" rather than
+   * "focused". A field leaves the set only once the database has confirmed the
+   * exact value still on screen -- if the dispatcher typed again while the
+   * request was in flight, it stays dirty and the next save covers it.
+   */
+  const dirtyShiftFields = new Map(); // row.id  -> Set(row state key)
+  const dirtyTripFields = new Map();  // trip.id -> Set(trip state key)
+
+  function markFieldDirty(store, key, field) {
+    if (!key || !field) return;
+    let fields = store.get(key);
+    if (!fields) { fields = new Set(); store.set(key, fields); }
+    fields.add(field);
+  }
+
+  // The values about to be sent, so the acknowledgement can be checked
+  // against them rather than against whatever is on screen by the time it
+  // comes back.
+  function snapshotDirtyFields(store, key, obj) {
+    const fields = store.get(key);
+    if (!fields || !fields.size) return null;
+    return [...fields].map((field) => [field, obj[field]]);
+  }
+
+  function confirmDirtyFieldsSaved(store, key, sent, obj) {
+    const fields = store.get(key);
+    if (!fields || !sent) return;
+    for (const [field, sentValue] of sent) {
+      if (!Object.is(obj[field], sentValue)) continue; // typed again mid-flight; still unsaved
+      fields.delete(field);
+    }
+    if (!fields.size) store.delete(key);
+  }
+
+  // A fresh database row with the still-unconfirmed fields stripped out, so
+  // Object.assign cannot walk over local work. alsoKeep covers the cell under
+  // the cursor this instant, which may have been changed too recently to have
+  // reached the registry.
+  function dbFieldsSafeToApply(fresh, store, key, alsoKeep) {
+    const keep = new Set(store.get(key) || []);
+    if (alsoKeep) keep.add(alsoKeep);
+    if (!keep.size) return fresh;
+    const applicable = { ...fresh };
+    for (const field of keep) delete applicable[field];
+    return applicable;
+  }
+
+  // A row or route that no longer exists must not hold its fields dirty
+  // forever -- that would block every future realtime update for a reused id.
+  function forgetDirtyFields(rowId, tripIds) {
+    dirtyShiftFields.delete(rowId);
+    (tripIds || []).forEach((id) => dirtyTripFields.delete(id));
   }
 
 
@@ -2334,13 +2411,28 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // DOM data-field names that don't match the row object's own key name.
   const SHIFT_FIELD_TO_STATE_KEY = { driverName: "driverNameText" };
 
+  // Which board cell the dispatcher has the cursor in right now, or null.
+  //
+  // This used to start from document.getElementById(rowId) and ask whether it
+  // contained document.activeElement. That only ever worked for the first
+  // route. A shift's second and later routes are rendered as SIBLING rows with
+  // id="<row.id>__<trip.id>" (see the idAttr line in rowsToHtml), so they are
+  // not inside getElementById(row.id) at all -- editing route 2 reported "no
+  // cell is being edited", and the realtime merge below then replaced the
+  // number still being typed with the older database value. That is the
+  // "I typed it three times and it kept deleting itself" report.
+  //
+  // The data attributes are a cell's real logical identity, so ask them
+  // directly and let the physical row layout be whatever it needs to be.
   function currentlyEditedField(rowId, tripId) {
-    const tr = document.getElementById(rowId);
     const activeEl = document.activeElement;
-    if (!tr || !tr.contains(activeEl)) return null;
-    if (tripId != null && activeEl.dataset.trip !== tripId) return null;
-    if (tripId == null && activeEl.dataset.trip) return null; // focus is in a trip field, not a shift field
-    return activeEl.dataset.field || null;
+    const ds = activeEl && activeEl.dataset;
+    if (!ds || !ds.field) return null;
+    if (String(ds.row || "") !== String(rowId)) return null;
+    const activeTrip = ds.trip ? String(ds.trip) : null;
+    const wantedTrip = tripId != null ? String(tripId) : null;
+    if (activeTrip !== wantedTrip) return null; // a route cell is not a shift cell, and vice versa
+    return ds.field;
   }
 
   // Realtime updates (including echoes of the user's own save) sometimes have
@@ -2356,7 +2448,17 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (!el || !("value" in el)) return () => {};
     const ds = el.dataset || {};
     let selector = null;
-    if (ds.row && ds.field) selector = `[data-row="${ds.row}"][data-field="${ds.field}"]`;
+    if (ds.row && ds.field) {
+      // The routes of one load are separate rows that share data-row and reuse
+      // the same data-field names, so row+field alone matches every route in
+      // the load and querySelector hands back the FIRST one. That is the
+      // cursor "jumping to the row above" mid-edit: this restore was
+      // refocusing route 1's cell in the same column. data-trip is what tells
+      // the routes apart; shift-level cells carry no data-trip at all, so
+      // match its absence for those.
+      selector = `[data-row="${ds.row}"][data-field="${ds.field}"]`;
+      selector += ds.trip ? `[data-trip="${ds.trip}"]` : `:not([data-trip])`;
+    }
     else if (ds.mdzRow && ds.mdzField) selector = `[data-mdz-row="${ds.mdzRow}"][data-mdz-field="${ds.mdzField}"]`;
     else if (ds.availRow) selector = `[data-avail-row="${ds.availRow}"]`;
     else if (el.id) selector = `#${el.id}`;
@@ -2395,7 +2497,6 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     }
     const domField = currentlyEditedField(existing.id, null);
     const stateKey = domField ? (SHIFT_FIELD_TO_STATE_KEY[domField] || domField) : null;
-    const preserved = stateKey ? existing[stateKey] : undefined;
     const preservedDriverId = existing.driverId;
     const preservedDriverName = existing.driverNameText;
     const fresh = shiftFromDbRow(dbRow);
@@ -2410,8 +2511,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       String(fresh.driverNameText || "").trim().toLowerCase() ===
       String(preservedDriverName || "").trim().toLowerCase();
 
-    Object.assign(existing, fresh, { id: existing.id, trips: existing.trips, addedAt: existing.addedAt, selected: existing.selected });
-    if (stateKey) existing[stateKey] = preserved; // don't clobber what the user is actively typing right now
+    // Anything changed here and not yet acknowledged by the database is newer
+    // than this payload, whether or not the cursor is still sitting in it.
+    const applicableShift = dbFieldsSafeToApply(fresh, dirtyShiftFields, existing.id, stateKey);
+    Object.assign(existing, applicableShift, { id: existing.id, trips: existing.trips, addedAt: existing.addedAt, selected: existing.selected });
     // The driver field owns both the visible name and its profile link. Keep
     // that pair atomic while the field is focused — including an intentional
     // clear where driverId is null. Otherwise an older realtime echo can put
@@ -2443,15 +2546,18 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const localTrip = parentRow.trips[idx];
 
     const domField = currentlyEditedField(parentRow.id, localTrip.id);
-    const preserved = domField ? localTrip[domField] : undefined;
     const preservedHasStopTimes = localTrip.hasStopTimes;
     const preservedImagePath = localTrip.routeImagePath;
     const preservedImagePaths = localTrip.routeImagePaths || [];
     const preservedImageUrl = localTrip.routeImageUrl;
     const preservedImageUrls = localTrip.routeImageUrls || [];
     const fresh = tripFromDbRow(dbTrip);
-    Object.assign(localTrip, fresh, { id: localTrip.id });
-    if (domField) localTrip[domField] = preserved;
+    // Same rule as the shift merge: a route field changed here and still
+    // unconfirmed is newer than anything this payload can carry. Without this
+    // the value survived only while the cursor stayed in the cell, so Tabbing
+    // to the next column handed the old one back.
+    const applicableTrip = dbFieldsSafeToApply(fresh, dirtyTripFields, localTrip.id, domField);
+    Object.assign(localTrip, applicableTrip, { id: localTrip.id });
     // tripFromDbRow always resets these two to defaults (false / "") since
     // neither is a real column -- hasStopTimes is computed separately from
     // trip_stops, and routeImageUrl has to be freshly signed, not just read
@@ -3578,6 +3684,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const rows = getSheet(state.activeLocation, state.activeDate);
     const idx = rows.findIndex((r) => r.id === rowId);
     if (idx !== -1) rows.splice(idx, 1);
+    forgetDirtyFields(rowId, (row.trips || []).map((t) => t.id));
     renderBoardTable();
 
     if (row.dbId && supabaseClient) {
@@ -3608,6 +3715,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
     const idx = row.trips.findIndex((t) => t.id === tripId);
     if (idx !== -1) row.trips.splice(idx, 1);
+    forgetDirtyFields(null, [tripId]);
     renderBoardTable();
     recomputeRowRate(row);
 
@@ -6557,6 +6665,20 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       const found = findRowAnywhere(rowId);
       if (!found) return;
 
+      // Whatever was just typed is unconfirmed local state until the database
+      // says otherwise, so no incoming realtime payload may overwrite it.
+      // Marked here, once, rather than in each branch below.
+      if (t.dataset.field) {
+        if (t.dataset.trip) {
+          markFieldDirty(dirtyTripFields, t.dataset.trip, t.dataset.field);
+        } else {
+          markFieldDirty(dirtyShiftFields, rowId, SHIFT_FIELD_TO_STATE_KEY[t.dataset.field] || t.dataset.field);
+          // Picking a driver changes the visible name and the profile link
+          // together; protect them as the pair they are.
+          if (t.dataset.field === "driverName") markFieldDirty(dirtyShiftFields, rowId, "driverId");
+        }
+      }
+
       if (t.dataset.field === "proNumber") {
         found.row.proNumber = t.value;
         scheduleShiftSave(found.row);
@@ -6625,6 +6747,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         if (!found) return;
         found.row[t.dataset.field] = t.checked;
         found.row.preShiftTextSentAt = t.checked ? new Date().toISOString() : null;
+        markFieldDirty(dirtyShiftFields, found.row.id, t.dataset.field);
         scheduleShiftSave(found.row);
         return;
       }
@@ -6635,6 +6758,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         if (trip) {
           trip.autoRoutePlaceholder = false;
           trip[t.dataset.field] = t.checked;
+          markFieldDirty(dirtyTripFields, trip.id, t.dataset.field);
           const td = t.closest("td");
           td.classList.toggle(t.dataset.field === "backhaul" ? "flag-backhaul" : "flag-yes", t.checked);
           saveTripNow(found.row, trip, found.row.trips.indexOf(trip) + 1);

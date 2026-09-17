@@ -1,5 +1,37 @@
 # Cursor / disappearing-value bug — handoff for Claude
 
+> **RESOLVED** — fixed in `loadboard.js`, not in a focus layer. Keep the
+> reproduction and acceptance test below for verification; treat the
+> architecture notes further down as a record of what was believed at the time,
+> some of which was wrong.
+>
+> **Two things this document got wrong, worth knowing:** it said
+> `simple-board-grid.js` was the imported focus layer and that
+> `board-cell-focus-guard.js` was no longer imported. The reverse was true --
+> commit `42c0c72` ("Restore start-of-day board focus wiring") had swapped the
+> import back to `board-cell-focus-guard.js`, and `simple-board-grid.js` was
+> imported by nothing at all. So the mitigation described here as current was
+> never running. Neither module is imported now.
+>
+> **The three real causes**, all in `loadboard.js`:
+> 1. `currentlyEditedField()` identified the edited cell by
+>    `getElementById(rowId).contains(activeElement)`, which cannot see route 2+
+>    because those are sibling `<tr id="row__trip">` rows. This document
+>    predicted this correctly. Now keyed off the data attributes.
+> 2. `captureFocusForRerender()` restored focus with a row + field selector and
+>    no `data-trip`, so it refocused route 1's cell. **This was the cursor jump**
+>    — not Tab navigation, which was already correct.
+> 3. Preservation was keyed on focus while saves are debounced 700 ms, so Tabbing
+>    onward exposed the previous cell to a stale echo. Replaced with a dirty-field
+>    registry that exempts unconfirmed local edits from the realtime merge
+>    regardless of focus — the "very small dirty-field / pending-save guard" this
+>    document suggested.
+>
+> `handleRowAwareTab` in `loadboard.js` was left alone: it already walks the
+> physical `<tr>`, which is the wanted behavior. Regression test:
+> `scripts/board-cell-editing.test.mjs`.
+
+
 This is the current highest-priority production bug in `rfahrner/M-J-Site`.
 
 ## What the user wants

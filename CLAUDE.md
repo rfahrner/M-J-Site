@@ -23,21 +23,35 @@ Read this file before making changes. This is a live dispatch/load-board applica
 
 The user explicitly wants ordinary spreadsheet behavior: type a value, Tab to the next editable cell, continue. No clever row-selection/focus system should be allowed to move the cursor or erase active input.
 
-`simple-board-grid.js` now replaces `board-cell-focus-guard.js` in `loadboard-toolbar-controls.js`.
+Fixed at the source in `loadboard.js` (see `scripts/board-cell-editing.test.mjs`).
+No focus layer is imported any more: `board-cell-focus-guard.js` and
+`simple-board-grid.js` are both still on disk but unimported. Do not wire either
+back in without first showing that the three causes below have returned.
 
-Important diagnosis behind the change:
-- `loadboard.js` renders multiple route `<tr>` elements for one shift while those route rows share the same shift row id/data-row.
-- `currentlyEditedField(rowId, tripId)` historically used `document.getElementById(rowId)` and `tr.contains(document.activeElement)`.
-- With multiple route rows, `getElementById(rowId)` resolves the first duplicate row, so a dispatcher typing in the second/third route can be misclassified as not editing that trip.
-- A realtime payload can then overwrite the local in-memory trip with the older database value and redraw, making freshly typed numbers disappear.
+What was actually wrong -- three separate things, none of them Tab navigation:
 
-Current mitigation in `simple-board-grid.js`:
-- capture-phase Tab owns navigation before the older row-aware Tab handler;
-- visible editable controls are traversed in plain DOM order;
-- exact cell identity is `data-row + data-trip + data-field`;
-- if a realtime redraw destroys the active input, the module restores the exact replacement control and re-feeds the dispatcher’s typed value through the normal `input` event before refocusing it.
+1. `currentlyEditedField(rowId, tripId)` used `document.getElementById(rowId)` and
+   `tr.contains(document.activeElement)`. A shift's routes past the first render as
+   SIBLING rows with `id="<row.id>__<trip.id>"`, so they are not inside
+   `getElementById(row.id)` at all and editing route 2 reported "nothing is being
+   edited". It now reads `dataset.row` / `dataset.trip` / `dataset.field` directly.
+2. `captureFocusForRerender()` built its restore selector from row + field only.
+   Routes share `data-row` and reuse field names, so `querySelector` returned the
+   first match -- route 1. That was the cursor jumping to the row above after a
+   redraw. It now includes `data-trip`, and `:not([data-trip])` for shift-level
+   cells.
+3. Preservation was keyed on what had focus, but saves are debounced 700 ms. The
+   moment the dispatcher Tabbed on, the cell just left was no longer focused, so a
+   realtime echo carrying the pre-save value overwrote it and the debounced save
+   wrote that stale value to the database.
 
-If reviewing this, prefer simplifying further rather than adding more focus heuristics. A good core-code cleanup would be to make `currentlyEditedField` compare `document.activeElement.dataset.row / dataset.trip / dataset.field` directly instead of relying on duplicate DOM row ids. Do not reintroduce complex cursor-restoration logic unless clearly necessary.
+Point 3 is the one worth protecting. `loadboard.js` keeps a dirty-field registry
+(`dirtyShiftFields` / `dirtyTripFields`): a locally changed field is exempt from
+the realtime merge until the database acknowledges the exact value still on
+screen, and stays exempt if the dispatcher typed again mid-flight. Genuine remote
+changes apply as soon as the local edit is confirmed, so multi-dispatcher sync is
+unaffected. Anything added here should reduce this machinery, not layer onto it --
+and cursor position is not the right signal for which copy of a value is newer.
 
 ### Driver autocomplete
 
