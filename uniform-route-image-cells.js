@@ -118,7 +118,15 @@ function normalizeDropzone(dropzone) {
 
   hint.classList.add('mj-image-add-slot');
   hint.classList.toggle('mj-image-empty-slot', !hasImages);
-  hint.textContent = hasImages ? '+ Add' : 'Drop / paste / click';
+
+  // Write only on a real change. Assigning textContent replaces the child text
+  // node even when the string is identical, and that is a childList mutation
+  // the observer below is watching -- so an unconditional write here made this
+  // module retrigger itself every animation frame, forever, rewriting the text
+  // in every image cell ~60x a second. One unrelated DOM change anywhere on the
+  // page was enough to start it, and the board redraws constantly.
+  const wantText = hasImages ? '+ Add' : 'Drop / paste / click';
+  if (hint.textContent !== wantText) hint.textContent = wantText;
 }
 
 function normalizeAll() {
