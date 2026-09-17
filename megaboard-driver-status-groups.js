@@ -1,14 +1,15 @@
 // Presentation layer for the Megaboard driver-status strip.
-// Keep the source status model untouched; organize the rendered cards into
-// Active Drivers, Upcoming Drivers, and Ended Shifts, and remove load/route IDs.
+// Keep the source status model untouched; preserve Active -> Upcoming -> Ended
+// ordering, remove load/route IDs, and let each colored status chip speak for
+// itself without a second redundant group label.
 
 let observer = null;
 let scheduled = false;
 
 const GROUPS = [
-  { status: 'running', label: 'Active Drivers' },
-  { status: 'upcoming', label: 'Upcoming Drivers' },
-  { status: 'ended', label: 'Ended Shifts' },
+  { status: 'running' },
+  { status: 'upcoming' },
+  { status: 'ended' },
 ];
 
 function groupStrip(strip) {
@@ -24,17 +25,12 @@ function groupStrip(strip) {
   });
 
   const fragment = document.createDocumentFragment();
-  GROUPS.forEach(({ status, label }) => {
+  GROUPS.forEach(({ status }) => {
     const matching = cards.filter((card) => card.classList.contains(status));
     if (!matching.length) return;
 
     const group = document.createElement('div');
     group.className = `mega-driver-status-group ${status}`;
-
-    const heading = document.createElement('div');
-    heading.className = 'mega-driver-status-group-title';
-    heading.textContent = label;
-    group.appendChild(heading);
 
     const items = document.createElement('div');
     items.className = 'mega-driver-status-group-items';
@@ -80,23 +76,6 @@ function installStyles() {
       border-left: 1px solid #d8dee8;
       padding-left: 14px;
     }
-    .mega-driver-status-group-title {
-      display: inline-flex;
-      align-items: center;
-      align-self: stretch;
-      padding: 0 7px;
-      border-radius: 5px;
-      font-size: 9px;
-      font-weight: 900;
-      letter-spacing: .055em;
-      text-transform: uppercase;
-      white-space: nowrap;
-      color: #344054;
-      background: #f2f4f7;
-    }
-    .mega-driver-status-group.running .mega-driver-status-group-title { background:#dcfce7; color:#15803d; }
-    .mega-driver-status-group.upcoming .mega-driver-status-group-title { background:#ffedd5; color:#c2410c; }
-    .mega-driver-status-group.ended .mega-driver-status-group-title { background:#fee2e2; color:#b91c1c; }
     .mega-driver-status-group-items {
       display: flex;
       align-items: center;
