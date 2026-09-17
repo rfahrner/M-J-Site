@@ -37,4 +37,11 @@
   patchMethod(window.FileSystemDirectoryHandle?.prototype, "getFileHandle");
 
   window.archiveWindowsSafeName = windowsSafeName;
+
+  // The automatic image-backup dashboard is isolated from the older manual
+  // historical-export code so either feature can evolve without destabilizing
+  // the other. This script is already loaded only by archive.html.
+  import('./archive-image-backup.js').catch((error) => {
+    console.error('Failed to load automatic image backup dashboard:', error);
+  });
 })();
