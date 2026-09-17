@@ -12,6 +12,10 @@
 let tracked = null;
 let correcting = false;
 let navigationIntentUntil = 0;
+let pendingTabTarget = null;
+let pendingTabUntil = 0;
+
+const EDITABLE_SELECTOR = 'input:not([disabled]):not([readonly]):not([type="checkbox"]):not([tabindex="-1"]), textarea:not([disabled]):not([readonly]):not([tabindex="-1"]), select:not([disabled]):not([tabindex="-1"])';
 
 function esc(value) {
   if (window.CSS && typeof CSS.escape === 'function') return CSS.escape(String(value));
@@ -64,10 +68,6 @@ function refreshSelection(event) {
 }
 
 function closeDriverSuggestions() {
-  // The board's shared floating picker is #driver-ac-floating. Do not set an
-  // inline display:none here: the real autocomplete code reopens it by
-  // removing .hidden, so an inline display value would make the list stay
-  // invisible on the next edit.
   const selectors = [
     '#driver-ac-floating',
     '#driver-autocomplete',
@@ -80,15 +80,67 @@ function closeDriverSuggestions() {
   document.querySelectorAll(selectors.join(',')).forEach((el) => el.classList.add('hidden'));
 }
 
-// Click/tap, Tab, arrows and Enter are real navigation/selection requests.
-// Give the board's own handlers a short window to move focus intentionally.
+function tabDestination(el, reverse) {
+  const tr = el.closest('tr');
+  if (!tr) return null;
+  const rowFields = Array.from(tr.querySelectorAll(EDITABLE_SELECTOR));
+  const index = rowFields.indexOf(el);
+  if (index === -1) return null;
+  const inRow = reverse ? rowFields[index - 1] : rowFields[index + 1];
+  if (inRow) return cellIdentity(inRow);
+
+  let sibling = reverse ? tr.previousElementSibling : tr.nextElementSibling;
+  while (sibling) {
+    const fields = Array.from(sibling.querySelectorAll(EDITABLE_SELECTOR));
+    const target = reverse ? fields[fields.length - 1] : fields[0];
+    const identity = cellIdentity(target);
+    if (identity) return identity;
+    sibling = reverse ? sibling.previousElementSibling : sibling.nextElementSibling;
+  }
+  return null;
+}
+
+function focusExact(id, start = null, end = null) {
+  const exact = exactCell(id);
+  if (!exact) return false;
+  correcting = true;
+  try {
+    exact.focus({ preventScroll: true });
+    if (start != null && typeof exact.setSelectionRange === 'function') {
+      try { exact.setSelectionRange(start, end); } catch (_) { /* non-text input */ }
+    }
+    tracked = { ...id, el: exact, ...selectionFor(exact) };
+  } finally {
+    correcting = false;
+  }
+  return true;
+}
+
+// Clicking/tapping is always intentional and cancels any pending keyboard move.
 document.addEventListener('pointerdown', (event) => {
-  if (cellIdentity(event.target)) navigationIntentUntil = performance.now() + 500;
+  if (!cellIdentity(event.target)) return;
+  pendingTabTarget = null;
+  pendingTabUntil = 0;
+  navigationIntentUntil = performance.now() + 500;
 }, true);
 
 document.addEventListener('keydown', (event) => {
-  if (!cellIdentity(event.target)) return;
-  if (event.key === 'Tab' || event.key === 'Enter' || event.key.startsWith('Arrow')) {
+  const current = cellIdentity(event.target);
+  if (!current) return;
+
+  if (event.key === 'Tab') {
+    // Capture the exact logical destination BEFORE blur/save/realtime redraws
+    // can replace the row. This is the important distinction for multi-trip
+    // shifts: row + field is not unique, but row + trip + field is.
+    pendingTabTarget = tabDestination(event.target, event.shiftKey);
+    pendingTabUntil = performance.now() + 1200;
+    navigationIntentUntil = performance.now() + 500;
+    return;
+  }
+
+  pendingTabTarget = null;
+  pendingTabUntil = 0;
+  if (event.key === 'Enter' || event.key.startsWith('Arrow')) {
     navigationIntentUntil = performance.now() + 500;
   }
 }, true);
@@ -106,46 +158,61 @@ document.addEventListener('focusin', (event) => {
   const next = cellIdentity(nextEl);
   if (!next) return;
 
+  // Tab has a known intended destination. If the board's generic focus
+  // restore lands on the first Trip ID/Route ID in the shift instead, correct
+  // it immediately to the exact trip the user was tabbing through.
+  if (pendingTabTarget && performance.now() <= pendingTabUntil) {
+    if (sameLogicalCell(pendingTabTarget, next)) {
+      pendingTabTarget = null;
+      pendingTabUntil = 0;
+      remember(nextEl);
+      return;
+    }
+    if (focusExact(pendingTabTarget)) {
+      pendingTabTarget = null;
+      pendingTabUntil = 0;
+      return;
+    }
+  } else {
+    pendingTabTarget = null;
+    pendingTabUntil = 0;
+  }
+
   const userNavigated = performance.now() <= navigationIntentUntil;
   const oldNodeWasReplaced = !!tracked?.el && !tracked.el.isConnected;
 
-  // If a redraw replaced the active node, the only acceptable automatic
-  // landing spot is the exact row + field + trip (when a trip exists).
   if (!userNavigated && oldNodeWasReplaced && tracked && !sameLogicalCell(tracked, next)) {
-    const exact = exactCell(tracked);
-    if (exact && exact !== nextEl) {
-      const { start, end } = tracked;
-      correcting = true;
-      exact.focus({ preventScroll: true });
-      if (start != null && typeof exact.setSelectionRange === 'function') {
-        try { exact.setSelectionRange(start, end); } catch (_) { /* non-text input */ }
-      }
-      tracked = { ...tracked, el: exact };
-      correcting = false;
-      return;
-    }
+    if (focusExact(tracked, tracked.start, tracked.end)) return;
   }
 
   remember(nextEl);
 }, true);
 
-// A MutationObserver catches the case where a redraw removes the focused node
-// and the board does not focus anything at all afterward.
+// A MutationObserver catches redraws that remove the focused node before the
+// board can focus anything else. During Tab, prefer the captured destination;
+// otherwise restore the exact cell that was being edited.
 const observer = new MutationObserver(() => {
-  if (correcting || !tracked?.el || tracked.el.isConnected) return;
+  if (correcting) return;
+
+  if (pendingTabTarget && performance.now() <= pendingTabUntil) {
+    const exactPending = exactCell(pendingTabTarget);
+    if (exactPending && document.activeElement !== exactPending) {
+      requestAnimationFrame(() => {
+        if (!pendingTabTarget || performance.now() > pendingTabUntil) return;
+        if (focusExact(pendingTabTarget)) {
+          pendingTabTarget = null;
+          pendingTabUntil = 0;
+        }
+      });
+      return;
+    }
+  }
+
+  if (!tracked?.el || tracked.el.isConnected) return;
   if (performance.now() <= navigationIntentUntil) return;
-  const exact = exactCell(tracked);
-  if (!exact) return;
+  const id = { row: tracked.row, trip: tracked.trip, field: tracked.field };
   const { start, end } = tracked;
-  correcting = true;
-  requestAnimationFrame(() => {
-    try {
-      exact.focus({ preventScroll: true });
-      if (start != null && typeof exact.setSelectionRange === 'function') exact.setSelectionRange(start, end);
-      tracked = { ...tracked, el: exact };
-    } catch (_) { /* cell disappeared for good */ }
-    correcting = false;
-  });
+  requestAnimationFrame(() => focusExact(id, start, end));
 });
 
 function startObserver() {
