@@ -50,10 +50,18 @@
       and I'll swap in the real math. Loads are saved to the database as you enter them.
     </div>
 
-    <div class="grid-scroll">
+    <div id="delaware-board-create-empty" class="delaware-board-empty hidden">
+      <button type="button" class="btn delaware-create-board-btn" id="btn-create-delaware-board">+ Create Load Board</button>
+      <div class="subtext">Choose whether this is a SCHNEIDER load board or a regular Kroger load board.</div>
+    </div>
+    <div class="grid-scroll" id="board-tables">
       <table class="board" id="board-table"></table>
     </div>
     <div id="board-empty-state" class="board-empty hidden">No loads yet for this day. Use &ldquo;+ Add Load&rdquo; to start filling in the sheet.</div>
+    <div id="delaware-add-board-wrap" class="delaware-add-board-wrap hidden">
+      <button type="button" class="btn btn-ghost" id="btn-add-delaware-board">+ Add Another Load Board</button>
+      <div class="subtext">A Delaware day can have up to two load boards. Both share the Available list below.</div>
+    </div>
 
     <div id="available-section">
       <h2 class="available-title">Available</h2>
@@ -75,6 +83,25 @@
       <button type="button" class="quick-add-btn" id="btn-available-add-row" style="width:auto; margin-top:6px;">
         <span class="quick-add-btn-label">+ Add Row</span>
       </button>
+    </div>
+  </div>
+
+  <!-- ================= Delaware board type modal ================= -->
+  <div class="overlay hidden" id="modal-delaware-board-type">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="dbt-title">Create Delaware Load Board</h3>
+        <button class="modal-close" id="dbt-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="delaware-board-question">Is this a <strong>SCHNEIDER</strong> load board?</div>
+        <div class="subtext">Choose No for a regular Kroger load board.</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-ghost" id="dbt-cancel">Cancel</button>
+        <button type="button" class="btn btn-ghost" data-delaware-board-type="kroger">No &mdash; Kroger</button>
+        <button type="button" class="btn" data-delaware-board-type="schneider">Yes &mdash; SCHNEIDER</button>
+      </div>
     </div>
   </div>
 

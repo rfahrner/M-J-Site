@@ -358,6 +358,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     return {
       location: locationKey,
       shift_date: dKey,
+      delaware_board_slot: locationKey === "delaware" ? (Number(row.delawareBoardSlot) || 1) : null,
       pro_number: row.proNumber || null,
       driver_id: row.driverId ? Number(row.driverId) : null,
       driver_name_text: row.driverNameText || null,
@@ -401,6 +402,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       dbId: dbRow.id,
       location: dbRow.location || null,
       shiftDate: dbRow.shift_date || null,
+      delawareBoardSlot: dbRow.delaware_board_slot != null ? Number(dbRow.delaware_board_slot) : null,
       driverId: dbRow.driver_id != null ? String(dbRow.driver_id) : null,
       driverNameText: dbRow.driver_name_text || "",
       proNumber: dbRow.pro_number || "",
@@ -606,6 +608,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     drivers: [],
     sheets: {},              // `${locationKey}__${dateKey}` -> Row[]
     availableSheets: {},     // `${locationKey}__${dateKey}` -> AvailableRow[]
+    delawareBoards: {},       // `${dateKey}` -> [{ id, board_slot, board_type }]
+    activeDelawareBoardSlot: 1,
     minDate: dateKey(addDays(todayDate(), -HISTORY_DAYS)),
     maxDate: dateKey(addDays(todayDate(), FUTURE_DAYS)),
     todayKey: dateKey(todayDate()),
@@ -800,6 +804,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   function blankRow(driverId, driverNameText) {
     return {
       id: uid("row"), dbId: null, location: state.activeLocation || null, shiftDate: state.activeDate || null,
+      delawareBoardSlot: state.activeLocation === "delaware" ? (Number(state.activeDelawareBoardSlot) || 1) : null,
       driverId: driverId || null, driverNameText: driverNameText || "",
       proNumber: "", tonu: false, highlighted: false, shiftStart: "", shiftComplete: false, shiftCompleteAt: null, rate: "", notes: "", selected: false,
       preShiftTextSent: false, preShiftCall: false, etaShiftReport: "", actualShiftReport: "", revLevel: "",
@@ -819,6 +824,77 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const k = sheetKey(locationKey, dKey);
     if (!state.sheets[k]) state.sheets[k] = [];
     return state.sheets[k];
+  }
+
+
+  const DELAWARE_BOARDS_TABLE = "delaware_daily_boards";
+
+  function getDelawareBoards(dKey) {
+    return state.delawareBoards[dKey] || [];
+  }
+
+  async function ensureDelawareBoardsLoaded(dKey) {
+    if (Object.prototype.hasOwnProperty.call(state.delawareBoards, dKey)) return;
+    if (!supabaseClient) {
+      state.delawareBoards[dKey] = [];
+      return;
+    }
+    const { data, error } = await supabaseClient
+      .from(DELAWARE_BOARDS_TABLE)
+      .select("id, shift_date, board_slot, board_type")
+      .eq("shift_date", dKey)
+      .order("board_slot", { ascending: true });
+    if (error) {
+      console.error("Failed to load Delaware board definitions:", error);
+      state.delawareBoards[dKey] = [];
+      setDriverSyncStatus(`Couldn't load the Delaware board setup (${error.message}).`, "error");
+      return;
+    }
+    state.delawareBoards[dKey] = data || [];
+  }
+
+  function openDelawareBoardTypeModal() {
+    const boards = getDelawareBoards(state.activeDate);
+    if (boards.length >= 2) return;
+    const modal = $("#modal-delaware-board-type");
+    if (!modal) return;
+    const slot = boards.length ? 2 : 1;
+    modal.dataset.boardSlot = String(slot);
+    const title = $("#dbt-title");
+    if (title) title.textContent = slot === 1 ? "Create Delaware Load Board" : "Add Second Delaware Load Board";
+    modal.classList.remove("hidden");
+  }
+
+  function closeDelawareBoardTypeModal() {
+    const modal = $("#modal-delaware-board-type");
+    if (modal) modal.classList.add("hidden");
+  }
+
+  async function createDelawareBoard(boardType) {
+    const existing = getDelawareBoards(state.activeDate);
+    if (existing.length >= 2 || !supabaseClient) return;
+    const slot = existing.some((board) => Number(board.board_slot) === 1) ? 2 : 1;
+    const buttons = $all("[data-delaware-board-type]", $("#modal-delaware-board-type"));
+    buttons.forEach((button) => { button.disabled = true; });
+    try {
+      const { data, error } = await supabaseClient
+        .from(DELAWARE_BOARDS_TABLE)
+        .insert({ shift_date: state.activeDate, board_slot: slot, board_type: boardType })
+        .select("id, shift_date, board_slot, board_type");
+      if (error) throw error;
+      state.delawareBoards[state.activeDate] = [...existing, data[0]]
+        .sort((a, b) => Number(a.board_slot) - Number(b.board_slot));
+      state.activeDelawareBoardSlot = slot;
+      state.datesWithData.add(state.activeDate);
+      closeDelawareBoardTypeModal();
+      renderBoardTable();
+      setDriverSyncStatus(`${boardType === "schneider" ? "SCHNEIDER" : "Kroger"} board created.`, "success");
+    } catch (e) {
+      console.error("createDelawareBoard failed:", e);
+      setDriverSyncStatus(`Couldn't create this Delaware board (${e.message || e}).`, "error");
+    } finally {
+      buttons.forEach((button) => { button.disabled = false; });
+    }
   }
 
   // Fetches real shifts + their trips from Supabase for a location+date the
@@ -2215,6 +2291,16 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       from += PAGE_SIZE;
     }
 
+    if (locationKey === "delaware") {
+      const { data: boardDates, error: boardDatesError } = await supabaseClient
+        .from(DELAWARE_BOARDS_TABLE)
+        .select("shift_date")
+        .gte("shift_date", state.minDate)
+        .lte("shift_date", state.maxDate);
+      if (boardDatesError) console.error("Failed to load Delaware board dates:", boardDatesError);
+      else (boardDates || []).forEach((row) => dates.add(row.shift_date));
+    }
+
     state.datesWithData = dates;
     const dropdown = $("#date-dropdown");
     if (dropdown && !dropdown.classList.contains("hidden")) {
@@ -2295,23 +2381,27 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // Sync — draws whatever's currently cached in state.sheets. Safe to call
   // any time data already loaded needs a full redraw (e.g. after Add Load,
   // or once the driver list arrives and driver-linked cells need refreshing).
-  function renderBoardTable() {
-    if (!$("#board-table")) return; // this page (e.g. Accounting) has no board grid — nothing to redraw
-    const rows = getSheet(state.activeLocation, state.activeDate);
+
+  function sortedBoardRows(rows) {
     const sortKey = state.boardSort.key;
-    const displayRows = [...rows].sort((a, b) => {
-      const completeDiff = (a.shiftComplete ? 1 : 0) - (b.shiftComplete ? 1 : 0); // completed shifts always sink to the bottom
+    return [...rows].sort((a, b) => {
+      const completeDiff = (a.shiftComplete ? 1 : 0) - (b.shiftComplete ? 1 : 0);
       if (completeDiff !== 0) return completeDiff;
       if (!sortKey) return 0;
       return compareRowsForSort(a, b, sortKey, state.boardSort.dir);
     });
+  }
+
+  function boardTableMarkup(rows, boardSlot) {
+    const displayRows = sortedBoardRows(rows);
+    const slotValue = boardSlot == null ? "" : String(boardSlot);
     const tripHeaderCells = getOrderedTripSubcols().map((c) => {
       const pistachioCls = c.pistachio ? " col-pistachio" : "";
       return `<th class="col-${c.key}${pistachioCls} col-draggable" draggable="true" data-col-key="${c.key}" title="Drag to reorder">${c.label}</th>`;
     }).join("");
     const thead = `<thead>
       <tr>
-        <th class="pin pin-select"><div id="board-select-count" class="board-select-count"></div><input type="checkbox" class="chk" id="select-all-rows" title="Select all"></th>
+        <th class="pin pin-select"><div class="board-select-count" data-board-select-count="${slotValue}"></div><input type="checkbox" class="chk" data-select-all-rows data-board-slot="${slotValue}" title="Select all"></th>
         <th class="pin pin-text"></th>
         <th class="col-email">Email</th>
         <th class="col-dispatcherPhone">Dispatcher Phone</th>
@@ -2337,15 +2427,64 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     </thead>`;
     const totalCols = 20 + getOrderedTripSubcols().length + 1 + (state.activeLocation === "buildingc" ? 1 : 0);
     const addRowHtml = `<tr class="quick-add-row"><td colspan="${totalCols}">
-      <button type="button" class="quick-add-btn" id="btn-quick-add-row"><span class="quick-add-btn-label">+ Add Row</span></button>
-      <button type="button" class="quick-add-btn quick-add-btn-secondary" id="btn-add-time-slots"><span class="quick-add-btn-label">+ Add Time Slots</span></button>
+      <button type="button" class="quick-add-btn" data-quick-add-row data-board-slot="${slotValue}"><span class="quick-add-btn-label">+ Add Row</span></button>
+      <button type="button" class="quick-add-btn quick-add-btn-secondary" data-add-time-slots data-board-slot="${slotValue}"><span class="quick-add-btn-label">+ Add Time Slots</span></button>
     </td></tr>`;
-    const tbody = `<tbody>${displayRows.map(rowsToHtml).join("")}${addRowHtml}</tbody>`;
+    return thead + `<tbody>${displayRows.map(rowsToHtml).join("")}${addRowHtml}</tbody>`;
+  }
 
-    $("#board-table").innerHTML = thead + tbody;
-    const emptyState = $("#board-empty-state");
-    if (emptyState) emptyState.classList.toggle("hidden", rows.length > 0);
+  function renderBoardTable() {
+    const legacyTable = $("#board-table");
+    const boardHost = $("#board-tables");
+    if (!legacyTable && !boardHost) return;
+    const rows = getSheet(state.activeLocation, state.activeDate);
+
+    if (state.activeLocation === "delaware" && boardHost) {
+      const boards = getDelawareBoards(state.activeDate);
+      const createEmpty = $("#delaware-board-create-empty");
+      const addBoardWrap = $("#delaware-add-board-wrap");
+      const emptyState = $("#board-empty-state");
+      const toolbarAddLoad = $("#btn-add-load");
+
+      if (!boards.length) {
+        boardHost.innerHTML = "";
+        boardHost.classList.add("hidden");
+        if (createEmpty) createEmpty.classList.remove("hidden");
+        if (addBoardWrap) addBoardWrap.classList.add("hidden");
+        if (emptyState) emptyState.classList.add("hidden");
+        if (toolbarAddLoad) toolbarAddLoad.classList.add("hidden");
+      } else {
+        boardHost.classList.remove("hidden");
+        if (createEmpty) createEmpty.classList.add("hidden");
+        if (addBoardWrap) addBoardWrap.classList.toggle("hidden", boards.length >= 2);
+        if (emptyState) emptyState.classList.add("hidden");
+        if (toolbarAddLoad) toolbarAddLoad.classList.add("hidden");
+        if (!boards.some((board) => Number(board.board_slot) === Number(state.activeDelawareBoardSlot))) {
+          state.activeDelawareBoardSlot = Number(boards[0].board_slot);
+        }
+        boardHost.innerHTML = boards.map((board) => {
+          const slot = Number(board.board_slot);
+          const boardRows = rows.filter((row) => Number(row.delawareBoardSlot || 1) === slot);
+          const title = board.board_type === "schneider" ? "SCHNEIDER" : "KROGER";
+          return `<section class="delaware-board-panel" data-delaware-board-slot="${slot}">
+            <div class="delaware-board-heading">
+              <div><span class="delaware-board-number">Load Board ${slot}</span><h2>${title}</h2></div>
+              <button type="button" class="btn" data-add-load-to-board="${slot}">+ Add Load</button>
+            </div>
+            <table class="board" data-board-slot="${slot}">${boardTableMarkup(boardRows, slot)}</table>
+          </section>`;
+        }).join("");
+      }
+    } else {
+      const table = legacyTable || boardHost.querySelector("table.board");
+      if (!table) return;
+      table.innerHTML = boardTableMarkup(rows, null);
+      const emptyState = $("#board-empty-state");
+      if (emptyState) emptyState.classList.toggle("hidden", rows.length > 0);
+    }
+
     refreshDriverDatalist();
+    applyColumnVisibility();
     updateBulkActionButtonsVisibility();
     updateBoardSelectCount();
     $all("th[data-board-sort]").forEach((th) => {
@@ -2365,6 +2504,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     renderBoardChrome();
     const myToken = ++boardRenderToken;
     await ensureSheetLoaded(state.activeLocation, state.activeDate);
+    if (state.activeLocation === "delaware") await ensureDelawareBoardsLoaded(state.activeDate);
     if (myToken !== boardRenderToken) return; // superseded by a newer navigation
     renderBoardTable();
     refreshAvailableSection();
@@ -2642,6 +2782,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_shifts" }, handleRealtimeShiftChange);
     channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_trips" }, handleRealtimeTripChange);
     channel.on("postgres_changes", { event: "*", schema: "public", table: "atlanta_drivers" }, handleRealtimeDriverChange);
+    channel.on("postgres_changes", { event: "*", schema: "public", table: DELAWARE_BOARDS_TABLE }, (payload) => {
+      const changed = payload.new || payload.old;
+      if (!changed || state.activeLocation !== "delaware" || changed.shift_date !== state.activeDate) return;
+      delete state.delawareBoards[state.activeDate];
+      ensureDelawareBoardsLoaded(state.activeDate).then(renderBoardTable);
+    });
     channel.on("broadcast", { event: "row-editing" }, ({ payload }) => handleRemoteRowEditing(payload));
     channel.subscribe((status, err) => {
       if (status === "SUBSCRIBED") {
@@ -3254,11 +3400,13 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   }
 
   function updateBoardSelectCount() {
-    const el = $("#board-select-count");
-    if (!el) return;
-    const rows = getSheet(state.activeLocation, state.activeDate);
-    const selectedCount = rows.filter((r) => r.selected).length;
-    el.textContent = `Count ${rows.length} (${selectedCount} selected)`;
+    const allRows = getSheet(state.activeLocation, state.activeDate);
+    $all("[data-board-select-count]").forEach((el) => {
+      const slot = Number(el.dataset.boardSelectCount) || null;
+      const rows = slot == null ? allRows : allRows.filter((row) => Number(row.delawareBoardSlot || 1) === slot);
+      const selectedCount = rows.filter((r) => r.selected).length;
+      el.textContent = `Count ${rows.length} (${selectedCount} selected)`;
+    });
   }
 
   function toggleRowSelected(rowId) {
@@ -3271,8 +3419,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     updateBoardSelectCount();
   }
 
-  function selectAllRows(checked) {
-    const rows = getSheet(state.activeLocation, state.activeDate);
+  function selectAllRows(checked, boardSlot) {
+    const allRows = getSheet(state.activeLocation, state.activeDate);
+    const rows = boardSlot == null ? allRows : allRows.filter((row) => Number(row.delawareBoardSlot || 1) === Number(boardSlot));
     rows.forEach((row) => {
       row.selected = checked;
       const tr = document.getElementById(row.id);
@@ -5238,10 +5387,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   }
 
   function applyColumnVisibility() {
-    const table = $("#board-table");
-    if (!table) return;
-    [...DRIVER_INFO_COLS, ...TRIP_SUBCOLS].forEach((c) => {
-      table.classList.toggle("hide-col-" + c.key, state.hiddenCols.has(c.key));
+    const tables = $all("#board-tables table.board, #board-table.board");
+    if (!tables.length) return;
+    tables.forEach((table) => {
+      [...DRIVER_INFO_COLS, ...TRIP_SUBCOLS].forEach((c) => {
+        table.classList.toggle("hide-col-" + c.key, state.hiddenCols.has(c.key));
+      });
     });
   }
 
@@ -5865,11 +6016,13 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // adding — without this, each add pushes it further down and out of
   // view, so it looks like it disappeared.
   function scrollQuickAddIntoView() {
-    const btn = document.getElementById("btn-quick-add-row");
+    const slot = state.activeLocation === "delaware" ? String(state.activeDelawareBoardSlot || 1) : "";
+    const btn = document.querySelector(`[data-quick-add-row][data-board-slot="${slot}"]`) || document.querySelector("[data-quick-add-row]");
     if (btn) btn.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 
-  function quickAddBlankRow() {
+  function quickAddBlankRow(boardSlot) {
+    if (state.activeLocation === "delaware" && boardSlot) state.activeDelawareBoardSlot = Number(boardSlot);
     const row = blankRow(null, "");
     row.addedAt = Date.now();
     getSheet(state.activeLocation, state.activeDate).push(row);
@@ -5897,7 +6050,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     container.appendChild(div);
   }
 
-  function openAddTimeSlotsModal() {
+  function openAddTimeSlotsModal(boardSlot) {
+    if (state.activeLocation === "delaware" && boardSlot) state.activeDelawareBoardSlot = Number(boardSlot);
     const container = $("#ats-rows");
     if (!container) return;
     container.innerHTML = "";
@@ -6487,7 +6641,26 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     });
 
     if ($("#btn-add-driver")) $("#btn-add-driver").addEventListener("click", () => openAddDriverModal(false));
-    if ($("#btn-add-load")) $("#btn-add-load").addEventListener("click", () => openAddLoadModal());
+    if ($("#btn-add-load")) $("#btn-add-load").addEventListener("click", () => {
+      if (state.activeLocation === "delaware") {
+        const firstBoard = getDelawareBoards(state.activeDate)[0];
+        if (!firstBoard) { openDelawareBoardTypeModal(); return; }
+        state.activeDelawareBoardSlot = Number(firstBoard.board_slot);
+      }
+      openAddLoadModal();
+    });
+    if (info.key === "delaware" && $("#modal-delaware-board-type")) {
+      on("btn-create-delaware-board", "click", openDelawareBoardTypeModal);
+      on("btn-add-delaware-board", "click", openDelawareBoardTypeModal);
+      on("dbt-close", "click", closeDelawareBoardTypeModal);
+      on("dbt-cancel", "click", closeDelawareBoardTypeModal);
+      $all("[data-delaware-board-type]", $("#modal-delaware-board-type")).forEach((button) => {
+        button.addEventListener("click", () => createDelawareBoard(button.dataset.delawareBoardType));
+      });
+      $("#modal-delaware-board-type").addEventListener("click", (e) => {
+        if (e.target.id === "modal-delaware-board-type") closeDelawareBoardTypeModal();
+      });
+    }
     if ($("#btn-complete-selected")) $("#btn-complete-selected").addEventListener("click", completeSelectedRows);
     if ($("#btn-text-selected")) $("#btn-text-selected").addEventListener("click", openTextSelectedModal);
 
@@ -6589,10 +6762,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       });
     }
 
-    const boardTable = $("#board-table");
+    const boardTable = $("#board-tables") || $("#board-table");
     boardTable.addEventListener("focusin", handleRowFocusIn);
     boardTable.addEventListener("focusout", handleRowFocusOut);
-    boardTable.addEventListener("keydown", (e) => handleRowAwareTab(e, "#board-table"));
+    boardTable.addEventListener("keydown", (e) => handleRowAwareTab(e, "table.board"));
     wireRowImageDropzone(
       boardTable,
       (id) => { const found = findTripAnywhere(id); return found ? found.trip : null; },
@@ -6616,8 +6789,16 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       }
       const textBtn = e.target.closest('[data-action="text-driver"]');
       if (textBtn) textDriverForRow(textBtn.dataset.row);
-      if (e.target.closest("#btn-quick-add-row")) quickAddBlankRow();
-      if (e.target.closest("#btn-add-time-slots")) openAddTimeSlotsModal();
+      const boardAddLoad = e.target.closest("[data-add-load-to-board]");
+      if (boardAddLoad) {
+        state.activeDelawareBoardSlot = Number(boardAddLoad.dataset.addLoadToBoard);
+        openAddLoadModal();
+        return;
+      }
+      const quickAdd = e.target.closest("[data-quick-add-row]");
+      if (quickAdd) quickAddBlankRow(Number(quickAdd.dataset.boardSlot) || null);
+      const addTimeSlots = e.target.closest("[data-add-time-slots]");
+      if (addTimeSlots) openAddTimeSlotsModal(Number(addTimeSlots.dataset.boardSlot) || null);
       const minimizeBtn = e.target.closest('[data-action="minimize-trip"]');
       if (minimizeBtn) minimizeTrip(minimizeBtn.dataset.row, minimizeBtn.dataset.trip);
       const restoreBtn = e.target.closest('[data-action="restore-trip"]');
@@ -6853,8 +7034,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     });
     boardTable.addEventListener("change", (e) => {
       const t = e.target;
-      if (t.id === "select-all-rows") {
-        selectAllRows(t.checked);
+      if (t.matches("[data-select-all-rows]")) {
+        selectAllRows(t.checked, Number(t.dataset.boardSlot) || null);
         return;
       }
       if (t.dataset.action === "toggle-row-select") {
