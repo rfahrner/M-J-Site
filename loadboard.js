@@ -2165,6 +2165,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       row.highlighted ? "is-row-pinned" : "",
       row.selected ? "is-row-selected" : "",
       row.addedAt ? "is-new" : "",
+      isRowBeingEdited(row) ? "is-being-edited" : "",
     ].join(" ");
     if (!open.length) {
       // Every trip is minimized — still need exactly one <tr> so the
@@ -2688,6 +2689,19 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   let editingRowId = null; // this session's own local DOM id for whichever row it's editing
   let editingPingInterval = null;
   const remoteEditingTimeouts = new Map(); // dbId -> timeout handle
+
+  // The "someone is editing this row" outline was only ever a class added to a
+  // live <tr>, so a full renderBoardTable() redraw wiped it -- and the board
+  // redraws on every realtime payload. The outline vanished and only came back
+  // on the next 4s presence ping, which reads as it blinking out at random.
+  // rowClasses derives every other row state from data, so derive this one the
+  // same way, from the presence state that already exists: editingRowId for
+  // this session, remoteEditingTimeouts for the other dispatchers.
+  function isRowBeingEdited(row) {
+    if (!row) return false;
+    if (editingRowId && row.id === editingRowId) return true;
+    return row.dbId != null && remoteEditingTimeouts.has(row.dbId);
+  }
 
   // Same lookup shape as findRowAnywhere, but by database id instead of
   // local DOM id — needed to translate an incoming broadcast's dbId back
