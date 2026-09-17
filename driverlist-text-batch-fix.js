@@ -17,7 +17,7 @@ function isVisible(el) {
 }
 
 function isDnuDriver(driver) {
-  return String(driver?.rating || '').trim().toUpperCase().startsWith('DNU');
+  return String(driver?.rating || '').trim().toUpperCase().includes('DNU');
 }
 
 function initDriverListTextBatchFix() {
@@ -54,9 +54,10 @@ function initDriverListTextBatchFix() {
   });
 
   // "All Drivers" means all usable drivers. DNU is an explicit do-not-use
-  // classification, so keep those records out of the recipient pool while
-  // loadboard.js builds the batch. Restore the full driver list immediately
-  // after the click dispatch so the Driver List itself is never filtered.
+  // classification, so keep every DNU record out of the recipient pool while
+  // loadboard.js builds the batch. includes('DNU') also catches any older
+  // free-text value such as "Hard DNU" until that profile is edited into the
+  // new fixed rating dropdown.
   modal.addEventListener('click', (event) => {
     if (!event.target.closest('#tg-start')) return;
     const groupSelect = document.getElementById('tg-group-select');
