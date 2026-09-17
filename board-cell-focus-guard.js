@@ -37,13 +37,6 @@ function sameLogicalCell(a, b) {
     (a.trip || null) === (b.trip || null);
 }
 
-function exactSelector(id) {
-  let selector = `#board-table [data-row="${esc(id.row)}"][data-field="${esc(id.field)}"]`;
-  if (id.trip != null) selector += `[data-trip="${esc(id.trip)}"]`;
-  else selector += ':not([data-trip]), #board-table [data-row="' + esc(id.row) + '"][data-field="' + esc(id.field) + '"][data-trip=""]';
-  return selector;
-}
-
 function exactCell(id) {
   if (!id) return null;
   if (id.trip != null) {
@@ -71,7 +64,12 @@ function refreshSelection(event) {
 }
 
 function closeDriverSuggestions() {
+  // The board's shared floating picker is #driver-ac-floating. Do not set an
+  // inline display:none here: the real autocomplete code reopens it by
+  // removing .hidden, so an inline display value would make the list stay
+  // invisible on the next edit.
   const selectors = [
+    '#driver-ac-floating',
     '#driver-autocomplete',
     '#driver-autocomplete-list',
     '.driver-autocomplete',
@@ -79,10 +77,7 @@ function closeDriverSuggestions() {
     '#board-table .autocomplete-list',
     '.autocomplete-list[data-driver-autocomplete]',
   ];
-  document.querySelectorAll(selectors.join(',')).forEach((el) => {
-    el.classList.add('hidden');
-    if (el instanceof HTMLElement) el.style.display = 'none';
-  });
+  document.querySelectorAll(selectors.join(',')).forEach((el) => el.classList.add('hidden'));
 }
 
 // Click/tap, Tab, arrows and Enter are real navigation/selection requests.
@@ -98,8 +93,8 @@ document.addEventListener('keydown', (event) => {
   }
 }, true);
 
-// The board accepts a driver with Enter but previously left the suggestion
-// popup visible. Run after the board's keydown selection logic has completed.
+// The board accepts a driver with Enter on keydown. Close the floating picker
+// on keyup, after the board has had a chance to apply the selection/save.
 document.addEventListener('keyup', (event) => {
   if (event.key !== 'Enter' || !cellIdentity(event.target)) return;
   requestAnimationFrame(closeDriverSuggestions);
