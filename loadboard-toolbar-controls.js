@@ -114,6 +114,7 @@ function init() {
   if (driverListLocation()) {
     import('./unified-board-image-cells.js').catch((e) => console.error('Failed to load shared image cells:', e));
     import('./image-gallery-scroll-fix.js').catch((e) => console.error('Failed to load paged image viewer:', e));
+    import('./alert-text-button-fix.js').catch((e) => console.error('Failed to load alert Text bridge:', e));
   }
 
   // The same Load Details modal can be opened from a load board or Accounting.
