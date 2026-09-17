@@ -44,6 +44,7 @@ jobs:
           node --input-type=module --check < daily-rate-hierarchy.js
           node --input-type=module --check < daily-rate-modal-sync.js
           node --input-type=module --check < loadboard-toolbar-controls.js
+          node --input-type=module --check < archive-image-backup.js
 
       - name: Build site
         run: npm run build
@@ -79,3 +80,6 @@ jobs:
 
       - name: Type-check driver PWA gateway
         run: deno check --node-modules-dir=auto supabase/functions/paperwork-pwa-submit/index.ts
+
+      - name: Type-check OneDrive image archive
+        run: deno check --node-modules-dir=auto supabase/functions/image-archive-onedrive/index.ts
