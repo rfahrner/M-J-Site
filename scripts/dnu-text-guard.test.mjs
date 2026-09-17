@@ -68,5 +68,15 @@ result = filterNeverTextRecipients([
 ]);
 check('the known Nathaniel misspelling is hard-blocked by name', result.allowed.length, 0);
 
+result = filterNeverTextRecipients([
+  state.drivers[0],
+  state.drivers[1],
+], { allowDnu: true });
+check(
+  'the explicit DNU group is the only supported bypass',
+  result.allowed.map((d) => d.name),
+  ['Nathaniel Davis', 'Muarrem Lazaj'],
+);
+
 console.log(failures ? `\n${failures} check(s) FAILED\n` : '\nAll checks passed.\n');
 process.exit(failures ? 1 : 0);

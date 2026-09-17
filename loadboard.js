@@ -3805,12 +3805,17 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     return { blockedNames, blockedMcs, blockedPhones };
   }
 
-  function filterNeverTextRecipients(recipients) {
+  function filterNeverTextRecipients(recipients, { allowDnu = false } = {}) {
+    const candidates = (Array.isArray(recipients) ? recipients : []).filter(Boolean);
+    // The only bypass is the dispatcher explicitly choosing the DNU group.
+    // Every other entry point calls this with the default (hard block).
+    if (allowDnu) return { allowed: candidates, blocked: [] };
+
     const rules = neverTextRules();
     const allowed = [];
     const blocked = [];
 
-    (Array.isArray(recipients) ? recipients : []).filter(Boolean).forEach((recipient) => {
+    candidates.forEach((recipient) => {
       const name = normalizedTextRecipientName(recipient.name);
       const mc = String(recipient.mc || "").trim();
       const phones = textPhoneKeys(recipient.phone);
@@ -3977,7 +3982,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   function driverClassification(drv) {
     const rating = (drv.rating || "").trim().toUpperCase();
     if (!rating) return null;
-    if (rating.startsWith("DNU")) return "DNU";
+    if (rating.includes("DNU")) return "DNU";
     const m = /^[A-Z]/.exec(rating);
     return m ? m[0] : null;
   }
@@ -4002,7 +4007,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       const classes = availableDriverClasses();
       selectEl.innerHTML = [
         `<option value="ALL">All Drivers</option>`,
-        ...classes.filter((c) => c !== "DNU").map((c) => `<option value="${c}">Rating ${c}</option>`),
+        ...classes.map((c) => `<option value="${c}">${c === "DNU" ? "DNU" : "Rating " + c}</option>`),
       ].join("");
       selectEl.value = "ALL";
     }
@@ -4045,9 +4050,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     });
   }
 
-  export function beginTextBatchFlow(members, label, message) {
+  export function beginTextBatchFlow(members, label, message, { allowDnu = false } = {}) {
     const errEl = $("#tg-error");
-    const filtered = filterNeverTextRecipients(members);
+    const filtered = filterNeverTextRecipients(members, { allowDnu });
     const withPhone = [];
     const skipped = [];
     const deduped = [];
@@ -4072,7 +4077,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const batches = [];
     for (let i = 0; i < withPhone.length; i += GROUP_BATCH_SIZE) batches.push(withPhone.slice(i, i + GROUP_BATCH_SIZE));
 
-    groupTextState = { groupKey: label, message, batches, batchIndex: 0, skipped, deduped, blocked: filtered.blocked, totalSent: 0 };
+    groupTextState = { groupKey: label, message, batches, batchIndex: 0, skipped, deduped, blocked: filtered.blocked, allowDnu, totalSent: 0 };
     $("#tg-setup-step").classList.add("hidden");
     $("#tg-progress-step").classList.remove("hidden");
     renderGroupTextProgress();
@@ -4170,7 +4175,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     errEl.classList.add("hidden");
 
     const pool = driversForLocation(state.driverListTab || "atlanta");
-    let members = groupKey === "ALL" ? pool : pool.filter((d) => driverClassification(d) === groupKey);
+    let members = groupKey === "ALL"
+      ? pool
+      : pool.filter((d) => groupKey === "DNU" ? isNeverTextDriver(d) : driverClassification(d) === groupKey);
     let label = groupKey === "ALL" ? "All Drivers" : (groupKey === "DNU" ? "DNU" : `Rating ${groupKey}`);
 
     const excludeScheduledCheckbox = $("#tg-exclude-scheduled");
@@ -4205,7 +4212,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (note) note.textContent = `${excluded} already scheduled that day, ${members.length} left.`;
     }
 
-    beginTextBatchFlow(applyPhoneMode(members), label, message);
+    beginTextBatchFlow(applyPhoneMode(members), label, message, { allowDnu: groupKey === "DNU" });
   }
 
   function renderGroupTextProgress() {
@@ -4250,7 +4257,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const s = groupTextState;
     if (!s) return;
     const queuedBatch = s.batches[s.batchIndex];
-    const filtered = filterNeverTextRecipients(queuedBatch);
+    const filtered = filterNeverTextRecipients(queuedBatch, { allowDnu: s.allowDnu });
     const batch = filtered.allowed;
     if (filtered.blocked.length) s.blocked.push(...filtered.blocked);
     s.batches[s.batchIndex] = batch;
@@ -4285,7 +4292,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const s = groupTextState;
     if (!s) return;
     const queuedBatch = s.batches[s.batchIndex];
-    const filtered = filterNeverTextRecipients(queuedBatch);
+    const filtered = filterNeverTextRecipients(queuedBatch, { allowDnu: s.allowDnu });
     const batch = filtered.allowed;
     if (filtered.blocked.length) s.blocked.push(...filtered.blocked);
     s.batches[s.batchIndex] = batch;
