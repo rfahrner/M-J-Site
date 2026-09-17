@@ -1,4 +1,5 @@
 import {
+  state,
   sendCurrentGroupBatchDirect,
   openCurrentGroupBatch,
   confirmGroupBatchSent,
@@ -13,6 +14,10 @@ import {
 
 function isVisible(el) {
   return !!el && !el.classList.contains('hidden');
+}
+
+function isDnuDriver(driver) {
+  return String(driver?.rating || '').trim().toUpperCase().startsWith('DNU');
 }
 
 function initDriverListTextBatchFix() {
@@ -47,6 +52,25 @@ function initDriverListTextBatchFix() {
   openBtn.addEventListener('click', () => {
     setTimeout(resetSetupButtons, 0);
   });
+
+  // "All Drivers" means all usable drivers. DNU is an explicit do-not-use
+  // classification, so keep those records out of the recipient pool while
+  // loadboard.js builds the batch. Restore the full driver list immediately
+  // after the click dispatch so the Driver List itself is never filtered.
+  modal.addEventListener('click', (event) => {
+    if (!event.target.closest('#tg-start')) return;
+    const groupSelect = document.getElementById('tg-group-select');
+    if (groupSelect?.value !== 'ALL' || !Array.isArray(state.drivers)) return;
+
+    const fullDriverList = state.drivers;
+    const usableDrivers = fullDriverList.filter((driver) => !isDnuDriver(driver));
+    if (usableDrivers.length === fullDriverList.length) return;
+
+    state.drivers = usableDrivers;
+    queueMicrotask(() => {
+      if (state.drivers === usableDrivers) state.drivers = fullDriverList;
+    });
+  }, true);
 
   // Once Start successfully creates batches, it belongs to the setup step
   // and should not remain beside the active batch actions.
