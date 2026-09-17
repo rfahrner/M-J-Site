@@ -328,6 +328,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       "normal_rate": d.normalRate !== "" && d.normalRate != null ? Number(d.normalRate) : null,
       "runs_out_of": d.runsOutOf && d.runsOutOf.length ? d.runsOutOf : null,
       "atlanta_rate_overrides": d.atlantaRateOverrides && (Object.keys(d.atlantaRateOverrides.tiers || {}).length || Object.keys(d.atlantaRateOverrides.settings || {}).length) ? d.atlantaRateOverrides : null,
+      "delaware_rate_overrides": d.delawareRateOverrides && (Object.keys(d.delawareRateOverrides.tiers || {}).length || Object.keys(d.delawareRateOverrides.settings || {}).length) ? d.delawareRateOverrides : null,
     };
   }
   export function driverFromDbRow(row) {
@@ -349,6 +350,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       normalRate: row["normal_rate"] != null ? String(row["normal_rate"]) : "",
       runsOutOf: row["runs_out_of"] || [],
       atlantaRateOverrides: row["atlanta_rate_overrides"] ? { tiers: row["atlanta_rate_overrides"].tiers || {}, settings: row["atlanta_rate_overrides"].settings || {} } : { tiers: {}, settings: {} },
+      delawareRateOverrides: row["delaware_rate_overrides"] ? { tiers: row["delaware_rate_overrides"].tiers || {}, settings: row["delaware_rate_overrides"].settings || {} } : { tiers: {}, settings: {} },
       location: row["location"] || "atlanta",
       addedAt: null,
     };
@@ -1959,9 +1961,13 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       };
     }
     const drv = row.driverId ? findDriver(row.driverId) : null;
-    const driverOv = drv && drv.atlantaRateOverrides;
-    const hasAtlantaOverrides = driverOv && (Object.keys(driverOv.tiers || {}).length || Object.keys(driverOv.settings || {}).length);
-    if (locationKey === "atlanta" && hasAtlantaOverrides) {
+    const driverOv = drv && (
+      locationKey === "atlanta" ? drv.atlantaRateOverrides :
+      locationKey === "delaware" ? drv.delawareRateOverrides :
+      null
+    );
+    const hasLocationOverrides = driverOv && (Object.keys(driverOv.tiers || {}).length || Object.keys(driverOv.settings || {}).length);
+    if ((locationKey === "atlanta" || locationKey === "delaware") && hasLocationOverrides) {
       return calcLoadRateBreakdown(locationKey, row); // picks up the driver's tier/setting overrides itself
     }
     if (drv && drv.normalRate) {
@@ -1985,6 +1991,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const breakdown = getEffectiveRateInfo(row);
     const nextRate = breakdown.total ? String(breakdown.total) : "";
     if (row.rate === nextRate) return;
+    markFieldDirty(dirtyShiftFields, row.id, "rate");
     row.rate = nextRate;
     scheduleShiftSave(row);
     const rateInput = document.querySelector(`input[data-row="${row.id}"][data-field="rate"]`);
@@ -4565,7 +4572,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         ? ["tonu_flat"]
         : ["over_tier_per_mile", "stop_charge_free_stops", "stop_charge_per_stop"];
     }
-    if (locationKey === "delaware") return ["flat_minimum", "per_mile"];
+    if (locationKey === "delaware") return ["over_tier_per_mile"];
     if (locationKey === "buildingc") return ["birm_flat", "hostler_hourly"];
     return [];
   }
@@ -4590,7 +4597,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (settingKeys.some((k) => isSettingOverridden(row, k))) return "Override";
 
     if (usedTiers.some((t) => isDriverTierOverridden(row, t.id))) return "Driver";
-    if (locationKey === "atlanta" && settingKeys.some((k) => isDriverSettingOverridden(row, k))) return "Driver";
+    if ((locationKey === "atlanta" || locationKey === "delaware") && settingKeys.some((k) => isDriverSettingOverridden(row, k))) return "Driver";
 
     return "Base";
   }
@@ -4619,10 +4626,15 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           ${rateTierBox("TONU flat", `<input type="number" step="0.01" data-rate-setting-key="tonu_flat" value="${val("tonu_flat", 150)}">`, isOv("tonu_flat"))}
         </div>`;
     } else if (locationKey === "delaware") {
+      const overMax = tiers.length ? tiers[tiers.length - 1].max : 250;
       defaultsHtml = `
         <div class="rate-tier-grid">
-          ${rateTierBox("Flat minimum", `<input type="number" step="0.01" data-rate-setting-key="flat_minimum" value="${val("flat_minimum", 1000)}">`, isOv("flat_minimum"))}
-          ${rateTierBox("$/mile", `<input type="number" step="0.01" data-rate-setting-key="per_mile" value="${val("per_mile", 4)}">`, isOv("per_mile"))}
+          ${tiers.map((t) => rateTierBox(
+            `${t.min}-${t.max}MI`,
+            `<input type="number" step="0.01" data-rate-tier-id="${t.id}" value="${effectiveTierRate(row, t)}">`,
+            isTierOverridden(row, t.id) || isDriverTierOverridden(row, t.id)
+          )).join("")}
+          ${rateTierBox(`Over ${overMax}MI ($/mi)`, `<input type="number" step="0.01" data-rate-setting-key="over_tier_per_mile" value="${val("over_tier_per_mile", 4)}">`, isOv("over_tier_per_mile"))}
         </div>`;
     } else if (locationKey === "buildingc") {
       const routeType = row.routeType || "birm";
@@ -4942,6 +4954,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const found = findRowAnywhere(loadDetailsState.rowId);
     if (!found) return;
     const row = found.row;
+    markFieldDirty(dirtyShiftFields, row.id, "rateOverrides");
     if (!row.rateOverrides) row.rateOverrides = { tiers: {}, settings: {} };
     const bucket = kind === "tier" ? row.rateOverrides.tiers : row.rateOverrides.settings;
     const before = bucket[idOrKey];
@@ -4973,6 +4986,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (!found) return;
     const row = found.row;
     const before = row.rate;
+    markFieldDirty(dirtyShiftFields, row.id, "rate");
+    markFieldDirty(dirtyShiftFields, row.id, "rateManual");
     if (String(newValue).trim() === "") {
       row.rate = "";
       row.rateManual = false;
@@ -4994,6 +5009,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (!found) return;
     const row = found.row;
     const before = row.rate;
+    markFieldDirty(dirtyShiftFields, row.id, "rate");
+    markFieldDirty(dirtyShiftFields, row.id, "rateManual");
     row.rateManual = false;
     recomputeRowRate(row);
     if (before !== row.rate) logChange(row.dbId, labelForRow(row), "rate", before, row.rate);
@@ -5273,11 +5290,36 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       </div>`;
   }
 
-  function updateAtlantaRateSectionVisibility() {
-    const section = $("#ad-atlanta-rate-section");
-    if (!section) return;
-    const atlantaChecked = $('input[name="ad-runs-out-of"][value="atlanta"]');
-    section.classList.toggle("hidden", !(atlantaChecked && atlantaChecked.checked));
+  function driverDelawareRateBoxesHtml(overrides) {
+    const tiers = (getBoardRateTiers() && getBoardRateTiers().delaware) || [];
+    const ov = overrides || { tiers: {}, settings: {} };
+    const overMax = tiers.length ? tiers[tiers.length - 1].max : 250;
+    const box = (label, inputHtml) => `<fieldset class="rate-tier-box"><legend>${label}</legend>${inputHtml}</fieldset>`;
+    return `
+      <div class="rate-tier-grid" style="grid-template-columns: repeat(2, 1fr);">
+        ${tiers.map((t) => box(`${t.min}-${t.max}MI`, `<input type="number" step="0.01" data-ddr-tier-id="${t.id}" value="${ov.tiers[t.id] ?? ""}" placeholder="default">`)).join("")}
+        ${box(`Over ${overMax}MI ($/mi)`, `<input type="number" step="0.01" data-ddr-setting-key="over_tier_per_mile" value="${ov.settings.over_tier_per_mile ?? ""}" placeholder="default">`)}
+      </div>`;
+  }
+
+  function ensureDelawareRateSection() {
+    if ($("#ad-delaware-rate-section")) return;
+    const atlantaSection = $("#ad-atlanta-rate-section");
+    if (!atlantaSection) return;
+    atlantaSection.insertAdjacentHTML("afterend", `
+      <div class="field hidden" id="ad-delaware-rate-section" style="border-top:1px solid var(--line); padding-top:14px; margin-top:14px;">
+        <label>Delaware rate card <span class="subtext">(only applies to Delaware loads — leave any box blank to use the normal default)</span></label>
+        <div id="ad-delaware-rate-boxes"></div>
+      </div>`);
+  }
+
+  function updateDriverRateSectionVisibility() {
+    ensureDelawareRateSection();
+    [["atlanta", "ad-atlanta-rate-section"], ["delaware", "ad-delaware-rate-section"]].forEach(([location, sectionId]) => {
+      const section = $("#" + sectionId);
+      const checked = $(`input[name="ad-runs-out-of"][value="${location}"]`);
+      if (section) section.classList.toggle("hidden", !(checked && checked.checked));
+    });
   }
 
   function readAtlantaRateOverridesFromForm() {
@@ -5291,6 +5333,21 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     $all("[data-dr-setting-key]", section).forEach((el) => {
       const v = el.value.trim();
       if (v !== "") overrides.settings[el.dataset.drSettingKey] = Number(v);
+    });
+    return (Object.keys(overrides.tiers).length || Object.keys(overrides.settings).length) ? overrides : null;
+  }
+
+  function readDelawareRateOverridesFromForm() {
+    const section = $("#ad-delaware-rate-section");
+    if (!section) return null;
+    const overrides = { tiers: {}, settings: {} };
+    $all("[data-ddr-tier-id]", section).forEach((el) => {
+      const v = el.value.trim();
+      if (v !== "") overrides.tiers[el.dataset.ddrTierId] = Number(v);
+    });
+    $all("[data-ddr-setting-key]", section).forEach((el) => {
+      const v = el.value.trim();
+      if (v !== "") overrides.settings[el.dataset.ddrSettingKey] = Number(v);
     });
     return (Object.keys(overrides.tiers).length || Object.keys(overrides.settings).length) ? overrides : null;
   }
@@ -5315,9 +5372,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     $all('input[name="ad-tia"]', $("#modal-add-driver")).forEach((r) => (r.checked = r.value === "no"));
     const addingFromMondelez = (state.activeLocation || state.driverListTab) === "mondelez";
     $all('input[name="ad-runs-out-of"]').forEach((c) => { c.checked = addingFromMondelez && c.value === "mondelez"; });
+    ensureDelawareRateSection();
     const atlantaBoxes = $("#ad-atlanta-rate-boxes");
     if (atlantaBoxes) atlantaBoxes.innerHTML = driverAtlantaRateBoxesHtml(null);
-    updateAtlantaRateSectionVisibility();
+    const delawareBoxes = $("#ad-delaware-rate-boxes");
+    if (delawareBoxes) delawareBoxes.innerHTML = driverDelawareRateBoxesHtml(null);
+    updateDriverRateSectionVisibility();
     $all(".field", modalEl).forEach((f) => f.classList.remove("has-error"));
     setText("ad-modal-title", "Add Driver");
     setText("ad-submit", "Add");
@@ -5361,9 +5421,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     setVal("ad-tii-amount", d.tiiAmount != null ? d.tiiAmount : "");
     const runsOutOf = d.runsOutOf || [];
     $all('input[name="ad-runs-out-of"]').forEach((c) => { c.checked = runsOutOf.includes(c.value); });
+    ensureDelawareRateSection();
     const atlantaBoxes = $("#ad-atlanta-rate-boxes");
     if (atlantaBoxes) atlantaBoxes.innerHTML = driverAtlantaRateBoxesHtml(d.atlantaRateOverrides);
-    updateAtlantaRateSectionVisibility();
+    const delawareBoxes = $("#ad-delaware-rate-boxes");
+    if (delawareBoxes) delawareBoxes.innerHTML = driverDelawareRateBoxesHtml(d.delawareRateOverrides);
+    updateDriverRateSectionVisibility();
     $all(".field", modalEl).forEach((f) => f.classList.remove("has-error"));
     setText("ad-modal-title", `${d.name} — Driver Profile`);
     setText("ad-submit", "Save");
@@ -5507,6 +5570,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       normalRate: getVal("ad-rate").trim() || null,
       runsOutOf: $all('input[name="ad-runs-out-of"]').filter((c) => c.checked).map((c) => c.value),
       atlantaRateOverrides: readAtlantaRateOverridesFromForm(),
+      delawareRateOverrides: readDelawareRateOverridesFromForm(),
       location: isEdit ? state.editingDriverLocation : normalizeDriverLocationField(state.activeLocation || state.driverListTab),
     };
 
@@ -6310,8 +6374,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       on("modal-add-driver", "click", (e) => { if (e.target.id === "modal-add-driver") closeAddDriverModal(); });
       const mcField = $("#ad-mc");
       if (mcField) mcField.addEventListener("blur", autofillFromMatchingMC);
-      const atlantaRunsCheckbox = $('input[name="ad-runs-out-of"][value="atlanta"]');
-      if (atlantaRunsCheckbox) atlantaRunsCheckbox.addEventListener("change", updateAtlantaRateSectionVisibility);
+      $all('input[name="ad-runs-out-of"]').forEach((checkbox) => {
+        checkbox.addEventListener("change", updateDriverRateSectionVisibility);
+      });
       $all("[data-ad-tab]").forEach((btn) => btn.addEventListener("click", () => switchAddDriverTab(btn.dataset.adTab)));
       const historyEl = $("#ad-tab-history");
       if (historyEl) historyEl.addEventListener("click", (e) => {
@@ -6796,6 +6861,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           markFieldDirty(dirtyTripFields, t.dataset.trip, t.dataset.field);
         } else {
           markFieldDirty(dirtyShiftFields, rowId, SHIFT_FIELD_TO_STATE_KEY[t.dataset.field] || t.dataset.field);
+          if (t.dataset.field === "rate") markFieldDirty(dirtyShiftFields, rowId, "rateManual");
           // Picking a driver changes the visible name and the profile link
           // together; protect them as the pair they are.
           if (t.dataset.field === "driverName") markFieldDirty(dirtyShiftFields, rowId, "driverId");

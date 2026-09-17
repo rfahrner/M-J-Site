@@ -46,6 +46,9 @@ jobs:
           node --input-type=module --check < loadboard-toolbar-controls.js
           node --input-type=module --check < archive-image-backup.js
 
+      - name: Test Delaware driver rates
+        run: node scripts/delaware-driver-rates.test.mjs
+
       - name: Build site
         run: npm run build
 

@@ -175,9 +175,12 @@ function rowDate(row) {
 }
 
 function driverOverridesFor(row) {
-  if (!row?.driverId || (row?.location && row.location !== "atlanta")) return null;
+  if (!row?.driverId) return null;
   const drv = findDriver(row.driverId);
-  return drv?.atlantaRateOverrides || null;
+  const location = row?.location || "atlanta";
+  if (location === "atlanta") return drv?.atlantaRateOverrides || null;
+  if (location === "delaware") return drv?.delawareRateOverrides || null;
+  return null;
 }
 
 function dailyTierForRow(row, tier) {
@@ -213,7 +216,7 @@ export function effectiveTierRate(row, tier) {
 export function effectiveSetting(row, locationKey, key, fallback) {
   const dailyOrBase = dailySettingForRow(row, locationKey, key, fallback);
   const loadOrDefault = loadSettingForRow(row, key, dailyOrBase);
-  if (locationKey !== "atlanta") return loadOrDefault;
+  if (locationKey !== "atlanta" && locationKey !== "delaware") return loadOrDefault;
   const driverOv = driverOverridesFor(row);
   const driverValue = driverOv?.settings?.[key];
   if (driverValue == null) return loadOrDefault;
