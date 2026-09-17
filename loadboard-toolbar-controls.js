@@ -128,6 +128,7 @@ function init() {
 
     import('./timesheet-completion-flow.js')
       .then(() => Promise.all([
+        import('./timesheet-bulk-context.js'),
         import('./timesheet-image-preview.js'),
         import('./load-overview-timesheet-image.js'),
         import('./load-details-integrity.js'),
