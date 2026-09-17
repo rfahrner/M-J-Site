@@ -328,6 +328,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       "normal_rate": d.normalRate !== "" && d.normalRate != null ? Number(d.normalRate) : null,
       "runs_out_of": d.runsOutOf && d.runsOutOf.length ? d.runsOutOf : null,
       "atlanta_rate_overrides": d.atlantaRateOverrides && (Object.keys(d.atlantaRateOverrides.tiers || {}).length || Object.keys(d.atlantaRateOverrides.settings || {}).length) ? d.atlantaRateOverrides : null,
+      "delaware_rate_overrides": d.delawareRateOverrides && (Object.keys(d.delawareRateOverrides.tiers || {}).length || Object.keys(d.delawareRateOverrides.settings || {}).length) ? d.delawareRateOverrides : null,
     };
   }
   export function driverFromDbRow(row) {
@@ -349,6 +350,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       normalRate: row["normal_rate"] != null ? String(row["normal_rate"]) : "",
       runsOutOf: row["runs_out_of"] || [],
       atlantaRateOverrides: row["atlanta_rate_overrides"] ? { tiers: row["atlanta_rate_overrides"].tiers || {}, settings: row["atlanta_rate_overrides"].settings || {} } : { tiers: {}, settings: {} },
+      delawareRateOverrides: row["delaware_rate_overrides"] ? { tiers: row["delaware_rate_overrides"].tiers || {}, settings: row["delaware_rate_overrides"].settings || {} } : { tiers: {}, settings: {} },
       location: row["location"] || "atlanta",
       addedAt: null,
     };
@@ -1959,9 +1961,13 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       };
     }
     const drv = row.driverId ? findDriver(row.driverId) : null;
-    const driverOv = drv && drv.atlantaRateOverrides;
-    const hasAtlantaOverrides = driverOv && (Object.keys(driverOv.tiers || {}).length || Object.keys(driverOv.settings || {}).length);
-    if (locationKey === "atlanta" && hasAtlantaOverrides) {
+    const driverOv = drv && (
+      locationKey === "atlanta" ? drv.atlantaRateOverrides :
+      locationKey === "delaware" ? drv.delawareRateOverrides :
+      null
+    );
+    const hasLocationOverrides = driverOv && (Object.keys(driverOv.tiers || {}).length || Object.keys(driverOv.settings || {}).length);
+    if ((locationKey === "atlanta" || locationKey === "delaware") && hasLocationOverrides) {
       return calcLoadRateBreakdown(locationKey, row); // picks up the driver's tier/setting overrides itself
     }
     if (drv && drv.normalRate) {
@@ -1985,6 +1991,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const breakdown = getEffectiveRateInfo(row);
     const nextRate = breakdown.total ? String(breakdown.total) : "";
     if (row.rate === nextRate) return;
+    markFieldDirty(dirtyShiftFields, row.id, "rate");
     row.rate = nextRate;
     scheduleShiftSave(row);
     const rateInput = document.querySelector(`input[data-row="${row.id}"][data-field="rate"]`);
@@ -3462,7 +3469,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const rows = getSheet(state.activeLocation, state.activeDate).filter((r) => r.selected);
     const members = rows.map((r) => {
       const drv = r.driverId ? findDriver(r.driverId) : null;
-      return { name: drv ? drv.name : (r.driverNameText || "Unnamed"), phone: drv ? drv.phone : (r.cellSnapshot || ""), dispatcherPhone: drv ? drv.dispatcherPhone : "" };
+      return drv
+        ? { ...drv }
+        : { name: r.driverNameText || "Unnamed", phone: r.cellSnapshot || "", dispatcherPhone: "" };
     });
     beginTextBatchFlow(applyPhoneMode(members), "Selected Loads", message);
   }
@@ -3747,6 +3756,81 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     return `${withCountryCode}@textbetter.com`;
   }
 
+  // DNU is a hard recipient block, not just a Driver List filter. Keep the
+  // explicit names as a fail-safe in case a duplicate/legacy record loses its
+  // rating. Nathaneil is an existing misspelling of Nathaniel in the data.
+  const NEVER_TEXT_DRIVER_NAMES = new Set([
+    "nathaniel davis",
+    "nathaneil davis",
+    "muarrem lazaj",
+  ]);
+
+  function normalizedTextRecipientName(value) {
+    return String(value || "")
+      .replace(/\s+\(dispatch\)\s*$/i, "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, " ");
+  }
+
+  function textPhoneKeys(value) {
+    const matches = String(value || "").match(/\d[\d\s().-]{8,}\d/g) || [];
+    const keys = new Set();
+    matches.forEach((match) => {
+      let digits = match.replace(/\D/g, "");
+      if (digits.length === 11 && digits.startsWith("1")) digits = digits.slice(1);
+      if (digits.length === 10) keys.add(digits);
+    });
+    return keys;
+  }
+
+  function setsIntersect(a, b) {
+    for (const value of a) if (b.has(value)) return true;
+    return false;
+  }
+
+  function isNeverTextDriver(driver) {
+    const rating = String(driver && driver.rating || "").trim().toUpperCase();
+    const name = normalizedTextRecipientName(driver && driver.name);
+    return rating.includes("DNU") || NEVER_TEXT_DRIVER_NAMES.has(name);
+  }
+
+  function neverTextRules() {
+    const directDnu = (state.drivers || []).filter(isNeverTextDriver);
+    const blockedNames = new Set(NEVER_TEXT_DRIVER_NAMES);
+    const blockedPhones = new Set();
+
+    directDnu.forEach((driver) => {
+      const name = normalizedTextRecipientName(driver.name);
+      if (name) blockedNames.add(name);
+      textPhoneKeys(driver.phone).forEach((phone) => blockedPhones.add(phone));
+    });
+
+    return { blockedNames, blockedPhones };
+  }
+
+  function filterNeverTextRecipients(recipients, { allowDnu = false } = {}) {
+    const candidates = (Array.isArray(recipients) ? recipients : []).filter(Boolean);
+    // The only bypass is the dispatcher explicitly choosing the DNU group.
+    // Every other entry point calls this with the default (hard block).
+    if (allowDnu) return { allowed: candidates, blocked: [] };
+
+    const rules = neverTextRules();
+    const allowed = [];
+    const blocked = [];
+
+    candidates.forEach((recipient) => {
+      const name = normalizedTextRecipientName(recipient.name);
+      const phones = textPhoneKeys(recipient.phone);
+      const isBlocked = isNeverTextDriver(recipient)
+        || rules.blockedNames.has(name)
+        || setsIntersect(phones, rules.blockedPhones);
+      (isBlocked ? blocked : allowed).push(recipient);
+    });
+
+    return { allowed, blocked };
+  }
+
   let sendTextModalState = null; // { rawPhone }
 
   function updateSendTextCounter() {
@@ -3766,7 +3850,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   }
 
   export function openSendTextModal(recipients, prefilledMessage, markShiftIdsOnSent) {
-    const safeRecipients = Array.isArray(recipients) ? recipients.filter(Boolean) : [];
+    const filtered = filterNeverTextRecipients(recipients);
+    const safeRecipients = filtered.allowed;
     const withPhone = safeRecipients.filter((r) => formatTextAddress(r.phone));
     // De-dupe by normalized phone — several drivers can share the same
     // dispatcher (or even the same cell), and nobody should get texted
@@ -3780,13 +3865,20 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       deduped.push(r);
     });
     if (!deduped.length) {
-      setDriverSyncStatus("No phone number on file for this driver.", "error");
+      setDriverSyncStatus(
+        filtered.blocked.length
+          ? "That recipient is marked DNU and cannot be texted."
+          : "No phone number on file for this driver.",
+        "error",
+      );
       return;
     }
     sendTextModalState = { recipients: deduped, markShiftIdsOnSent: markShiftIdsOnSent || null };
     $("#send-text-phone-display").textContent = deduped.map((r) => r.name || r.phone).join(", ");
     $("#send-text-message").value = prefilledMessage || "";
-    $("#send-text-status").textContent = "";
+    $("#send-text-status").textContent = filtered.blocked.length
+      ? `${filtered.blocked.length} DNU recipient${filtered.blocked.length === 1 ? " was" : "s were"} removed.`
+      : "";
     updateSendTextCounter();
     $("#modal-send-text").classList.remove("hidden");
     $("#send-text-message").focus();
@@ -3826,6 +3918,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (!sendTextModalState) return;
     const message = $("#send-text-message").value.trim();
     if (!message) { $("#send-text-status").textContent = "Type a message first."; return; }
+    const filtered = filterNeverTextRecipients(sendTextModalState.recipients);
+    sendTextModalState.recipients = filtered.allowed;
+    if (!sendTextModalState.recipients.length) {
+      $("#send-text-status").textContent = "This recipient is marked DNU and cannot be texted.";
+      return;
+    }
     const sendBtn = $("#send-text-submit");
     sendBtn.disabled = true;
     $("#send-text-status").textContent = "Sending…";
@@ -3845,6 +3943,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       $("#send-text-status").innerHTML = `Couldn't send automatically (${escapeHtml(String(e.message || e))}). <button type="button" class="btn btn-ghost" id="send-text-fallback" style="margin-left:6px;">Open in email instead</button>`;
       const fallbackBtn = $("#send-text-fallback");
       if (fallbackBtn) fallbackBtn.addEventListener("click", async () => {
+        const filteredFallback = filterNeverTextRecipients(sendTextModalState.recipients);
+        sendTextModalState.recipients = filteredFallback.allowed;
+        if (!sendTextModalState.recipients.length) {
+          $("#send-text-status").textContent = "This recipient is marked DNU and cannot be texted.";
+          return;
+        }
         const addrs = sendTextModalState.recipients.map((r) => formatTextAddress(r.phone)).join(",");
         const a = document.createElement("a");
         a.href = `mailto:${addrs}?body=${encodeURIComponent(message)}`;
@@ -3878,7 +3982,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   function driverClassification(drv) {
     const rating = (drv.rating || "").trim().toUpperCase();
     if (!rating) return null;
-    if (rating.startsWith("DNU")) return "DNU";
+    if (rating.includes("DNU")) return "DNU";
     const m = /^[A-Z]/.exec(rating);
     return m ? m[0] : null;
   }
@@ -3946,13 +4050,14 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     });
   }
 
-  export function beginTextBatchFlow(members, label, message) {
+  export function beginTextBatchFlow(members, label, message, { allowDnu = false } = {}) {
     const errEl = $("#tg-error");
+    const filtered = filterNeverTextRecipients(members, { allowDnu });
     const withPhone = [];
     const skipped = [];
     const deduped = [];
     const seenPhones = new Set();
-    members.forEach((d) => {
+    filtered.allowed.forEach((d) => {
       const normalized = formatTextAddress(d.phone);
       if (!normalized) { skipped.push(d); return; }
       if (seenPhones.has(normalized)) { deduped.push(d); return; } // shares a number with someone already queued -- don't text it twice
@@ -3961,7 +4066,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     });
 
     if (withPhone.length === 0) {
-      errEl.textContent = `No one in ${label} has a phone number on file.`;
+      errEl.textContent = filtered.blocked.length
+        ? `No textable recipients remain in ${label}; every matching recipient is marked DNU.`
+        : `No one in ${label} has a phone number on file.`;
       errEl.classList.remove("hidden");
       return;
     }
@@ -3970,7 +4077,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const batches = [];
     for (let i = 0; i < withPhone.length; i += GROUP_BATCH_SIZE) batches.push(withPhone.slice(i, i + GROUP_BATCH_SIZE));
 
-    groupTextState = { groupKey: label, message, batches, batchIndex: 0, skipped, deduped, totalSent: 0 };
+    groupTextState = { groupKey: label, message, batches, batchIndex: 0, skipped, deduped, blocked: filtered.blocked, allowDnu, totalSent: 0 };
     $("#tg-setup-step").classList.add("hidden");
     $("#tg-progress-step").classList.remove("hidden");
     renderGroupTextProgress();
@@ -4068,7 +4175,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     errEl.classList.add("hidden");
 
     const pool = driversForLocation(state.driverListTab || "atlanta");
-    let members = groupKey === "ALL" ? pool : pool.filter((d) => driverClassification(d) === groupKey);
+    let members = groupKey === "ALL"
+      ? pool
+      : pool.filter((d) => groupKey === "DNU" ? isNeverTextDriver(d) : driverClassification(d) === groupKey);
     let label = groupKey === "ALL" ? "All Drivers" : (groupKey === "DNU" ? "DNU" : `Rating ${groupKey}`);
 
     const excludeScheduledCheckbox = $("#tg-exclude-scheduled");
@@ -4103,7 +4212,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (note) note.textContent = `${excluded} already scheduled that day, ${members.length} left.`;
     }
 
-    beginTextBatchFlow(applyPhoneMode(members), label, message);
+    beginTextBatchFlow(applyPhoneMode(members), label, message, { allowDnu: groupKey === "DNU" });
   }
 
   function renderGroupTextProgress() {
@@ -4116,11 +4225,14 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const dedupedNote = s.deduped && s.deduped.length
       ? `<div class="calc-note" style="margin-top:4px;">${s.deduped.length} driver(s) share a number with someone already in this batch, so only one text went to that number: ${escapeHtml(s.deduped.map((d) => d.name).join(", "))}</div>`
       : "";
+    const blockedNote = s.blocked && s.blocked.length
+      ? `<div class="calc-note" style="margin-top:4px;">${s.blocked.length} DNU recipient(s) were blocked: ${escapeHtml(s.blocked.map((d) => d.name).join(", "))}</div>`
+      : "";
 
     if (isDone) {
       $("#tg-progress-body").innerHTML = `
         <div class="subtext" style="font-weight:700; font-size:14px;">All done — ${s.totalSent} driver(s) in ${escapeHtml(s.groupKey)} texted across ${s.batches.length} batch(es).</div>
-        ${skipNote}${dedupedNote}`;
+        ${skipNote}${dedupedNote}${blockedNote}`;
       $("#tg-send-now").classList.add("hidden");
       $("#tg-open-batch").classList.add("hidden");
       $("#tg-confirm-sent").classList.add("hidden");
@@ -4131,7 +4243,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     $("#tg-progress-body").innerHTML = `
       <div class="subtext" style="font-weight:700;">Batch ${s.batchIndex + 1} of ${s.batches.length} — ${batch.length} recipient(s)</div>
       <div class="subtext" style="margin-top:6px;">${escapeHtml(batch.map((d) => d.name).join(", "))}</div>
-      ${skipNote}${dedupedNote}
+      ${skipNote}${dedupedNote}${blockedNote}
       <div class="calc-note" style="margin-top:10px;" id="tg-batch-status">Click "Send Now" to send this batch automatically, or fall back to Outlook if needed.</div>
     `;
     $("#tg-send-now").classList.remove("hidden");
@@ -4144,9 +4256,18 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   export async function sendCurrentGroupBatchDirect() {
     const s = groupTextState;
     if (!s) return;
-    const batch = s.batches[s.batchIndex];
+    const queuedBatch = s.batches[s.batchIndex];
+    const filtered = filterNeverTextRecipients(queuedBatch, { allowDnu: s.allowDnu });
+    const batch = filtered.allowed;
+    if (filtered.blocked.length) s.blocked.push(...filtered.blocked);
+    s.batches[s.batchIndex] = batch;
     const btn = $("#tg-send-now");
     const statusEl = $("#tg-batch-status");
+    if (!batch.length) {
+      s.batchIndex += 1;
+      renderGroupTextProgress();
+      return;
+    }
     btn.disabled = true;
     if (statusEl) statusEl.textContent = "Sending…";
     try {
@@ -4170,7 +4291,16 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   export function openCurrentGroupBatch() {
     const s = groupTextState;
     if (!s) return;
-    const batch = s.batches[s.batchIndex];
+    const queuedBatch = s.batches[s.batchIndex];
+    const filtered = filterNeverTextRecipients(queuedBatch, { allowDnu: s.allowDnu });
+    const batch = filtered.allowed;
+    if (filtered.blocked.length) s.blocked.push(...filtered.blocked);
+    s.batches[s.batchIndex] = batch;
+    if (!batch.length) {
+      s.batchIndex += 1;
+      renderGroupTextProgress();
+      return;
+    }
     const addrs = batch.map((d) => formatTextAddress(d.phone)).join(",");
     const a = document.createElement("a");
     a.href = `mailto:${addrs}?body=${encodeURIComponent(s.message)}`;
@@ -4442,7 +4572,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         ? ["tonu_flat"]
         : ["over_tier_per_mile", "stop_charge_free_stops", "stop_charge_per_stop"];
     }
-    if (locationKey === "delaware") return ["flat_minimum", "per_mile"];
+    if (locationKey === "delaware") return ["over_tier_per_mile"];
     if (locationKey === "buildingc") return ["birm_flat", "hostler_hourly"];
     return [];
   }
@@ -4467,7 +4597,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (settingKeys.some((k) => isSettingOverridden(row, k))) return "Override";
 
     if (usedTiers.some((t) => isDriverTierOverridden(row, t.id))) return "Driver";
-    if (locationKey === "atlanta" && settingKeys.some((k) => isDriverSettingOverridden(row, k))) return "Driver";
+    if ((locationKey === "atlanta" || locationKey === "delaware") && settingKeys.some((k) => isDriverSettingOverridden(row, k))) return "Driver";
 
     return "Base";
   }
@@ -4496,10 +4626,15 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           ${rateTierBox("TONU flat", `<input type="number" step="0.01" data-rate-setting-key="tonu_flat" value="${val("tonu_flat", 150)}">`, isOv("tonu_flat"))}
         </div>`;
     } else if (locationKey === "delaware") {
+      const overMax = tiers.length ? tiers[tiers.length - 1].max : 250;
       defaultsHtml = `
         <div class="rate-tier-grid">
-          ${rateTierBox("Flat minimum", `<input type="number" step="0.01" data-rate-setting-key="flat_minimum" value="${val("flat_minimum", 1000)}">`, isOv("flat_minimum"))}
-          ${rateTierBox("$/mile", `<input type="number" step="0.01" data-rate-setting-key="per_mile" value="${val("per_mile", 4)}">`, isOv("per_mile"))}
+          ${tiers.map((t) => rateTierBox(
+            `${t.min}-${t.max}MI`,
+            `<input type="number" step="0.01" data-rate-tier-id="${t.id}" value="${effectiveTierRate(row, t)}">`,
+            isTierOverridden(row, t.id) || isDriverTierOverridden(row, t.id)
+          )).join("")}
+          ${rateTierBox(`Over ${overMax}MI ($/mi)`, `<input type="number" step="0.01" data-rate-setting-key="over_tier_per_mile" value="${val("over_tier_per_mile", 4)}">`, isOv("over_tier_per_mile"))}
         </div>`;
     } else if (locationKey === "buildingc") {
       const routeType = row.routeType || "birm";
@@ -4819,6 +4954,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const found = findRowAnywhere(loadDetailsState.rowId);
     if (!found) return;
     const row = found.row;
+    markFieldDirty(dirtyShiftFields, row.id, "rateOverrides");
     if (!row.rateOverrides) row.rateOverrides = { tiers: {}, settings: {} };
     const bucket = kind === "tier" ? row.rateOverrides.tiers : row.rateOverrides.settings;
     const before = bucket[idOrKey];
@@ -4850,6 +4986,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (!found) return;
     const row = found.row;
     const before = row.rate;
+    markFieldDirty(dirtyShiftFields, row.id, "rate");
+    markFieldDirty(dirtyShiftFields, row.id, "rateManual");
     if (String(newValue).trim() === "") {
       row.rate = "";
       row.rateManual = false;
@@ -4871,6 +5009,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (!found) return;
     const row = found.row;
     const before = row.rate;
+    markFieldDirty(dirtyShiftFields, row.id, "rate");
+    markFieldDirty(dirtyShiftFields, row.id, "rateManual");
     row.rateManual = false;
     recomputeRowRate(row);
     if (before !== row.rate) logChange(row.dbId, labelForRow(row), "rate", before, row.rate);
@@ -5150,11 +5290,36 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       </div>`;
   }
 
-  function updateAtlantaRateSectionVisibility() {
-    const section = $("#ad-atlanta-rate-section");
-    if (!section) return;
-    const atlantaChecked = $('input[name="ad-runs-out-of"][value="atlanta"]');
-    section.classList.toggle("hidden", !(atlantaChecked && atlantaChecked.checked));
+  function driverDelawareRateBoxesHtml(overrides) {
+    const tiers = (getBoardRateTiers() && getBoardRateTiers().delaware) || [];
+    const ov = overrides || { tiers: {}, settings: {} };
+    const overMax = tiers.length ? tiers[tiers.length - 1].max : 250;
+    const box = (label, inputHtml) => `<fieldset class="rate-tier-box"><legend>${label}</legend>${inputHtml}</fieldset>`;
+    return `
+      <div class="rate-tier-grid" style="grid-template-columns: repeat(2, 1fr);">
+        ${tiers.map((t) => box(`${t.min}-${t.max}MI`, `<input type="number" step="0.01" data-ddr-tier-id="${t.id}" value="${ov.tiers[t.id] ?? ""}" placeholder="default">`)).join("")}
+        ${box(`Over ${overMax}MI ($/mi)`, `<input type="number" step="0.01" data-ddr-setting-key="over_tier_per_mile" value="${ov.settings.over_tier_per_mile ?? ""}" placeholder="default">`)}
+      </div>`;
+  }
+
+  function ensureDelawareRateSection() {
+    if ($("#ad-delaware-rate-section")) return;
+    const atlantaSection = $("#ad-atlanta-rate-section");
+    if (!atlantaSection) return;
+    atlantaSection.insertAdjacentHTML("afterend", `
+      <div class="field hidden" id="ad-delaware-rate-section" style="border-top:1px solid var(--line); padding-top:14px; margin-top:14px;">
+        <label>Delaware rate card <span class="subtext">(only applies to Delaware loads — leave any box blank to use the normal default)</span></label>
+        <div id="ad-delaware-rate-boxes"></div>
+      </div>`);
+  }
+
+  function updateDriverRateSectionVisibility() {
+    ensureDelawareRateSection();
+    [["atlanta", "ad-atlanta-rate-section"], ["delaware", "ad-delaware-rate-section"]].forEach(([location, sectionId]) => {
+      const section = $("#" + sectionId);
+      const checked = $(`input[name="ad-runs-out-of"][value="${location}"]`);
+      if (section) section.classList.toggle("hidden", !(checked && checked.checked));
+    });
   }
 
   function readAtlantaRateOverridesFromForm() {
@@ -5168,6 +5333,21 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     $all("[data-dr-setting-key]", section).forEach((el) => {
       const v = el.value.trim();
       if (v !== "") overrides.settings[el.dataset.drSettingKey] = Number(v);
+    });
+    return (Object.keys(overrides.tiers).length || Object.keys(overrides.settings).length) ? overrides : null;
+  }
+
+  function readDelawareRateOverridesFromForm() {
+    const section = $("#ad-delaware-rate-section");
+    if (!section) return null;
+    const overrides = { tiers: {}, settings: {} };
+    $all("[data-ddr-tier-id]", section).forEach((el) => {
+      const v = el.value.trim();
+      if (v !== "") overrides.tiers[el.dataset.ddrTierId] = Number(v);
+    });
+    $all("[data-ddr-setting-key]", section).forEach((el) => {
+      const v = el.value.trim();
+      if (v !== "") overrides.settings[el.dataset.ddrSettingKey] = Number(v);
     });
     return (Object.keys(overrides.tiers).length || Object.keys(overrides.settings).length) ? overrides : null;
   }
@@ -5192,9 +5372,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     $all('input[name="ad-tia"]', $("#modal-add-driver")).forEach((r) => (r.checked = r.value === "no"));
     const addingFromMondelez = (state.activeLocation || state.driverListTab) === "mondelez";
     $all('input[name="ad-runs-out-of"]').forEach((c) => { c.checked = addingFromMondelez && c.value === "mondelez"; });
+    ensureDelawareRateSection();
     const atlantaBoxes = $("#ad-atlanta-rate-boxes");
     if (atlantaBoxes) atlantaBoxes.innerHTML = driverAtlantaRateBoxesHtml(null);
-    updateAtlantaRateSectionVisibility();
+    const delawareBoxes = $("#ad-delaware-rate-boxes");
+    if (delawareBoxes) delawareBoxes.innerHTML = driverDelawareRateBoxesHtml(null);
+    updateDriverRateSectionVisibility();
     $all(".field", modalEl).forEach((f) => f.classList.remove("has-error"));
     setText("ad-modal-title", "Add Driver");
     setText("ad-submit", "Add");
@@ -5238,9 +5421,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     setVal("ad-tii-amount", d.tiiAmount != null ? d.tiiAmount : "");
     const runsOutOf = d.runsOutOf || [];
     $all('input[name="ad-runs-out-of"]').forEach((c) => { c.checked = runsOutOf.includes(c.value); });
+    ensureDelawareRateSection();
     const atlantaBoxes = $("#ad-atlanta-rate-boxes");
     if (atlantaBoxes) atlantaBoxes.innerHTML = driverAtlantaRateBoxesHtml(d.atlantaRateOverrides);
-    updateAtlantaRateSectionVisibility();
+    const delawareBoxes = $("#ad-delaware-rate-boxes");
+    if (delawareBoxes) delawareBoxes.innerHTML = driverDelawareRateBoxesHtml(d.delawareRateOverrides);
+    updateDriverRateSectionVisibility();
     $all(".field", modalEl).forEach((f) => f.classList.remove("has-error"));
     setText("ad-modal-title", `${d.name} — Driver Profile`);
     setText("ad-submit", "Save");
@@ -5384,6 +5570,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       normalRate: getVal("ad-rate").trim() || null,
       runsOutOf: $all('input[name="ad-runs-out-of"]').filter((c) => c.checked).map((c) => c.value),
       atlantaRateOverrides: readAtlantaRateOverridesFromForm(),
+      delawareRateOverrides: readDelawareRateOverridesFromForm(),
       location: isEdit ? state.editingDriverLocation : normalizeDriverLocationField(state.activeLocation || state.driverListTab),
     };
 
@@ -6187,8 +6374,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       on("modal-add-driver", "click", (e) => { if (e.target.id === "modal-add-driver") closeAddDriverModal(); });
       const mcField = $("#ad-mc");
       if (mcField) mcField.addEventListener("blur", autofillFromMatchingMC);
-      const atlantaRunsCheckbox = $('input[name="ad-runs-out-of"][value="atlanta"]');
-      if (atlantaRunsCheckbox) atlantaRunsCheckbox.addEventListener("change", updateAtlantaRateSectionVisibility);
+      $all('input[name="ad-runs-out-of"]').forEach((checkbox) => {
+        checkbox.addEventListener("change", updateDriverRateSectionVisibility);
+      });
       $all("[data-ad-tab]").forEach((btn) => btn.addEventListener("click", () => switchAddDriverTab(btn.dataset.adTab)));
       const historyEl = $("#ad-tab-history");
       if (historyEl) historyEl.addEventListener("click", (e) => {
@@ -6673,6 +6861,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           markFieldDirty(dirtyTripFields, t.dataset.trip, t.dataset.field);
         } else {
           markFieldDirty(dirtyShiftFields, rowId, SHIFT_FIELD_TO_STATE_KEY[t.dataset.field] || t.dataset.field);
+          if (t.dataset.field === "rate") markFieldDirty(dirtyShiftFields, rowId, "rateManual");
           // Picking a driver changes the visible name and the profile link
           // together; protect them as the pair they are.
           if (t.dataset.field === "driverName") markFieldDirty(dirtyShiftFields, rowId, "driverId");

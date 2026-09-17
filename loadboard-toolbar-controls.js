@@ -7,6 +7,8 @@ import './unified-load-modals.js';
 import './houston-load-details-v2.js';
 import './board-row-hover-enhancements.js';
 import './daily-board-notes.js';
+import './uniform-route-image-cells.js';
+import './driver-rating-controls.js';
 import './load-details-image-draft-guard.js';
 import './load-overview-timesheet-image-click-fix.js';
 import './route-completion-integrity.js';
