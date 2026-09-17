@@ -1528,3 +1528,68 @@ fieldset.rate-tier-box.is-overridden {
 .image-viewer-footer {
   flex: 0 0 auto;
 }
+
+
+/* ============================================================
+   Delaware daily load boards
+   ============================================================ */
+.delaware-board-empty {
+  padding: 56px 20px;
+  text-align: center;
+  border-top: 1px solid var(--line);
+  background: var(--slate-100);
+}
+.delaware-create-board-btn {
+  min-width: 220px;
+  margin-bottom: 8px;
+}
+.delaware-board-panel {
+  min-width: max-content;
+  padding-bottom: 18px;
+  background: #fff;
+  border-bottom: 5px solid var(--navy-950);
+}
+.delaware-board-panel + .delaware-board-panel {
+  padding-top: 18px;
+}
+.delaware-board-heading {
+  position: sticky;
+  left: 0;
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: min(100vw, 100%);
+  min-width: 720px;
+  padding: 10px 14px;
+  background: var(--navy-950);
+  color: #fff;
+}
+.delaware-board-heading h2 {
+  margin: 1px 0 0;
+  font-size: 20px;
+  letter-spacing: .08em;
+}
+.delaware-board-number {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  opacity: .72;
+}
+.delaware-add-board-wrap {
+  padding: 14px 18px 18px;
+  border-top: 1px solid var(--line);
+  background: #fff;
+}
+.delaware-add-board-wrap .subtext {
+  margin-top: 6px;
+}
+.delaware-board-question {
+  font-size: 18px;
+  margin-bottom: 6px;
+}
+#board-tables.hidden {
+  display: none;
+}
