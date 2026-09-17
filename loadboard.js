@@ -3791,18 +3791,15 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   function neverTextRules() {
     const directDnu = (state.drivers || []).filter(isNeverTextDriver);
     const blockedNames = new Set(NEVER_TEXT_DRIVER_NAMES);
-    const blockedMcs = new Set();
     const blockedPhones = new Set();
 
     directDnu.forEach((driver) => {
       const name = normalizedTextRecipientName(driver.name);
       if (name) blockedNames.add(name);
-      const mc = String(driver.mc || "").trim();
-      if (mc) blockedMcs.add(mc);
       textPhoneKeys(driver.phone).forEach((phone) => blockedPhones.add(phone));
     });
 
-    return { blockedNames, blockedMcs, blockedPhones };
+    return { blockedNames, blockedPhones };
   }
 
   function filterNeverTextRecipients(recipients, { allowDnu = false } = {}) {
@@ -3817,14 +3814,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
     candidates.forEach((recipient) => {
       const name = normalizedTextRecipientName(recipient.name);
-      const mc = String(recipient.mc || "").trim();
       const phones = textPhoneKeys(recipient.phone);
-      const dispatcherPhones = textPhoneKeys(recipient.dispatcherPhone);
       const isBlocked = isNeverTextDriver(recipient)
         || rules.blockedNames.has(name)
-        || (mc && rules.blockedMcs.has(mc))
-        || setsIntersect(phones, rules.blockedPhones)
-        || setsIntersect(dispatcherPhones, rules.blockedPhones);
+        || setsIntersect(phones, rules.blockedPhones);
       (isBlocked ? blocked : allowed).push(recipient);
     });
 

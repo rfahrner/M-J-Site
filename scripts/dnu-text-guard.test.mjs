@@ -2,8 +2,8 @@
  * Regression coverage for the hard DNU recipient guard.
  *
  * This lifts the real guard from loadboard.js so the test fails if the shipped
- * code stops blocking a DNU name, DNU phone reused as a dispatcher number, or
- * another record under the same blocked MC/carrier.
+ * code stops blocking a DNU name or a DNU phone reused as a dispatcher number.
+ * Sharing only an MC must not block a driver with a different phone number.
  *
  * Run: node scripts/dnu-text-guard.test.mjs
  */
@@ -50,11 +50,15 @@ let result = filterNeverTextRecipients([
   state.drivers[3],
   state.drivers[4],
 ]);
-check('only a safe recipient remains', result.allowed.map((d) => d.name), ['Safe Driver']);
 check(
-  'DNU name, shared dispatch phone, and shared carrier are blocked',
+  'different target phones remain textable despite shared MC or a DNU dispatcher on file',
+  result.allowed.map((d) => d.name),
+  ['Carrier Mate', 'Same Carrier', 'Safe Driver'],
+);
+check(
+  'the DNU names are blocked',
   result.blocked.map((d) => d.name),
-  ['Nathaniel Davis', 'Muarrem Lazaj', 'Carrier Mate', 'Same Carrier'],
+  ['Nathaniel Davis', 'Muarrem Lazaj'],
 );
 
 result = filterNeverTextRecipients([
