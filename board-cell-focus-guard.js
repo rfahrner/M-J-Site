@@ -1,16 +1,12 @@
 /*
- * Guard against realtime table redraws moving the cursor into the same column
- * on the first trip above the one being edited.
+ * Guard against realtime/table redraws moving the cursor away from the exact
+ * logical cell a dispatcher is editing.
  *
- * loadboard.js already restores focus after a redraw, but its fallback selector
- * is keyed by row + field. A shift can contain several trip rows with the same
- * field name, so that selector can resolve to the first matching trip instead
- * of the exact trip the dispatcher was editing.
- *
- * This guard remembers the exact row + trip + field. If a redraw replaces the
- * focused DOM node and the generic restore lands on a sibling trip, immediately
- * move focus back to the exact trip. Normal clicks and Tab navigation are left
- * alone.
+ * The board redraws after saves and realtime updates. A redraw destroys the
+ * focused input node, then loadboard.js restores focus by row/field. Trip rows
+ * can share the same row + field, and shift-level cells (Driver, PRO, Start,
+ * etc.) do not always have data-trip at all. Track row + field + optional trip
+ * so both kinds of cells restore to the exact logical location.
  */
 
 let tracked = null;
@@ -25,21 +21,35 @@ function esc(value) {
 function cellIdentity(el) {
   if (!(el instanceof HTMLElement)) return null;
   const ds = el.dataset || {};
-  if (!ds.row || !ds.field || !ds.trip) return null;
+  if (!ds.row || !ds.field) return null;
   if (!el.closest('#board-table')) return null;
   return {
     row: String(ds.row),
-    trip: String(ds.trip),
+    trip: ds.trip != null && ds.trip !== '' ? String(ds.trip) : null,
     field: String(ds.field),
   };
 }
 
-function sameColumn(a, b) {
-  return !!a && !!b && a.row === b.row && a.field === b.field;
+function sameLogicalCell(a, b) {
+  return !!a && !!b &&
+    a.row === b.row &&
+    a.field === b.field &&
+    (a.trip || null) === (b.trip || null);
 }
 
 function exactSelector(id) {
-  return `#board-table [data-row="${esc(id.row)}"][data-trip="${esc(id.trip)}"][data-field="${esc(id.field)}"]`;
+  let selector = `#board-table [data-row="${esc(id.row)}"][data-field="${esc(id.field)}"]`;
+  if (id.trip != null) selector += `[data-trip="${esc(id.trip)}"]`;
+  else selector += ':not([data-trip]), #board-table [data-row="' + esc(id.row) + '"][data-field="' + esc(id.field) + '"][data-trip=""]';
+  return selector;
+}
+
+function exactCell(id) {
+  if (!id) return null;
+  if (id.trip != null) {
+    return document.querySelector(`#board-table [data-row="${esc(id.row)}"][data-field="${esc(id.field)}"][data-trip="${esc(id.trip)}"]`);
+  }
+  return document.querySelector(`#board-table [data-row="${esc(id.row)}"][data-field="${esc(id.field)}"]:not([data-trip]), #board-table [data-row="${esc(id.row)}"][data-field="${esc(id.field)}"][data-trip=""]`);
 }
 
 function selectionFor(el) {
@@ -60,15 +70,39 @@ function refreshSelection(event) {
   Object.assign(tracked, selectionFor(tracked.el));
 }
 
-// A click/tap or keyboard Tab is a real navigation request and must win over
-// the guard. The short window covers the focus() call made by the board's
-// spreadsheet-style Tab handler on the next animation frame.
+function closeDriverSuggestions() {
+  const selectors = [
+    '#driver-autocomplete',
+    '#driver-autocomplete-list',
+    '.driver-autocomplete',
+    '.driver-autocomplete-list',
+    '#board-table .autocomplete-list',
+    '.autocomplete-list[data-driver-autocomplete]',
+  ];
+  document.querySelectorAll(selectors.join(',')).forEach((el) => {
+    el.classList.add('hidden');
+    if (el instanceof HTMLElement) el.style.display = 'none';
+  });
+}
+
+// Click/tap, Tab, arrows and Enter are real navigation/selection requests.
+// Give the board's own handlers a short window to move focus intentionally.
 document.addEventListener('pointerdown', (event) => {
-  if (cellIdentity(event.target)) navigationIntentUntil = performance.now() + 350;
+  if (cellIdentity(event.target)) navigationIntentUntil = performance.now() + 500;
 }, true);
 
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Tab' && cellIdentity(event.target)) navigationIntentUntil = performance.now() + 350;
+  if (!cellIdentity(event.target)) return;
+  if (event.key === 'Tab' || event.key === 'Enter' || event.key.startsWith('Arrow')) {
+    navigationIntentUntil = performance.now() + 500;
+  }
+}, true);
+
+// The board accepts a driver with Enter but previously left the suggestion
+// popup visible. Run after the board's keydown selection logic has completed.
+document.addEventListener('keyup', (event) => {
+  if (event.key !== 'Enter' || !cellIdentity(event.target)) return;
+  requestAnimationFrame(closeDriverSuggestions);
 }, true);
 
 document.addEventListener('focusin', (event) => {
@@ -80,8 +114,10 @@ document.addEventListener('focusin', (event) => {
   const userNavigated = performance.now() <= navigationIntentUntil;
   const oldNodeWasReplaced = !!tracked?.el && !tracked.el.isConnected;
 
-  if (!userNavigated && oldNodeWasReplaced && sameColumn(tracked, next) && tracked.trip !== next.trip) {
-    const exact = document.querySelector(exactSelector(tracked));
+  // If a redraw replaced the active node, the only acceptable automatic
+  // landing spot is the exact row + field + trip (when a trip exists).
+  if (!userNavigated && oldNodeWasReplaced && tracked && !sameLogicalCell(tracked, next)) {
+    const exact = exactCell(tracked);
     if (exact && exact !== nextEl) {
       const { start, end } = tracked;
       correcting = true;
@@ -97,6 +133,32 @@ document.addEventListener('focusin', (event) => {
 
   remember(nextEl);
 }, true);
+
+// A MutationObserver catches the case where a redraw removes the focused node
+// and the board does not focus anything at all afterward.
+const observer = new MutationObserver(() => {
+  if (correcting || !tracked?.el || tracked.el.isConnected) return;
+  if (performance.now() <= navigationIntentUntil) return;
+  const exact = exactCell(tracked);
+  if (!exact) return;
+  const { start, end } = tracked;
+  correcting = true;
+  requestAnimationFrame(() => {
+    try {
+      exact.focus({ preventScroll: true });
+      if (start != null && typeof exact.setSelectionRange === 'function') exact.setSelectionRange(start, end);
+      tracked = { ...tracked, el: exact };
+    } catch (_) { /* cell disappeared for good */ }
+    correcting = false;
+  });
+});
+
+function startObserver() {
+  const board = document.getElementById('board-table');
+  if (board) observer.observe(board, { childList: true, subtree: true });
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startObserver, { once: true });
+else startObserver();
 
 for (const type of ['input', 'keyup', 'mouseup', 'select']) {
   document.addEventListener(type, refreshSelection, true);
