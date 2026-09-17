@@ -19,17 +19,25 @@ Read this file before making changes. This is a live dispatch/load-board applica
 - After changes, verify GitHub CI/Pages status.
 - Do not put secrets in frontend JavaScript or in this repository.
 
-## Current load-board behavior / recent fixes
+## CURRENT PRIORITY: keep spreadsheet editing simple
 
-### Cursor / focus
+The user explicitly wants ordinary spreadsheet behavior: type a value, Tab to the next editable cell, continue. No clever row-selection/focus system should be allowed to move the cursor or erase active input.
 
-The board redraws after saves and realtime updates. `board-cell-focus-guard.js` exists specifically to keep focus on the exact logical cell. Trip-level identity must include:
+`simple-board-grid.js` now replaces `board-cell-focus-guard.js` in `loadboard-toolbar-controls.js`.
 
-`shift row + trip + field`
+Important diagnosis behind the change:
+- `loadboard.js` renders multiple route `<tr>` elements for one shift while those route rows share the same shift row id/data-row.
+- `currentlyEditedField(rowId, tripId)` historically used `document.getElementById(rowId)` and `tr.contains(document.activeElement)`.
+- With multiple route rows, `getElementById(rowId)` resolves the first duplicate row, so a dispatcher typing in the second/third route can be misclassified as not editing that trip.
+- A realtime payload can then overwrite the local in-memory trip with the older database value and redraw, making freshly typed numbers disappear.
 
-not merely `shift row + field`.
+Current mitigation in `simple-board-grid.js`:
+- capture-phase Tab owns navigation before the older row-aware Tab handler;
+- visible editable controls are traversed in plain DOM order;
+- exact cell identity is `data-row + data-trip + data-field`;
+- if a realtime redraw destroys the active input, the module restores the exact replacement control and re-feeds the dispatcher’s typed value through the normal `input` event before refocusing it.
 
-A recent bug caused a user editing the second route's Trip ID to visually remain there while the board internally treated the first route row as selected; Tab then jumped upward. Recent fix captures the exact Tab destination and restores by trip identity. Do not weaken this behavior.
+If reviewing this, prefer simplifying further rather than adding more focus heuristics. A good core-code cleanup would be to make `currentlyEditedField` compare `document.activeElement.dataset.row / dataset.trip / dataset.field` directly instead of relying on duplicate DOM row ids. Do not reintroduce complex cursor-restoration logic unless clearly necessary.
 
 ### Driver autocomplete
 
