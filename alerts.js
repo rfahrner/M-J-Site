@@ -231,6 +231,19 @@ import './paperwork-load-integration.js';
         if (laterDispatched) continue;
         const lastStopMin = parseHHMM(t.last_stop_depart);
         const returnEtaMin = parseHHMM(t.return_eta_to_dc);
+        if (returnEtaMin != null) {
+          const missingTrailerLabels = [];
+          if (!(t.trailer_out || "").trim()) missingTrailerLabels.push("the current trailer number");
+          if (!(t.backhaul_trailer_number || "").trim()) missingTrailerLabels.push("the return trailer number");
+          if (missingTrailerLabels.length) {
+            alerts.push({
+              key: `return-trailer-${t.id}-${missingTrailerLabels.length}`, type: "missing_trailer_number", location: s.location, shiftDbId: s.id,
+              message: `${driverName} (${label}, ${tripLabel}) — Return ETA entered, collect ${missingTrailerLabels.join(" and ")}`,
+              recipients: driverPhone ? [{ name: driverName, phone: driverPhone }] : [],
+              actionMessage: `This is D&L transportation, ${driverName}. We have your ETA back to the DC, but we still need ${missingTrailerLabels.join(" and ")}. Please text us the number${missingTrailerLabels.length > 1 ? "s" : ""}.`,
+            });
+          }
+        }
         if (lastStopMin != null && returnEtaMin == null && nowMin >= lastStopMin) {
           // Stage 5: last-stop-depart time has arrived, no return ETA yet --
           // this ONLY asks whether the driver made it and what their ETA
@@ -332,7 +345,7 @@ import './paperwork-load-integration.js';
       body.innerHTML = `<div class="alert-empty">Nothing needs attention right now.</div>`;
       return;
     }
-    const ICONS = { idle: "⏱", overdue_return: "↩", missing_eta: "❓", preshift_text: "📋", preshift_escalate: "🚨", call_followup: "📞", missing_paperwork: "📄", last_stop: "🏁", at_dc_waiting: "🅿️" };
+    const ICONS = { idle: "⏱", overdue_return: "↩", missing_eta: "❓", missing_trailer_number: "📦", preshift_text: "📋", preshift_escalate: "🚨", call_followup: "📞", missing_paperwork: "📄", last_stop: "🏁", at_dc_waiting: "🅿️" };
     // newest first
     const sorted = [...boardAlerts].sort((a, b) => alertFirstSeenAt[b.key] - alertFirstSeenAt[a.key]);
     body.innerHTML = sorted.map((a) => {
