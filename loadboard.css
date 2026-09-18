@@ -1088,6 +1088,10 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
 .ld-history-row { display: grid; grid-template-columns: 130px 140px 1fr 1fr; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
 .ld-history-row-5col { grid-template-columns: 120px 90px 110px 1fr 1fr; }
 .ld-history-row:first-child { font-weight: 700; color: var(--slate-500); font-size: 10.5px; text-transform: uppercase; }
+/* Notes have no header row: the first note is styled exactly like the rest. */
+.driver-note-row { padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 12px; font-weight: 400; text-transform: none; }
+.driver-note-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 5px; color: var(--slate-500); font-size: 12px; font-weight: 400; }
+.driver-note-text { color: var(--navy-950); font-weight: 400; white-space: pre-wrap; overflow-wrap: anywhere; }
 .ld-history-old { color: var(--slate-500); text-decoration: line-through; }
 .ld-history-new { color: var(--navy-950); font-weight: 600; }
 .ld-image-gallery { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }

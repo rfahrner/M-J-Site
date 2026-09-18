@@ -49,6 +49,9 @@ jobs:
       - name: Test Delaware driver rates
         run: node scripts/delaware-driver-rates.test.mjs
 
+      - name: Test driver note ordering and presentation
+        run: node --test scripts/driver-profile-notes.test.mjs
+
       - name: Build site
         run: npm run build
 
