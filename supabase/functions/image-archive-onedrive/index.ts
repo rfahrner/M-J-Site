@@ -5,12 +5,23 @@ const GRAPH = 'https://graph.microsoft.com/v1.0';
 const MAX_BATCH = 250;
 const PROXY_TTL_SECONDS = 60 * 60;
 
+// The database cron caller waits 120s (net.http_post timeout_milliseconds), and
+// a run that overruns that is killed mid-file: the upload may have completed
+// while the row that records it never got written, which is exactly the state
+// that would later let a verified-but-unrecorded original be deleted twice or
+// not at all. So the loop stops itself well short of that, reports how many are
+// still waiting, and the next pass -- cron or the operator's button -- picks up
+// where it left off. Nothing is lost by stopping early; a half-finished file is.
+const RUN_BUDGET_MS = 75_000;
+const ROLES_ALLOWED_TO_RUN = ['admin', 'it'];
+
 type Config = {
   enabled: boolean;
   retention_days: number;
   destination_label: string;
   destination_share_url: string;
   cron_secret: string;
+  delete_after_archive: boolean;
 };
 
 type Candidate = {
@@ -92,10 +103,27 @@ async function authenticatedUser(admin: ReturnType<typeof createClient>, req: Re
   return data.user;
 }
 
+// Only an admin or IT user may start a run by hand. Checked server-side against
+// user_roles with the service key -- never inferred from anything the browser
+// sends, which a signed-in dispatcher could forge.
+async function callerMayRunArchive(admin: ReturnType<typeof createClient>, req: Request) {
+  const user = await authenticatedUser(admin, req);
+  if (!user) return false;
+  const { data } = await admin.from('user_roles').select('role').eq('user_id', user.id).maybeSingle();
+  return ROLES_ALLOWED_TO_RUN.includes(String(data?.role || '').toLowerCase());
+}
+
+function secretsMatch(a: string, b: string) {
+  if (!a || !b || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
 async function getConfig(admin: ReturnType<typeof createClient>): Promise<Config> {
   const { data, error } = await admin
     .from('archive_backup_config')
-    .select('enabled,retention_days,destination_label,destination_share_url,cron_secret')
+    .select('enabled,retention_days,destination_label,destination_share_url,cron_secret,delete_after_archive')
     .eq('id', true)
     .single();
   if (error) throw error;
@@ -281,6 +309,9 @@ async function uploadObject(params: {
   return { blobSize: blob.size, uploaded, providerPath };
 }
 
+// Sources for files that already have a verified copy at the destination. This
+// is also what collects the backlog left behind by copy-only runs once
+// delete_after_archive is turned on, so nothing has to be re-uploaded.
 async function cleanupAlreadyArchived(admin: ReturnType<typeof createClient>) {
   const { data } = await admin
     .from('archive_backup_items')
@@ -299,7 +330,15 @@ async function cleanupAlreadyArchived(admin: ReturnType<typeof createClient>) {
   return deleted;
 }
 
-async function runArchive(admin: ReturnType<typeof createClient>, config: Config) {
+async function remainingCount(admin: ReturnType<typeof createClient>) {
+  const { data, error } = await admin.rpc('archive_backup_remaining');
+  if (error) return null;
+  return Number(data || 0);
+}
+
+async function runArchive(admin: ReturnType<typeof createClient>, config: Config, options: { manual?: boolean } = {}) {
+  const startedAtMs = Date.now();
+  const manual = !!options.manual;
   const { data: run, error: runError } = await admin
     .from('archive_backup_runs')
     .insert({ status: 'running', destination_label: config.destination_label })
@@ -308,7 +347,10 @@ async function runArchive(admin: ReturnType<typeof createClient>, config: Config
   if (runError) throw runError;
   const runId = String(run.id);
 
-  if (!config.enabled) {
+  // The automatic sweep respects the enabled switch. A run started by hand does
+  // not: the whole point of the button is to prove the path works BEFORE the
+  // switch is flipped, and it is gated on an admin session instead.
+  if (!config.enabled && !manual) {
     await admin.from('archive_backup_runs').update({ status: 'disabled', finished_at: new Date().toISOString() }).eq('id', runId);
     return { status: 'disabled', runId };
   }
@@ -325,10 +367,15 @@ async function runArchive(admin: ReturnType<typeof createClient>, config: Config
       finished_at: new Date().toISOString(),
       error_message: message,
     }).eq('id', runId);
-    return { status: 'configuration_required', runId, error: message };
+    // remaining is still worth returning: it tells the operator how much is
+    // queued up behind the missing connection.
+    return { status: 'configuration_required', runId, error: message, remaining: await remainingCount(admin) };
   }
 
-  const cleanupDeleted = await cleanupAlreadyArchived(admin);
+  // In copy-only mode nothing is removed -- not the file just uploaded, and not
+  // the backlog of earlier copies either.
+  const deleteSources = config.delete_after_archive === true;
+  const cleanupDeleted = deleteSources ? await cleanupAlreadyArchived(admin) : 0;
   const { data: candidates, error: candidateError } = await admin.rpc('archive_backup_candidates', { p_limit: MAX_BATCH });
   if (candidateError) throw candidateError;
 
@@ -338,8 +385,13 @@ async function runArchive(admin: ReturnType<typeof createClient>, config: Config
   let bytesDownloaded = 0;
   let failures = 0;
   const folderCache = new Map<string, string>();
+  let stoppedForTime = false;
 
   for (const raw of (candidates || []) as Candidate[]) {
+    // Between files is the only safe place to stop: every file is upload ->
+    // verify -> record -> delete, and cutting into that sequence is what leaves
+    // an original without a recorded copy.
+    if (Date.now() - startedAtMs > RUN_BUDGET_MS) { stoppedForTime = true; break; }
     const candidate = { ...raw, bytes: Number(raw.bytes || 0) };
     try {
       const uploaded = await uploadObject({
@@ -375,11 +427,13 @@ async function runArchive(admin: ReturnType<typeof createClient>, config: Config
       }, { onConflict: 'bucket_id,object_name' });
       if (upsertError) throw upsertError;
 
-      const { error: removeError } = await admin.storage.from(candidate.bucket_id).remove([candidate.object_name]);
-      if (!removeError) {
-        filesDeleted += 1;
-        await admin.from('archive_backup_items').update({ source_deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-          .eq('bucket_id', candidate.bucket_id).eq('object_name', candidate.object_name);
+      if (deleteSources) {
+        const { error: removeError } = await admin.storage.from(candidate.bucket_id).remove([candidate.object_name]);
+        if (!removeError) {
+          filesDeleted += 1;
+          await admin.from('archive_backup_items').update({ source_deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+            .eq('bucket_id', candidate.bucket_id).eq('object_name', candidate.object_name);
+        }
       }
     } catch (error) {
       failures += 1;
@@ -400,6 +454,7 @@ async function runArchive(admin: ReturnType<typeof createClient>, config: Config
   }
 
   const status = failures ? (filesArchived ? 'partial' : 'failed') : 'success';
+  const remaining = await remainingCount(admin);
   await admin.from('archive_backup_runs').update({
     finished_at: new Date().toISOString(),
     status,
@@ -409,10 +464,31 @@ async function runArchive(admin: ReturnType<typeof createClient>, config: Config
     bytes_archived: bytesArchived,
     bytes_downloaded: bytesDownloaded,
     error_message: failures ? `${failures} file(s) failed. Individual errors are retained on archive_backup_items.` : null,
-    details: { destination_web_url: destination.webUrl, cleanup_deleted: cleanupDeleted },
+    details: {
+      destination_web_url: destination.webUrl,
+      cleanup_deleted: cleanupDeleted,
+      copy_only: !deleteSources,
+      stopped_for_time: stoppedForTime,
+      remaining_after: remaining,
+      manual,
+    },
   }).eq('id', runId);
 
-  return { status, runId, filesConsidered: (candidates || []).length, filesArchived, filesDeleted, bytesArchived, failures };
+  return {
+    status,
+    runId,
+    filesConsidered: (candidates || []).length,
+    filesArchived,
+    filesDeleted,
+    bytesArchived,
+    failures,
+    // How many eligible files are still waiting. The caller loops while this is
+    // above zero, so one press of the button moves everything however many
+    // passes that takes, rather than however many fit in one request.
+    remaining,
+    stoppedForTime,
+    copyOnly: !deleteSources,
+  };
 }
 
 async function signedArchiveUrls(admin: ReturnType<typeof createClient>, req: Request, body: any, proxySecret: string) {
@@ -515,7 +591,14 @@ Deno.serve(async (req: Request) => {
       const microsoftConfigured = Boolean(
         Deno.env.get('MS_TENANT_ID')?.trim() && Deno.env.get('MS_CLIENT_ID')?.trim() && Deno.env.get('MS_CLIENT_SECRET')?.trim()
       );
-      return json({ ...data, microsoft_configured: microsoftConfigured });
+      const config = await getConfig(admin);
+      return json({
+        ...data,
+        microsoft_configured: microsoftConfigured,
+        delete_after_archive: config.delete_after_archive === true,
+        remaining: await remainingCount(admin),
+        can_run: await callerMayRunArchive(admin, req),
+      });
     }
 
     if (action === 'sign') {
@@ -524,9 +607,17 @@ Deno.serve(async (req: Request) => {
 
     if (action === 'run') {
       const config = await getConfig(admin);
+      // Two ways in, and they mean different things. The scheduled sweep proves
+      // itself with the shared secret and obeys the enabled switch. A person
+      // pressing "Back Up Now" proves themselves with their own signed-in
+      // session plus an admin/IT role, and may run before the switch is on.
       const supplied = req.headers.get('x-archive-cron') || '';
-      if (!supplied || supplied !== config.cron_secret) return json({ error: 'Archive cron authorization failed.' }, 401);
-      const result = await runArchive(admin, config);
+      const byCron = secretsMatch(supplied, String(config.cron_secret || ''));
+      const byAdmin = byCron ? false : await callerMayRunArchive(admin, req);
+      if (!byCron && !byAdmin) {
+        return json({ error: 'Archive run authorization failed. Sign in as an admin or IT user.' }, 401);
+      }
+      const result = await runArchive(admin, config, { manual: byAdmin });
       return json(result);
     }
 
