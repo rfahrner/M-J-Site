@@ -66,10 +66,15 @@ function esc(value) {
     .replaceAll("'", "&#039;");
 }
 
+// Byte-for-byte what loadboard.js's fmtRateMoney() produces. It used to be
+// toLocaleString with maximumFractionDigits:2, so loadboard rendered "$400.00"
+// and this module rewrote it as "$400" (and "$1234.50" as "$1,234.5") a moment
+// later. Every figure in the Rate box changed width right after the panel drew,
+// which is what made that box visibly resize.
 function money(value) {
   const n = Number(value);
-  if (!Number.isFinite(n)) return "—";
-  return `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  if (value == null || !Number.isFinite(n)) return "—";
+  return `$${n.toFixed(2)}`;
 }
 
 function waitFor(getter, timeoutMs = 12000) {
@@ -319,6 +324,36 @@ function ensureRateSettingsButton() {
   button.dataset.dailyRateSettings = "1";
 }
 
+// Kept identical to loadboard.js's RATE_PANEL_EXPLANATION.
+const RATE_PANEL_EXPLANATION = "Changes here apply only to this load. Date and location defaults are managed in Rate Settings; the driver's negotiated rate stays the minimum, and a manual total overrides the calculation. A dot marks a value that differs from the location default.";
+
+const scratchNode = document.createElement("div");
+
+function normalizeRenderedText(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+// Every leaf element's class and visible text, in document order. Flattening
+// the whole subtree to one string would not do: loadboard.js indents its
+// template and this module's is one unbroken line, so the same content
+// concatenates differently ("... calculated Base $400.00" vs
+// "...calculatedBase$400.00"). Per-leaf comparison ignores the whitespace
+// BETWEEN tags while still catching any change to what is actually shown.
+function renderedSignature(root) {
+  const parts = [];
+  root.querySelectorAll("*").forEach((el) => {
+    if (el.children.length) return;
+    parts.push(`${el.tagName}.${el.getAttribute("class") || ""}:${normalizeRenderedText(el.textContent)}`);
+  });
+  return parts.join("|");
+}
+
+// True when `el` already displays exactly what `html` would display.
+function sameRenderedText(el, html) {
+  scratchNode.innerHTML = html;
+  return renderedSignature(el) === renderedSignature(scratchNode);
+}
+
 function decorateLoadDetailsRatePanel() {
   if (decoratingRatePanel || !lb?.loadDetailsState || activeLocation === "houston") return;
   const section = document.querySelector("#ld-tab-content .rate-section");
@@ -327,9 +362,14 @@ function decorateLoadDetailsRatePanel() {
   if (!row) return;
   decoratingRatePanel = true;
   try {
+    // Identical to the string loadboard.js renders (RATE_PANEL_EXPLANATION
+    // there). The two used to differ, so this paragraph was swapped for a
+    // longer one right after the panel drew -- it re-wrapped to a different
+    // number of lines and the whole Rate box jumped. Change both or neither.
     const explanation = section.querySelector(":scope > .subtext");
-    const copy = "Changes here apply only to this load. Date and location defaults are managed in Rate Settings; the driver's negotiated rate remains the minimum, and a manual total overrides the calculation.";
-    if (explanation && explanation.textContent !== copy) explanation.textContent = copy;
+    if (explanation && explanation.textContent !== RATE_PANEL_EXPLANATION) {
+      explanation.textContent = RATE_PANEL_EXPLANATION;
+    }
 
     const breakdown = rates.calcLoadRateBreakdown(row.location || activeLocation, row);
     if (!row.rateManual) {
@@ -344,11 +384,13 @@ function decorateLoadDetailsRatePanel() {
       const lines = (breakdown.lines || []).map((line) => `
         <div class="rate-breakdown-row"><span>${esc(line.label)}</span><span class="subtext">${esc(line.detail || "")}</span><span>${money(line.amount)}</span></div>`).join("");
       const html = `<div class="rate-section-subheader">How this was calculated</div>${lines || `<div class="subtext" style="padding:6px 0;">${esc(breakdown.note || "Nothing to calculate yet.")}</div>`}${breakdown.lines?.length ? `<div class="rate-breakdown-row rate-breakdown-total"><span>Total</span><span></span><span>${money(breakdown.total)}</span></div>` : ""}`;
-      const sig = `${row.id}|${row.rateManual}|${JSON.stringify(breakdown)}`;
-      if (box.dataset.hierarchySig !== sig) {
-        box.dataset.hierarchySig = sig;
-        box.innerHTML = html;
-      }
+      // Compare what the box would SAY, not the markup. loadboard.js renders
+      // this same content first, with different whitespace, so a markup or
+      // dataset comparison never matched -- and a dataset signature is wiped
+      // by the very innerHTML rebuild that precedes this, so the old guard
+      // rewrote the box on every single render. Visible text is what decides
+      // the box's height, so it is the right thing to compare.
+      if (!sameRenderedText(box, html)) box.innerHTML = html;
     }
   } finally {
     decoratingRatePanel = false;
