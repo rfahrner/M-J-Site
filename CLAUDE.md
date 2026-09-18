@@ -118,6 +118,39 @@ Do not resume or alter the Microsoft/OneDrive authorization setup unless the use
 
 The alert widget has a Text button that should open the existing `Send Text` modal via the native board path. Avoid adding duplicate click interception layers that compete with the existing handler.
 
+An alert clears itself once its text goes out. `openSendTextModal()` takes an
+optional `{ onSent }`, fired by `finishSendTextModalAsSent()` on BOTH exits --
+the gateway accepting the message, and the dispatcher choosing "Open in email
+instead". `alerts.js` keeps a dismissed-key set (localStorage, scoped to today)
+and filters it out of every scan. Repeating rules roll a tier into their key, so
+the next reminder is a new key and still arrives; dismissing never switches a
+rule off.
+
+## Deleting a load vs. deleting a route
+
+The ROUTES column's pills are rendered inside a load's FIRST `<tr>`, and routes
+past the first render as sibling `<tr id="row__trip">` rows. `tr.id` alone
+therefore says "shift" even when the pointer is on one specific route -- which
+is how a right-click meant for a route pill deleted an entire load. The
+contextmenu handler reads `data-trip`/`data-row` off whatever was clicked, and
+the menu now carries two clearly named entries ("Delete route X only" /
+"Delete entire load PRO# ..."). Never ship an unlabelled `Delete`.
+
+## Board cells: no injected wrappers from document-wide observers
+
+`paperwork-load-integration.js` used to draw a small paper icon beside every
+route-image dropzone from a document-wide MutationObserver. Every board redraw
+destroyed it and re-created it ~120ms later, wrapping the dropzone in an extra
+flex container and changing the IMAGE column's width each time -- the column
+visibly flickered. The icon is gone (the user asked for it removed) and that
+module now observes `#modal-load-details` only. Do not reintroduce a board-cell
+injector driven off a whole-document observer.
+
+`#modal-load-details` has a fixed height envelope in `loadboard.css` with the
+body scrolling inside it. Load Details fills in piece by piece as its queries
+return; sized to its contents, the centered card moved on screen with every
+arrival, which read as the modal shaking while it opened.
+
 ## Database rules worth preserving
 
 - `loads_shifts` = standard board shifts.

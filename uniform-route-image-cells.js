@@ -16,27 +16,16 @@ function installStyles() {
   const style = document.createElement('style');
   style.id = 'uniform-route-image-cell-styles';
   style.textContent = `
-    /* One IMAGE-column footprint everywhere. The paperwork document icon can
-       occupy the reserved space at the left without shrinking the dropzone. */
+    /* One IMAGE-column footprint everywhere. The reserved space at the left
+       used to hold a paperwork document icon; that icon was removed, so the
+       dropzone simply sits at the right of a fixed-width cell. Keeping the
+       width fixed is the point -- a cell that sizes to its contents is what
+       made the column jump while the board redrew. */
     table.board td.col-routeImage,
     #mondelez-table td.col-mdz-image {
       width: 164px !important;
       min-width: 164px !important;
       max-width: 164px !important;
-    }
-
-    table.board td.col-routeImage:has(.mjapp-paperwork-indicator) {
-      width: 164px !important;
-      min-width: 164px !important;
-      max-width: 164px !important;
-    }
-
-    .mjapp-image-cell-wrap {
-      width: 100% !important;
-      display: flex !important;
-      align-items: center !important;
-      justify-content: flex-end !important;
-      gap: 5px !important;
     }
 
     .mdz-image-dropzone.mj-uniform-route-image-cell {
