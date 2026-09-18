@@ -2650,6 +2650,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_shifts" }, handleRealtimeShiftChange);
     channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_trips" }, handleRealtimeTripChange);
     channel.on("postgres_changes", { event: "*", schema: "public", table: "atlanta_drivers" }, handleRealtimeDriverChange);
+    // Available rows share this same all-Kroger channel so every dispatcher
+    // receives inserts, edits, and removals on the same path as load-board
+    // changes. The handler filters by the active location/date in memory.
+    channel.on("postgres_changes", { event: "*", schema: "public", table: AVAILABLE_TABLE }, handleRealtimeAvailableChange);
     channel.on("broadcast", { event: "row-editing" }, ({ payload }) => handleRemoteRowEditing(payload));
     channel.subscribe((status, err) => {
       if (status === "SUBSCRIBED") {
@@ -4489,10 +4493,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       }
       loadDetailsState.attachments = attachmentRows.map((a) => {
         let publicUrl = signedAttachmentUrls[a.file_path] || a.publicUrl || "";
-        if (!publicUrl && a.file_path && supabaseClient) {
-          try { publicUrl = supabaseClient.storage.from("trip-sheets").getPublicUrl(a.file_path).data.publicUrl || ""; }
-          catch (e) { /* no usable fallback */ }
-        }
+        // No getPublicUrl fallback on purpose: the bucket is private, so a
+        // public URL only ever renders as a broken image. Leaving this empty
+        // lets the caller fall through to its own "no image" state.
         return { ...a, publicUrl };
       });
       loadDetailsState.history = (history || []).sort((a, b) => (a.changed_at < b.changed_at ? 1 : -1));
@@ -5168,11 +5171,16 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       try {
         const { error: upErr } = await supabaseClient.storage.from("trip-sheets").upload(path, file);
         if (upErr) throw upErr;
-        const { data: urlData } = supabaseClient.storage.from("trip-sheets").getPublicUrl(path);
+        // trip-sheets is a PRIVATE bucket, so getPublicUrl handed back a URL
+        // that cannot load: the thumbnail stayed broken until the modal was
+        // reopened and the read path signed it properly. Sign it here too.
+        const { data: signed, error: signErr } = await supabaseClient.storage
+          .from("trip-sheets").createSignedUrl(path, 3600);
+        if (signErr) console.error("Failed to sign the uploaded trip sheet:", signErr);
         const { data: inserted, error: insErr } = await supabaseClient.from("load_attachments")
           .insert({ shift_id: row.dbId, file_path: path, file_name: file.name }).select();
         if (insErr) throw insErr;
-        loadDetailsState.attachments.push({ ...inserted[0], publicUrl: urlData.publicUrl });
+        loadDetailsState.attachments.push({ ...inserted[0], publicUrl: (signed && signed.signedUrl) || "" });
       } catch (e) {
         console.error("uploadTripSheetImages failed:", e);
         setDriverSyncStatus(`Couldn't upload ${file.name} (${e.message || e}).`, "error");
@@ -6306,17 +6314,17 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     }
   }
 
-  export function setupAvailableRealtimeSync(locationKey) {
-    if (!supabaseClient) return;
-    const channel = supabaseClient.channel(`available-${locationKey}`);
-    channel.on("postgres_changes", { event: "*", schema: "public", table: AVAILABLE_TABLE, filter: `location=eq.${locationKey}` }, handleRealtimeAvailableChange);
-    channel.subscribe();
+  // Kept as an exported compatibility shim for callers from older pages.
+  // Standard Kroger boards now attach this listener to the shared
+  // "board-kroger" channel in setupRealtimeSync(), so they cannot drift onto
+  // a separate per-location subscription.
+  export function setupAvailableRealtimeSync() {
+    return boardChannel;
   }
 
   export function initAvailableSection() {
     if (!$("#available-table-body")) return; // not every page has this section
     refreshAvailableSection();
-    setupAvailableRealtimeSync(state.activeLocation || "atlanta");
 
     on("btn-available-add-row", "click", addAvailableRow);
 
