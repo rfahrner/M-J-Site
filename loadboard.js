@@ -5821,11 +5821,19 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   const LOAD_NOTES_TABLE = "load_notes";
 
   async function logDriverCancellationNote(row, reasonText) {
-    if (!supabaseClient || !row.driverId) return;
+    if (!supabaseClient) return;
+    // Imported rows can retain the typed driver name without a linked
+    // driver_id. Resolve that name so cancellation notes still land on the
+    // driver's profile.
+    const scopedMatch = resolveDriverByName(row.driverNameText || "", row.location).driver;
+    const nameKey = String(row.driverNameText || "").replace(/\\s*-\\s*$/, "").trim().toLowerCase();
+    const nameMatches = (state.drivers || []).filter((d) => String(d.name || "").trim().toLowerCase() === nameKey);
+    const driverId = row.driverId || scopedMatch?.id || (nameMatches.length === 1 ? nameMatches[0].id : null);
+    if (!driverId) return;
     const reasonLabel = String(reasonText || "").trim() || "No reason provided";
     try {
       const { error } = await supabaseClient.from(DRIVER_NOTES_TABLE).insert({
-        driver_id: Number(row.driverId),
+        driver_id: Number(driverId),
         note_text: `Cancellation — ${row.shiftDate || dateKey(new Date())} — ${labelForRow(row)} — ${reasonLabel}`,
       });
       if (error) throw error;
@@ -5926,16 +5934,30 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   async function loadDriverProfileHistory(driverId) {
     if (!supabaseClient) return [];
     const idNum = Number(driverId);
-    const [shiftsRes, houstonRes, mondelezRes] = await Promise.all([
-      supabaseClient.from(SHIFTS_TABLE).select("id, pro_number, shift_date, location").eq("driver_id", idNum).order("shift_date", { ascending: false }).limit(50),
+    const profileDriver = findDriver(driverId);
+    const profileName = String(profileDriver?.name || "").trim();
+    const [shiftsRes, nameRes, houstonRes, mondelezRes] = await Promise.all([
+      supabaseClient.from(SHIFTS_TABLE).select("id, pro_number, shift_date, location, driver_id, driver_name_text, called_off, load_cancelled, called_off_reason, load_cancelled_reason").eq("driver_id", idNum).order("shift_date", { ascending: false }).limit(50),
+      profileName
+        ? supabaseClient.from(SHIFTS_TABLE).select("id, pro_number, shift_date, location, driver_id, driver_name_text, called_off, load_cancelled, called_off_reason, load_cancelled_reason").is("driver_id", null).ilike("driver_name_text", `${profileName}%`).order("shift_date", { ascending: false }).limit(50)
+        : Promise.resolve({ data: [], error: null }),
       supabaseClient.from("loads_houston").select("id, aljex_number, shift_date").eq("driver_id", idNum).order("shift_date", { ascending: false }).limit(50),
       supabaseClient.from("mondelez_loads").select("id, aljex_number, shift_date, location").eq("driver_id", idNum).order("shift_date", { ascending: false }).limit(50),
     ]);
     const entries = [];
     // dbId/kind let the History tab render a clickable link straight to the
-    // load (see openLoadFromDriverHistory) — Houston/Mondelez are included
-    // in the list either way, but only "shift" entries are clickable for now.
-    (shiftsRes.data || []).forEach((r) => entries.push({ label: r.pro_number || "(no PRO#)", date: r.shift_date, board: r.location || "board", dbId: r.id, kind: "shift" }));
+    // load. The name-based query also catches imported rows that were never
+    // linked to the driver's profile, including cancellations.
+    const shiftRows = new Map();
+    [...(shiftsRes.data || []), ...(nameRes.data || [])].forEach((r) => shiftRows.set(r.id, r));
+    [...shiftRows.values()].forEach((r) => entries.push({
+      label: r.pro_number || "(no PRO#)",
+      date: r.shift_date,
+      board: r.location || "board",
+      dbId: r.id,
+      kind: "shift",
+      cancelled: !!(r.called_off || r.load_cancelled),
+    }));
     (houstonRes.data || []).forEach((r) => entries.push({ label: r.aljex_number || "(no Aljex#)", date: r.shift_date, board: "houston", dbId: r.id, kind: "houston" }));
     (mondelezRes.data || []).forEach((r) => entries.push({ label: r.aljex_number || "(no Aljex#)", date: r.shift_date, board: `mondelez — ${r.location}`, dbId: r.id, kind: "mondelez" }));
     entries.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
@@ -6004,7 +6026,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
             const label = (r.kind === "shift" && r.dbId)
               ? `<button type="button" class="cell-link-btn" style="width:auto; height:auto; padding:2px 8px;" data-open-history-kind="${r.kind}" data-open-history-id="${r.dbId}" title="Open this load">${escapeHtml(r.label)} ↗</button>`
               : escapeHtml(r.label);
-            return `<div class="ld-history-row" style="grid-template-columns: 110px 150px 1fr;"><span>${escapeHtml(r.date || "—")}</span><span>${escapeHtml(r.board || "—")}</span><span>${label}</span></div>`;
+            return `<div class="ld-history-row${r.cancelled ? " is-driver-history-cancelled" : ""}" style="grid-template-columns: 110px 150px 1fr;"><span>${escapeHtml(r.date || "—")}</span><span>${escapeHtml(r.board || "—")}</span><span>${label}${r.cancelled ? `<div class="subtext" style="text-decoration:none;">Cancelled</div>` : ""}</span></div>`;
           }).join("")
         : `<div class="subtext">No past loads on file for this driver yet.</div>`;
       const rateChangesHtml = rateRows.length

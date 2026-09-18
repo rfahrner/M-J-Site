@@ -739,6 +739,13 @@ tr.is-called-off td:not(.pin-select):not(.pin-text) span.static-text {
   color: var(--slate-500);
 }
 tr.is-called-off { background: rgba(71, 85, 105, 0.06); }
+.is-driver-history-cancelled {
+  text-decoration: line-through;
+  color: var(--slate-500);
+  background: rgba(71, 85, 105, 0.06);
+}
+.is-driver-history-cancelled .cell-link-btn,
+.is-driver-history-cancelled .subtext { text-decoration: line-through; }
 /* status swatches for salvage / backhaul flags */
 .flag-yes { background: var(--amber-bg) !important; }
 .flag-backhaul { background: var(--blue-bg) !important; }
