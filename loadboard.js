@@ -391,6 +391,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       location: locationKey,
       shift_date: dKey,
       pro_number: row.proNumber || null,
+      schneider: !!row.schneider,
       driver_id: row.driverId ? Number(row.driverId) : null,
       driver_name_text: row.driverNameText || null,
       tonu: !!row.tonu,
@@ -436,6 +437,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       driverId: dbRow.driver_id != null ? String(dbRow.driver_id) : null,
       driverNameText: dbRow.driver_name_text || "",
       proNumber: dbRow.pro_number || "",
+      schneider: !!dbRow.schneider,
       tonu: !!dbRow.tonu,
       highlighted: !!dbRow.highlighted,
       shiftStart: dbRow.shift_start || "",
@@ -663,6 +665,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   };
 
   const DRIVER_INFO_COLS = [
+    { key: "schneider", label: "Schneider", location: "delaware" },
     { key: "cell", label: "Cell" },
     { key: "dispatcherPhone", label: "Dispatcher Phone" },
     { key: "email", label: "Email" },
@@ -840,6 +843,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     return {
       id: uid("row"), dbId: null, location: state.activeLocation || null, shiftDate: state.activeDate || null,
       driverId: driverId || null, driverNameText: driverNameText || "",
+      schneider: false,
       proNumber: "", tonu: false, highlighted: false, shiftStart: "", shiftComplete: false, shiftCompleteAt: null, rate: "", notes: "", selected: false,
       preShiftTextSent: false, preShiftCall: false, etaShiftReport: "", actualShiftReport: "", revLevel: "",
       timesheetReceived: false, timesheetStartTime: "", timesheetEndTime: "", trailerDropLocation: "", preShiftTextSentAt: null,
@@ -2172,6 +2176,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           <input class="cell-input" placeholder="PRO#" data-row="${row.id}" data-field="proNumber" value="${escapeHtml(row.proNumber)}">${proLinkBtn}
         </div>
       </td>
+      ${row.location === "delaware" ? `<td class="col-schneider"${rs}>
+        <select class="cell-input" data-row="${row.id}" data-field="schneider" aria-label="Schneider">
+          <option value=""${row.schneider ? "" : " selected"}></option>
+          <option value="Schneider"${row.schneider ? " selected" : ""}>Schneider</option>
+        </select>
+      </td>` : ""}
       <td class="col-shiftDate"${rs}><span class="static-text">${escapeHtml(row.shiftDate || "")}</span></td>
       <td class="col-mc"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.mc, row.mcSnapshot))}</span></td>
       <td class="col-rating"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.rating, row.ratingSnapshot))}</span></td>
@@ -2376,6 +2386,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         <th class="col-email">Email</th>
         <th class="col-dispatcherPhone">Dispatcher Phone</th>
         <th class="pin pin-pro">PRO#</th>
+        ${state.activeLocation === "delaware" ? `<th class="col-schneider">Schneider</th>` : ""}
         <th class="col-shiftDate">Date</th>
         <th class="col-mc">MC #</th>
         <th class="col-rating">Rating</th>
@@ -2395,7 +2406,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         <th class="col-trip-actions"></th>
       </tr>
     </thead>`;
-    const totalCols = 20 + getOrderedTripSubcols().length + 1 + (state.activeLocation === "buildingc" ? 1 : 0);
+    const totalCols = 20 + getOrderedTripSubcols().length + 1 + (["buildingc", "delaware"].includes(state.activeLocation) ? 1 : 0);
     const addRowHtml = `<tr class="quick-add-row"><td colspan="${totalCols}">
       <button type="button" class="quick-add-btn" id="btn-quick-add-row"><span class="quick-add-btn-label">+ Add Row</span></button>
       <button type="button" class="quick-add-btn quick-add-btn-secondary" id="btn-add-time-slots"><span class="quick-add-btn-label">+ Add Time Slots</span></button>
@@ -5411,7 +5422,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const item = (c) => `<label><input type="checkbox" data-col-toggle="${c.key}" ${state.hiddenCols.has(c.key) ? "" : "checked"}> ${c.label}</label>`;
     return `
       <div class="columns-panel-group-label">Driver info</div>
-      ${DRIVER_INFO_COLS.map(item).join("")}
+      ${DRIVER_INFO_COLS.filter(c => !c.location || c.location === state.activeLocation).map(item).join("")}
       <div class="columns-panel-group-label">Trip columns (applies to all 5 trips)</div>
       ${getOrderedTripSubcols().map(item).join("")}
       <div class="columns-panel-footer">
@@ -7173,6 +7184,14 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       }
       if (t.dataset.action === "change-route-type") {
         changeRouteType(t.dataset.row, t.value);
+        return;
+      }
+      if (t.dataset.field === "schneider" && !t.dataset.trip) {
+        const found = findRowAnywhere(t.dataset.row);
+        if (!found || found.row.location !== "delaware") return;
+        found.row.schneider = t.value === "Schneider";
+        markFieldDirty(dirtyShiftFields, found.row.id, "schneider");
+        saveShiftNow(found.row);
         return;
       }
       if (t.type === "checkbox" && !t.dataset.trip && t.dataset.field === "preShiftTextSent") {
