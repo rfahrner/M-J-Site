@@ -85,7 +85,9 @@ function installTrackedModalWatcher() {
 function openTrackedText(recipients, message, marker) {
   installTrackedModalWatcher();
   pendingTrackedMarker = marker;
-  openSendTextModal(recipients, message, null);
+  // Alert Text buttons are intentional direct messages. Grouped/mass text
+  // flows continue to use the default DNU block.
+  openSendTextModal(recipients, message, null, { allowDnu: true });
   const modal = document.getElementById('modal-send-text');
   if (!modal || modal.classList.contains('hidden')) pendingTrackedMarker = null;
 }
@@ -109,7 +111,12 @@ async function handleBasePreShiftClick(button) {
     return { name: drv.name || clean(row.driver_name_text) || 'Driver', phone: drv.phone || clean(row.driver_cell_snapshot) };
   }).filter((r) => r.phone);
   if (!recipients.length) return true;
-  openSendTextModal(recipients, preShiftMessage(unsent[0].shift_start), unsent.map((row) => Number(row.id)));
+  openSendTextModal(
+    recipients,
+    preShiftMessage(unsent[0].shift_start),
+    unsent.map((row) => Number(row.id)),
+    { allowDnu: recipients.length === 1 },
+  );
   return true;
 }
 

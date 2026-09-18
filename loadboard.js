@@ -3920,7 +3920,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     return { allowed, blocked };
   }
 
-  let sendTextModalState = null; // { rawPhone }
+  let sendTextModalState = null; // { recipients, markShiftIdsOnSent, allowDnu, onSent }
 
   function updateSendTextCounter() {
     const el = $("#send-text-counter");
@@ -3942,8 +3942,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // the gateway accepted it, or the dispatcher chose the Outlook fallback and a
   // draft was handed to their mail client. The alert widget uses it to clear the
   // alert that opened the modal; nothing else may assume it exists.
-  export function openSendTextModal(recipients, prefilledMessage, markShiftIdsOnSent, options) {
-    const filtered = filterNeverTextRecipients(recipients);
+  export function openSendTextModal(recipients, prefilledMessage, markShiftIdsOnSent, options = {}) {
+    const allowDnu = options.allowDnu === true;
+    const filtered = filterNeverTextRecipients(recipients, { allowDnu });
     const safeRecipients = filtered.allowed;
     const withPhone = safeRecipients.filter((r) => formatTextAddress(r.phone));
     // De-dupe by normalized phone — several drivers can share the same
@@ -3969,7 +3970,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     sendTextModalState = {
       recipients: deduped,
       markShiftIdsOnSent: markShiftIdsOnSent || null,
-      onSent: (options && typeof options.onSent === "function") ? options.onSent : null,
+      onSent: (typeof options.onSent === "function") ? options.onSent : null,
+      allowDnu,
     };
     $("#send-text-phone-display").textContent = deduped.map((r) => r.name || r.phone).join(", ");
     $("#send-text-message").value = prefilledMessage || "";
@@ -3982,7 +3984,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   }
 
   export function textDriverPhone(rawPhone, prefilledMessage) {
-    openSendTextModal([{ name: null, phone: rawPhone }], prefilledMessage);
+    // This is an intentional one-driver text from the dispatcher's Text
+    // action. DNU exclusion applies to bulk/group sends, not this direct path.
+    openSendTextModal([{ name: null, phone: rawPhone }], prefilledMessage, null, { allowDnu: true });
   }
 
   // Marks Pre Shift Text Sent (+ timestamp) on the given shifts, both in the
@@ -4027,7 +4031,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (!sendTextModalState) return;
     const message = $("#send-text-message").value.trim();
     if (!message) { $("#send-text-status").textContent = "Type a message first."; return; }
-    const filtered = filterNeverTextRecipients(sendTextModalState.recipients);
+    const filtered = filterNeverTextRecipients(sendTextModalState.recipients, { allowDnu: sendTextModalState.allowDnu });
     sendTextModalState.recipients = filtered.allowed;
     if (!sendTextModalState.recipients.length) {
       $("#send-text-status").textContent = "This recipient is marked DNU and cannot be texted.";
@@ -4052,7 +4056,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       $("#send-text-status").innerHTML = `Couldn't send automatically (${escapeHtml(String(e.message || e))}). <button type="button" class="btn btn-ghost" id="send-text-fallback" style="margin-left:6px;">Open in email instead</button>`;
       const fallbackBtn = $("#send-text-fallback");
       if (fallbackBtn) fallbackBtn.addEventListener("click", async () => {
-        const filteredFallback = filterNeverTextRecipients(sendTextModalState.recipients);
+        const filteredFallback = filterNeverTextRecipients(sendTextModalState.recipients, { allowDnu: sendTextModalState.allowDnu });
         sendTextModalState.recipients = filteredFallback.allowed;
         if (!sendTextModalState.recipients.length) {
           $("#send-text-status").textContent = "This recipient is marked DNU and cannot be texted.";
