@@ -2,6 +2,19 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <script>
+    // Dashboard recovery emails can land on the Site URL instead of the reset page.
+    (() => {
+      const incoming = new URL(window.location.href);
+      const hash = new URLSearchParams(incoming.hash.slice(1));
+      if (hash.get("type") !== "recovery" && incoming.searchParams.get("type") !== "recovery") return;
+      window.passwordRecoveryRedirect = true;
+      const target = new URL("reset-password.html", incoming);
+      target.search = incoming.search;
+      target.hash = incoming.hash;
+      window.location.replace(target.href);
+    })();
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Atlanta Spreadsheet</title>
   <link rel="stylesheet" href="loadboard.css">
@@ -415,6 +428,9 @@
 
 
   <script src="stop-times-highlight-fix.js?v=2" defer></script>
-  <script type="module" src="loadboard.js" defer></script>
+  <script type="module">
+    // Do not let board authentication consume a recovery session during navigation.
+    if (!window.passwordRecoveryRedirect) import("./loadboard.js");
+  </script>
 </body>
 </html>
