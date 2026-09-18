@@ -7,8 +7,7 @@
    just a different lens on the same data).
    Revenue (what Mondelez pays D&L) is calculated from a per-DC rate
    table: Daily Rate + (Stops x Stop Rate) + (Miles over threshold x
-   Over-Mileage Rate) + FSC (entered per load — it tracks a live
-   diesel-price index there's no way to pull automatically). This
+   Over-Mileage Rate) + (Miles x $0.73 FSC rate) + Additional Charges. This
    formula was reverse-engineered from the rate card and verified
    against Addison/West Chester/Indianapolis exactly; only 4 of the
    11 locations have real seeded numbers today — the rest default to
@@ -156,10 +155,13 @@ export async function saveMondelezRateSetting(locationKey, field, value) {
   mondelezRateSettings[locationKey] = { ...(mondelezRateSettings[locationKey] || {}), [field]: value };
   return true;
 }
+// Mondelez customer revenue includes a fuel surcharge of $0.73 per mile.
+// The legacy row-level `fsc` field contains flat-dollar values (for example,
+// 3.05 on older rows), so it must not be added directly to revenue.
+export const MONDELEZ_FSC_PER_MILE = 0.73;
 // Verified against your rate card: Daily Rate + (Stops x Stop Rate) +
-// (Miles over threshold x Over-Mileage Rate) + FSC (+ any Additional
-// Charges you note for Detention/Layover/TONU, which aren't part of
-// the formula above since I couldn't confirm those from the card).
+// (Miles over threshold x Over-Mileage Rate) + (Miles x FSC rate) +
+// Additional Charges.
 export function calcMondelezRevenue(row) {
   const s = getMondelezRateSettings(row.location);
   const dailyRate = Number(s.daily_rate) || 0;
@@ -168,7 +170,7 @@ export function calcMondelezRevenue(row) {
   const overRate = Number(s.over_mileage_rate) || 0;
   const miles = parseFloat(row.miles) || 0;
   const stops = parseInt(row.stopCount, 10) || 0;
-  const fsc = parseFloat(row.fsc) || 0;
+  const fsc = Math.round(miles * MONDELEZ_FSC_PER_MILE * 100) / 100;
   const additional = parseFloat(row.additionalCharges) || 0;
   const stopCharge = Math.round(stops * stopRate * 100) / 100;
   const overMiles = Math.max(0, miles - overThreshold);
@@ -180,7 +182,7 @@ export function calcMondelezRevenue(row) {
       { label: "Daily Rate", amount: dailyRate },
       { label: `Stops (${stops} × $${stopRate})`, amount: stopCharge },
       { label: overMiles > 0 ? `Over Mileage (${overMiles.toFixed(1)}mi × $${overRate})` : "Over Mileage (within threshold)", amount: overCharge },
-      { label: "FSC", amount: fsc },
+      { label: `FSC (${miles.toFixed(1)}mi × ${MONDELEZ_FSC_PER_MILE})`, amount: fsc },
       { label: "Additional Charges", amount: additional },
     ],
   };
