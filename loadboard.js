@@ -1501,6 +1501,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       case "rate": return fromToPhrase("Carrier rate", ov, nv, "$");
       case "route_id": return fromToPhrase("Route ID", ov, nv || "(blank)");
       case "trailer_out": return fromToPhrase("Trailer #", ov, nv || "(blank)");
+      case "backhaul_trailer_number": return fromToPhrase("Return trailer #", ov, nv || "(blank)");
       case "driver_reassigned": return ov ? `Driver changed from ${escapeHtml(ov)} to <strong>${escapeHtml(nv)}</strong>` : `Driver assigned: <strong>${escapeHtml(nv)}</strong>`;
       case "driver_id": {
         // Older entries logged the raw numeric driver id directly rather
@@ -1557,7 +1558,18 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const found = findRowAnywhere(rowId);
     if (!found) return;
     const trip = found.row.trips.find((t) => t.id === tripId);
-    if (!trip || !String(trip.routeId || "").trim()) return;
+    if (!trip) return;
+    if (found.row.location === "delaware") {
+      const wasComplete = !!trip.complete;
+      trip.complete = true;
+      trip.minimized = true;
+      if (!wasComplete) trip.completedAt = new Date().toISOString();
+      await saveTripNow(found.row, trip, found.row.trips.indexOf(trip) + 1);
+      if (!wasComplete) logChange(found.row.dbId, `${labelForRow(found.row)} — ${trip.routeId || trip.tripId || "route"}`, "route_complete", false, true);
+      renderBoardTable();
+      return;
+    }
+    if (!String(trip.routeId || "").trim()) return;
     await openLoadDetailsModal(rowId, tripId);
     startLoadDetailsEdit(tripId);
   }
@@ -2072,7 +2084,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
   function tripFieldCellsHtml(row, trip) {
     const calc = computeCalc(trip, row);
-    const canComplete = String(trip.routeId || "").trim();
+    const canComplete = row.location === "delaware" || String(trip.routeId || "").trim();
     return getOrderedTripSubcols().map((col) => {
       const pistachioCls = col.pistachio ? " col-pistachio" : "";
       if (col.type === "checkbox") {
@@ -4902,6 +4914,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
             <fieldset class="field-box"><legend>Route ID</legend><div class="static-text">${escapeHtml(trip.routeId || "—")}</div></fieldset>
             <fieldset class="field-box"><legend>Trip ID</legend><div class="static-text">${escapeHtml(trip.tripId || "—")}</div></fieldset>
             <fieldset class="field-box"><legend>Trailer #</legend><div class="static-text">${escapeHtml(trip.trailerOut || "—")}</div></fieldset>
+            <fieldset class="field-box"><legend>Return Trailer #</legend><div class="static-text">${escapeHtml(trip.backhaulTrailerNumber || "—")}</div></fieldset>
             <fieldset class="field-box"><legend>Route Miles</legend><div class="static-text">${escapeHtml(trip.routeMiles || "—")}</div></fieldset>
             <fieldset class="field-box"><legend>Stops</legend><div class="static-text">${escapeHtml(trip.stopCount || "—")}</div></fieldset>
             <fieldset class="field-box"><legend>Status</legend><div class="static-text">${trip.minimized ? "Completed" : "Active"}</div></fieldset>
@@ -4929,6 +4942,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
             <fieldset class="field-box"><legend>Route ID</legend><input class="cell-input" id="ld-tr-routeId" value="${escapeHtml(d.routeId)}"></fieldset>
             <fieldset class="field-box"><legend>Trip ID</legend><input class="cell-input" id="ld-tr-tripId" value="${escapeHtml(d.tripId)}"></fieldset>
             <fieldset class="field-box"><legend>Trailer #</legend><input class="cell-input" id="ld-tr-trailerOut" value="${escapeHtml(d.trailerOut)}"></fieldset>
+            <fieldset class="field-box"><legend>Return Trailer #</legend><input class="cell-input" id="ld-tr-return-trailer-number" value="${escapeHtml(d.backhaulTrailerNumber)}"></fieldset>
             <fieldset class="field-box"><legend>Route Miles</legend><input class="cell-input" id="ld-tr-routeMiles" value="${escapeHtml(d.routeMiles)}"></fieldset>
             <fieldset class="field-box"><legend>Stops</legend><input class="cell-input" id="ld-tr-stopCount" value="${escapeHtml(d.stopCount)}"></fieldset>
             <fieldset class="field-box"><legend>Reassign Driver</legend><input class="cell-input" id="ld-tr-driver" data-driver-ac="true" value="${escapeHtml(d.driverName)}"><div class="subtext" style="margin-top:4px;">Leave blank to keep the load's driver</div></fieldset>
@@ -5010,7 +5024,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         driverName: tripDrv ? tripDrv.name : "", notes: trip.notes || "",
         stops: (loadDetailsState.stopsByTrip[tabKey] || []).map((s) => ({ ...s })),
         complete: !!trip.complete, ppwkReceived: !!trip.ppwkReceived, checkedIn: !!trip.checkedIn,
-        returnDropLocation: trip.returnDropLocation || "",
+        returnDropLocation: trip.returnDropLocation || "", backhaulTrailerNumber: trip.backhaulTrailerNumber || "",
         dispatchTime: trip.dispatchTime || "", returnEtaToDc: trip.returnEtaToDc || "",
       };
     }
@@ -5137,11 +5151,14 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (!trip) return;
       const beforeRouteId = trip.routeId;
       const beforeTrailerOut = trip.trailerOut;
+      const beforeBackhaulTrailerNumber = trip.backhaulTrailerNumber;
       const beforeTripDriver = trip.driverId ? findDriver(trip.driverId) : null;
       const beforeTripDriverName = beforeTripDriver ? beforeTripDriver.name : "";
       trip.routeId = $("#ld-tr-routeId").value.trim();
       trip.tripId = $("#ld-tr-tripId").value.trim();
       trip.trailerOut = $("#ld-tr-trailerOut").value.trim();
+      const returnTrailerEl = $("#ld-tr-return-trailer-number");
+      if (returnTrailerEl) trip.backhaulTrailerNumber = returnTrailerEl.value.trim();
       trip.routeMiles = $("#ld-tr-routeMiles").value.trim();
       trip.stopCount = $("#ld-tr-stopCount").value.trim();
       trip.notes = $("#ld-tr-notes").value.trim();
@@ -5183,6 +5200,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
       if (beforeRouteId !== trip.routeId) logChange(row.dbId, labelForRow(row), "route_id", beforeRouteId, trip.routeId);
       if (beforeTrailerOut !== trip.trailerOut) logChange(row.dbId, labelForRow(row), "trailer_out", beforeTrailerOut, trip.trailerOut);
+      if (beforeBackhaulTrailerNumber !== trip.backhaulTrailerNumber) logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "backhaul_trailer_number", beforeBackhaulTrailerNumber, trip.backhaulTrailerNumber);
       if (driverNameVal && beforeTripDriverName.toLowerCase() !== driverNameVal.toLowerCase()) {
         logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "driver_reassigned", beforeTripDriverName, driverNameVal);
       }
@@ -6872,10 +6890,11 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         }
       }
       if (field === "routeId") {
+        const foundRow = rowId ? findRowAnywhere(rowId) : null;
         const tr = t.closest("tr");
         const completeBtn = tr ? tr.querySelector('[data-action="complete-trip"]') : null;
         if (completeBtn) {
-          const hasRoute = !!t.value.trim();
+          const hasRoute = (foundRow && foundRow.row.location === "delaware") || !!t.value.trim();
           completeBtn.disabled = !hasRoute;
           completeBtn.title = hasRoute ? "Mark closed out" : "Enter a Route ID first";
         }
