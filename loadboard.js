@@ -2209,7 +2209,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const rowClasses = [
       row.tonu ? "is-tonu" : "",
       row.calledOff ? "is-called-off" : "",
-      row.loadCancelled ? "is-load-cancelled" : "",
+      // Both driver call-offs and explicit load cancellations are terminal
+      // cancellations from the dispatcher’s point of view. Keep the shared
+      // visual state based on either persisted flag so it survives reloads.
+      (row.calledOff || row.loadCancelled) ? "is-load-cancelled" : "",
       row.highlighted ? "is-row-pinned" : "",
       row.selected ? "is-row-selected" : "",
       row.addedAt ? "is-new" : "",

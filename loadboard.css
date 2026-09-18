@@ -730,6 +730,15 @@ tr.is-load-cancelled td:not(.pin-select):not(.pin-text) span.static-text {
   color: var(--slate-500);
 }
 tr.is-load-cancelled { background: rgba(71, 85, 105, 0.06); }
+/* Driver call-offs are persisted separately from explicit load cancellations,
+   but both mean the load is no longer running. Keep the same visual treatment
+   even when the board is rebuilt from Supabase. */
+tr.is-called-off td:not(.pin-select):not(.pin-text) .cell-input,
+tr.is-called-off td:not(.pin-select):not(.pin-text) span.static-text {
+  text-decoration: line-through;
+  color: var(--slate-500);
+}
+tr.is-called-off { background: rgba(71, 85, 105, 0.06); }
 /* status swatches for salvage / backhaul flags */
 .flag-yes { background: var(--amber-bg) !important; }
 .flag-backhaul { background: var(--blue-bg) !important; }
