@@ -190,5 +190,51 @@ check('no extra wrapper is injected around the dropzone',
 checkTrue('what is left watches the modal rather than the whole document',
   /observer\.observe\(modal \|\| document\.documentElement/.test(PWI));
 
+// ---------------------------------------------------------------------------
+// 6. the Rate panel is not re-rendered differently a moment after it draws
+// ---------------------------------------------------------------------------
+console.log('\n6. the Rate box does not change size right after it renders');
+
+const HIER = readFileSync(new URL('../daily-rate-hierarchy.js', import.meta.url), 'utf8');
+const EXPLANATION = /RATE_PANEL_EXPLANATION = "([^"]+)";/;
+const inBoard = BOARD.match(EXPLANATION);
+const inHier = HIER.match(EXPLANATION);
+checkTrue('loadboard.js declares the shared explanation', !!inBoard);
+checkTrue('daily-rate-hierarchy.js declares it too', !!inHier);
+check('both files say exactly the same thing', inBoard?.[1], inHier?.[1]);
+checkTrue('the renderer uses the constant rather than its own wording',
+  /<div class="subtext" style="margin: -4px 0 10px;">\$\{escapeHtml\(RATE_PANEL_EXPLANATION\)\}<\/div>/.test(BOARD));
+
+// The two money formatters have to agree, or every figure in the box changes
+// width the moment the decorator runs.
+const boardMoney = (n) => (n == null || isNaN(n) ? '—' : `$${Number(n).toFixed(2)}`);
+const hierMoneyBody = HIER.match(/function money\(value\) \{[\s\S]*?\n\}/)[0];
+const hierMoney = new Function(`${hierMoneyBody}\nreturn money;`)();
+for (const n of [0, 400, 1234.5, 62.125, null]) {
+  check(`money(${JSON.stringify(n)}) matches the renderer`, hierMoney(n), boardMoney(n));
+}
+
+checkTrue('the decorator compares rendered text, not a wiped dataset signature',
+  /if \(!sameRenderedText\(box, html\)\) box\.innerHTML = html;/.test(HIER));
+check('the old signature guard is gone', /hierarchySig/.test(HIER), false);
+
+// sameRenderedText must see through the whitespace difference between the two
+// renderers, and still notice a real change.
+const sameBody = HIER.match(/const scratchNode[\s\S]*?\nfunction sameRenderedText\(el, html\) \{[\s\S]*?\n\}/)[0];
+const sameRenderedText = new Function('document', `${sameBody}\nreturn sameRenderedText;`)(document);
+const boardish = document.createElement('div');
+boardish.innerHTML = `<div class="rate-section-subheader">How this was calculated</div>
+          <div class="rate-breakdown-row">
+            <span>Base</span>
+            <span class="subtext">61-140 mi</span>
+            <span>$400.00</span>
+          </div>`;
+const hierish = '<div class="rate-section-subheader">How this was calculated</div>'
+  + '<div class="rate-breakdown-row"><span>Base</span><span class="subtext">61-140 mi</span><span>$400.00</span></div>';
+check('identical content with different whitespace is left alone',
+  sameRenderedText(boardish, hierish), true);
+check('a genuinely changed figure is still rewritten',
+  sameRenderedText(boardish, hierish.replace('$400.00', '$450.00')), false);
+
 console.log(failures ? `\n  ${failures} check(s) FAILED\n` : '\n  All checks passed.\n');
 process.exit(failures ? 1 : 0);

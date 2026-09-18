@@ -571,6 +571,13 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
   function fmtRateMoney(n) { return n == null || isNaN(n) ? "—" : `$${Number(n).toFixed(2)}`; }
 
+  // daily-rate-hierarchy.js re-decorates this panel a moment after it renders
+  // and asserts this exact wording. When the two strings differed, the
+  // paragraph was swapped for one of a different length right after the panel
+  // drew, it re-wrapped, and the whole Rate box changed height on screen.
+  // Change it in both files or in neither.
+  const RATE_PANEL_EXPLANATION = "Changes here apply only to this load. Date and location defaults are managed in Rate Settings; the driver's negotiated rate stays the minimum, and a manual total overrides the calculation. A dot marks a value that differs from the location default.";
+
   export function todayDate() { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }
   export function dateKey(d) {
     const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0"), day = String(d.getDate()).padStart(2, "0");
@@ -4753,7 +4760,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       <fieldset class="rate-section">
         <legend class="rate-section-header">Rate</legend>
         <div class="rate-applied-line" style="margin: -2px 0 8px; font-weight: 700;">Rate Applied: <span class="rate-applied-value" data-rate-applied="${escapeHtml(appliedRate.toLowerCase())}">${escapeHtml(appliedRate)}</span></div>
-        <div class="subtext" style="margin: -4px 0 10px;">Changes here apply only to this load. A dot marks a load-specific or negotiated-driver value that differs from the ${escapeHtml(locationKey)} default.</div>
+        <div class="subtext" style="margin: -4px 0 10px;">${escapeHtml(RATE_PANEL_EXPLANATION)}</div>
         ${defaultsHtml}
 
         <div class="rate-total-box">

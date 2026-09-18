@@ -146,6 +146,14 @@ visibly flickered. The icon is gone (the user asked for it removed) and that
 module now observes `#modal-load-details` only. Do not reintroduce a board-cell
 injector driven off a whole-document observer.
 
+The Rate panel inside Load Details is rendered by `loadboard.js` and then
+re-decorated by `daily-rate-hierarchy.js` about 20ms later. The two must agree
+exactly or the box visibly resizes right after it draws: `money()` there is
+byte-for-byte `fmtRateMoney()` here, and `RATE_PANEL_EXPLANATION` is declared
+identically in both files. Change either in both files or in neither. The
+decorator compares the panel's rendered leaf text before writing, so an already
+-correct box is left alone.
+
 `#modal-load-details` has a fixed height envelope in `loadboard.css` with the
 body scrolling inside it. Load Details fills in piece by piece as its queries
 return; sized to its contents, the centered card moved on screen with every
