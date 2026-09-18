@@ -56,6 +56,11 @@
         alert.recipients,
         alert.actionMessage || '',
         alert.markShiftIdsOnSent || null,
+        // The alert has been acted on the moment the message leaves the modal --
+        // whether the gateway took it or the dispatcher fell back to an Outlook
+        // draft. Repeating rules still re-fire on their own schedule under a new
+        // key, so this clears the one that was just handled, nothing more.
+        { onSent: () => alertsModule.dismissAlert(key) },
       );
     } catch (error) {
       console.error('Alert Text button failed:', error);

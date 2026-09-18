@@ -910,6 +910,29 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
    added by openLoadFromDriverHistory() and removed on close, so a
    normal (non-nested) open of Load Details is unaffected. */
 #modal-load-details.ld-in-front { z-index: 200; }
+/* Load Details fills in piece by piece: the tabs render first, then
+   attachments, change history, stop times, and the mobile-app paperwork
+   section each land as their queries come back. With the card sized to its
+   contents every one of those arrivals changed its height, and because the
+   overlay centers the card it moved on screen each time -- which is what read
+   as the modal shaking and resizing while it opened. Give the card one fixed
+   envelope and let the body scroll inside it, so only the contents move. */
+#modal-load-details > .modal {
+  height: min(82vh, 780px);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#modal-load-details > .modal > .modal-header,
+#modal-load-details > .modal > .modal-tabs,
+#modal-load-details > .modal > .modal-footer { flex: 0 0 auto; }
+#modal-load-details > .modal > #ld-tab-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
 .hidden { display: none !important; }
 .modal {
   background: #fff;

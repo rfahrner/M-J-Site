@@ -145,9 +145,30 @@ async function ensureTripDbId(context = activeTripContext()) {
   return !!context.trip.dbId;
 }
 
+// A route with no Route ID and no Trip ID has no database row yet and is not
+// supposed to get one -- blank placeholder routes are deliberately never
+// inserted. Such a row therefore ALWAYS looks like it needs hydrating, and the
+// sweep below runs off a document-wide observer, so this used to fire a
+// Supabase query per blank row on every batch of DOM changes, forever. Only
+// routes that actually carry an id are worth looking up.
+function rowNeedsHydration(row) {
+  return (row.trips || []).some((trip) =>
+    !trip.dbId && !!String(trip.routeId || trip.tripId || '').trim());
+}
+
+// Second brake on the same sweep: a row whose lookup just came back empty is
+// not going to come back different a frame later.
+const SWEEP_COOLDOWN_MS = 4000;
+const lastSweptAt = new Map(); // String(row.dbId) -> timestamp
+
 async function hydrateAllLoadedRows() {
+  const now = Date.now();
   for (const row of loadedRows()) {
-    if ((row.trips || []).some((trip) => !trip.dbId)) await hydrateRow(row);
+    if (!rowNeedsHydration(row)) continue;
+    const key = String(row.dbId);
+    if (now - (lastSweptAt.get(key) || 0) < SWEEP_COOLDOWN_MS) continue;
+    lastSweptAt.set(key, now);
+    await hydrateRow(row);
   }
 }
 

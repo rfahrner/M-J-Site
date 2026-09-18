@@ -2548,10 +2548,22 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     for (const sheet of Object.values(state.sheets)) { parentRow = sheet.find((r) => r.dbId === dbTrip.shift_id); if (parentRow) break; }
     if (!parentRow) return;
     if (!parentRow) return; // this trip's shift isn't part of the currently-viewed day
-    const idx = dbTrip.trip_number - 1;
-    if (idx < 0 || idx > 4) return;
-    while (parentRow.trips.length <= idx) parentRow.trips.push(blankTrip());
-    const localTrip = parentRow.trips[idx];
+    // Match on the database id first. trip_number is NOT a position in
+    // parentRow.trips: deleting a route closes the gap locally but leaves the
+    // surviving routes' trip_numbers alone, so after one delete the numbers and
+    // the array positions disagree. Indexing by number then applied a payload to
+    // the wrong route -- which is what made a closed-out route's pill flip
+    // between green and red as echoes arrived -- or, when the number ran past
+    // the end, padded the load with a phantom blank route.
+    let localTrip = dbTrip.id != null
+      ? (parentRow.trips || []).find((t) => t.dbId != null && String(t.dbId) === String(dbTrip.id))
+      : null;
+    if (!localTrip) {
+      const idx = dbTrip.trip_number - 1;
+      if (idx < 0 || idx > 4) return;
+      while (parentRow.trips.length <= idx) parentRow.trips.push(blankTrip());
+      localTrip = parentRow.trips[idx];
+    }
 
     const domField = currentlyEditedField(parentRow.id, localTrip.id);
     const preservedHasStopTimes = localTrip.hasStopTimes;
@@ -3704,7 +3716,15 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const row = found.row;
     const drv = row.driverId ? findDriver(row.driverId) : null;
     const label = [row.proNumber, drv ? drv.name : row.driverNameText].filter(Boolean).join(" — ") || "this load";
-    if (!confirm(`Delete ${label}? This can't be undone.`)) return;
+    // Say out loud that this is the WHOLE load, and how many routes go with it.
+    // The old wording read the same whether one route or four were about to be
+    // deleted, which is how a right-click meant for a single route pill ended
+    // up taking the entire load with it.
+    const routeCount = (row.trips || []).filter((t) => String(t.routeId || t.tripId || "").trim()).length;
+    const routeNote = routeCount > 0
+      ? `\n\nThis removes the ENTIRE load and all ${routeCount} route${routeCount === 1 ? "" : "s"} on it.`
+      : `\n\nThis removes the ENTIRE load.`;
+    if (!confirm(`Delete the entire load ${label}?${routeNote}\n\nThis can't be undone.`)) return;
 
     logChange(row.dbId, label, "deleted", "active", "deleted"); // logged before the row goes, in case the FK doesn't outlive it
 
@@ -3736,7 +3756,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       return;
     }
     const label = trip.routeId || trip.tripId || "this route";
-    if (!confirm(`Delete route ${label}? This can't be undone.`)) return;
+    const drvForRoute = row.driverId ? findDriver(row.driverId) : null;
+    const owner = [row.proNumber ? `PRO# ${row.proNumber}` : "", (drvForRoute ? drvForRoute.name : row.driverNameText) || ""].filter(Boolean).join(" — ");
+    if (!confirm(`Delete route ${label}${owner ? ` on ${owner}` : ""}?\n\nOnly this route goes — the load itself stays.\n\nThis can't be undone.`)) return;
 
     logChange(row.dbId, `${labelForRow(row)} — ${label}`, "route_deleted", "active", "deleted");
 
@@ -3867,7 +3889,11 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     el.style.color = segments > 1 ? "var(--amber-700, #b45309)" : "";
   }
 
-  export function openSendTextModal(recipients, prefilledMessage, markShiftIdsOnSent) {
+  // options.onSent runs once the message has actually left this modal -- either
+  // the gateway accepted it, or the dispatcher chose the Outlook fallback and a
+  // draft was handed to their mail client. The alert widget uses it to clear the
+  // alert that opened the modal; nothing else may assume it exists.
+  export function openSendTextModal(recipients, prefilledMessage, markShiftIdsOnSent, options) {
     const filtered = filterNeverTextRecipients(recipients);
     const safeRecipients = filtered.allowed;
     const withPhone = safeRecipients.filter((r) => formatTextAddress(r.phone));
@@ -3891,7 +3917,11 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       );
       return;
     }
-    sendTextModalState = { recipients: deduped, markShiftIdsOnSent: markShiftIdsOnSent || null };
+    sendTextModalState = {
+      recipients: deduped,
+      markShiftIdsOnSent: markShiftIdsOnSent || null,
+      onSent: (options && typeof options.onSent === "function") ? options.onSent : null,
+    };
     $("#send-text-phone-display").textContent = deduped.map((r) => r.name || r.phone).join(", ");
     $("#send-text-message").value = prefilledMessage || "";
     $("#send-text-status").textContent = filtered.blocked.length
@@ -3932,6 +3962,18 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     }
   }
 
+  // Closing after a send is different from cancelling: the modal goes away AND
+  // whoever opened it is told the message went out. Both the automatic send and
+  // the Outlook fallback end here, so neither can forget to do one of the two.
+  function finishSendTextModalAsSent() {
+    const onSent = sendTextModalState && sendTextModalState.onSent;
+    $("#modal-send-text").classList.add("hidden");
+    sendTextModalState = null;
+    if (onSent) {
+      try { onSent(); } catch (e) { console.error("send-text onSent handler failed:", e); }
+    }
+  }
+
   async function submitSendTextModal() {
     if (!sendTextModalState) return;
     const message = $("#send-text-message").value.trim();
@@ -3954,7 +3996,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || `Send failed (${res.status})`);
       if (sendTextModalState.markShiftIdsOnSent) await markPreShiftTextSent(sendTextModalState.markShiftIdsOnSent);
-      $("#modal-send-text").classList.add("hidden");
+      finishSendTextModalAsSent();
       setDriverSyncStatus("Text sent.", "success");
     } catch (e) {
       console.error("send-text failed, falling back to email client:", e);
@@ -3976,7 +4018,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         // send in Outlook, but there's no way to detect that from here,
         // so this marks it the moment they choose the fallback path.
         if (sendTextModalState.markShiftIdsOnSent) await markPreShiftTextSent(sendTextModalState.markShiftIdsOnSent);
-        $("#modal-send-text").classList.add("hidden");
+        finishSendTextModalAsSent();
       });
     } finally {
       sendBtn.disabled = false;
@@ -4342,11 +4384,31 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (existing) existing.remove();
   }
 
-  function openRowContextMenu(rowId, x, y) {
+  // Short, human name for a load: what a dispatcher would call it out loud.
+  function loadLabelForConfirm(row) {
+    const drv = row.driverId ? findDriver(row.driverId) : null;
+    const pro = String(row.proNumber || "").trim();
+    const name = String((drv && drv.name) || row.driverNameText || "").trim();
+    return [pro ? `PRO# ${pro}` : "", name].filter(Boolean).join(" — ") || "this load";
+  }
+
+  function routeLabelForConfirm(trip) {
+    return String(trip.routeId || trip.tripId || "").trim() || "this route";
+  }
+
+  // tripId is the route the right-click actually landed on, when there was one
+  // -- a route pill in the ROUTES column, or any cell belonging to a specific
+  // route. Right-clicking a pill used to hand back nothing but the shift, so
+  // the single "Delete" entry deleted the whole load when the dispatcher
+  // believed they were deleting that one route. There are now two clearly
+  // named entries and never an unlabelled one.
+  function openRowContextMenu(rowId, x, y, tripId) {
     closeContextMenu();
     const found = findRowAnywhere(rowId);
     if (!found) return;
     const row = found.row;
+    const trip = tripId ? (row.trips || []).find((t) => t.id === tripId) : null;
+    const canDeleteRoute = !!trip && (row.trips || []).length > 1;
     const items = [
       { label: row.tonu ? "Un-TONU" : "TONU", action: () => toggleTonu(rowId) },
       { label: row.calledOff ? "Un-mark Cancellation" : "Cancellation", action: () => row.calledOff ? unmarkDriverCalledOff(rowId) : openCalledOffModal(rowId) },
@@ -4355,12 +4417,13 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       { label: row.shiftComplete ? "Mark Shift Incomplete" : "Shift Complete", action: () => toggleShiftComplete(rowId) },
       { label: "Load Details", action: () => openLoadDetailsModal(rowId) },
       { label: "Text Now", action: () => textDriverForRow(rowId) },
-      { label: "Delete", action: () => deleteRow(rowId), danger: true },
+      ...(canDeleteRoute ? [{ label: `Delete route ${routeLabelForConfirm(trip)} only`, action: () => deleteTrip(rowId, trip.id), danger: true }] : []),
+      { label: `Delete entire load ${loadLabelForConfirm(row)}`, action: () => deleteRow(rowId), danger: true },
     ];
     const menu = document.createElement("div");
     menu.className = "row-context-menu";
     menu.id = "row-context-menu";
-    menu.innerHTML = items.map((it, i) => `<button class="context-menu-item${it.danger ? " context-menu-item-danger" : ""}" data-idx="${i}">${it.label}</button>`).join("");
+    menu.innerHTML = items.map((it, i) => `<button class="context-menu-item${it.danger ? " context-menu-item-danger" : ""}" data-idx="${i}">${escapeHtml(it.label)}</button>`).join("");
     document.body.appendChild(menu);
     menu.style.left = x + "px";
     menu.style.top = y + "px";
@@ -6834,7 +6897,15 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       const tr = e.target.closest("tr");
       if (!tr || !tr.id) return; // header row has no id — let the browser's normal menu show there
       e.preventDefault();
-      openRowContextMenu(tr.id, e.clientX, e.clientY);
+      // A shift's routes past the first render as sibling <tr id="row__trip">
+      // rows, and the ROUTES column's pills live in the FIRST row even though
+      // each one is about a specific route. Neither is recoverable from tr.id
+      // alone, so read the route off whatever was actually right-clicked and
+      // fall back to the parent row id for shift-level cells.
+      const tripEl = e.target.closest("[data-trip]");
+      const rowId = (tripEl && tripEl.dataset.row) || tr.dataset.parentRow || tr.id;
+      const tripId = tripEl ? tripEl.dataset.trip : null;
+      openRowContextMenu(rowId, e.clientX, e.clientY, tripId);
     });
     let draggedColKey = null;
     boardTable.addEventListener("dragstart", (e) => {

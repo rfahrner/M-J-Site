@@ -15,6 +15,51 @@ import './paperwork-load-integration.js';
   let alertUpdateListenerInstalled = false;
   let alertPanelExpanded = false;
   let alertPanelHasUnread = false;
+  // Alerts are derived from board state, not stored, so "I've handled this"
+  // has to be remembered separately or the next 60-second scan brings the same
+  // alert straight back. Keys are scoped to today: every key is built from a
+  // shift or trip id for the current day, so yesterday's are dead weight.
+  // localStorage keeps a dismissal across a page refresh, which is what a
+  // dispatcher expects after they have already sent the text.
+  // Filled on first use rather than at module scope: alerts.js and loadboard.js
+  // import each other, and nothing here should run during that handshake.
+  const DISMISSED_ALERTS_STORAGE_KEY = "dl-alert-dismissed";
+  let dismissedAlertKeys = null;
+
+  function getDismissedAlertKeys() {
+    if (!dismissedAlertKeys) dismissedAlertKeys = loadDismissedAlertKeys();
+    return dismissedAlertKeys;
+  }
+
+  function loadDismissedAlertKeys() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(DISMISSED_ALERTS_STORAGE_KEY) || "{}");
+      if (raw && raw.day === dateKey(new Date()) && Array.isArray(raw.keys)) return new Set(raw.keys);
+    } catch (e) { /* unreadable or absent — start clean */ }
+    return new Set();
+  }
+
+  function saveDismissedAlertKeys() {
+    try {
+      localStorage.setItem(DISMISSED_ALERTS_STORAGE_KEY, JSON.stringify({
+        day: dateKey(new Date()),
+        keys: [...getDismissedAlertKeys()],
+      }));
+    } catch (e) { /* ignore quota errors */ }
+  }
+
+  // Clears one alert for good. Repeating alerts (idle, overdue return, at-DC)
+  // roll a tier into their key every interval, so the NEXT reminder is a new
+  // key and still arrives on schedule -- this only silences the one that was
+  // just acted on, it does not switch the rule off.
+  export function dismissAlert(key) {
+    if (!key) return;
+    getDismissedAlertKeys().add(String(key));
+    saveDismissedAlertKeys();
+    boardAlerts = boardAlerts.filter((a) => a.key !== key);
+    delete alertFirstSeenAt[key];
+    renderAlertPanel();
+  }
   export function minsSinceMidnightNow() {
     // Every alert threshold and the Next Call Time column are all built on
     // this one function -- it needs to reflect Atlanta's actual clock time,
@@ -309,6 +354,8 @@ import './paperwork-load-integration.js';
     } catch (e) {
       console.error("scanForBoardAlerts failed:", e);
     }
+    const dismissed = getDismissedAlertKeys();
+    if (dismissed.size) fresh = fresh.filter((a) => !dismissed.has(a.key));
     const now = new Date();
     let sawNew = false;
     const nextFirstSeen = {};
@@ -433,7 +480,8 @@ import './paperwork-load-integration.js';
         e.stopPropagation();
         const alert = boardAlerts.find((a) => a.key === btn.dataset.alertActionKey);
         if (alert && alert.recipients && alert.recipients.length) {
-          openSendTextModal(alert.recipients, alert.actionMessage || "", alert.markShiftIdsOnSent || null);
+          openSendTextModal(alert.recipients, alert.actionMessage || "", alert.markShiftIdsOnSent || null,
+            { onSent: () => dismissAlert(alert.key) });
         }
         return;
       }
