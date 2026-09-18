@@ -14,6 +14,7 @@
      table — not built yet.
    ============================================================ */
 import { initAccountingPage, getAccountingRecordById } from './accounting.js';
+import { cancellationNotePayload, sortDriverNotes, driverNoteRowHtml } from './driver-profile-notes.js';
 import { sendShiftToAccounting } from './accountingcalc.js';
 import { initHoustonBoardPage } from './houston.js';
 import { initMondelezPage } from './mondelez.js';
@@ -5830,13 +5831,14 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const nameMatches = (state.drivers || []).filter((d) => String(d.name || "").trim().toLowerCase() === nameKey);
     const driverId = row.driverId || scopedMatch?.id || (nameMatches.length === 1 ? nameMatches[0].id : null);
     if (!driverId) return;
-    const reasonLabel = String(reasonText || "").trim() || "No reason provided";
     try {
-      const { error } = await supabaseClient.from(DRIVER_NOTES_TABLE).insert({
-        driver_id: Number(driverId),
-        note_text: `Cancellation — ${row.shiftDate || dateKey(new Date())} — ${labelForRow(row)} — ${reasonLabel}`,
-      });
+      const { error } = await supabaseClient.from(DRIVER_NOTES_TABLE).insert(
+        cancellationNotePayload(row, driverId, reasonText, currentUserName())
+      );
       if (error) throw error;
+      if (String(driverProfileState?.driverId) === String(driverId)) {
+        driverProfileState.notes = null;
+      }
     } catch (e) {
       console.error("Failed to add driver cancellation note:", e);
     }
@@ -5978,9 +5980,20 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
   async function loadDriverProfileNotes(driverId) {
     if (!supabaseClient) return [];
-    const { data, error } = await supabaseClient.from(DRIVER_NOTES_TABLE).select("*").eq("driver_id", Number(driverId)).order("created_at", { ascending: false });
-    if (error) { console.error("Failed to load driver notes:", error); return []; }
-    return data || [];
+    const notes = [];
+    const pageSize = 500;
+    // Fetch every page before sorting by effective date; cancellation notes
+    // may have been entered much later than the shift they describe.
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await supabaseClient.from(DRIVER_NOTES_TABLE).select("*")
+        .eq("driver_id", Number(driverId))
+        .order("created_at", { ascending: false }).order("id", { ascending: false })
+        .range(offset, offset + pageSize - 1);
+      if (error) { console.error("Failed to load driver notes:", error); throw error; }
+      notes.push(...(data || []));
+      if (!data || data.length < pageSize) break;
+    }
+    return sortDriverNotes(notes);
   }
 
   // Manages the three tabs inside #modal-add-driver when editing an
@@ -6048,11 +6061,20 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     } else {
       if (driverProfileState.notes === null) {
         body.innerHTML = `<div class="subtext">Loading…</div>`;
-        const notes = await loadDriverProfileNotes(driverProfileState.driverId);
-        if (!driverProfileState || driverProfileState.activeTab !== "notes") return;
+        const requestedProfile = driverProfileState;
+        let notes;
+        try {
+          notes = await loadDriverProfileNotes(requestedProfile.driverId);
+        } catch (error) {
+          if (driverProfileState === requestedProfile && driverProfileState.activeTab === "notes") {
+            body.innerHTML = `<div class="subtext">Couldn't load notes. Open the Notes tab again to retry.</div>`;
+          }
+          return;
+        }
+        if (driverProfileState !== requestedProfile || driverProfileState.activeTab !== "notes") return;
         driverProfileState.notes = notes;
       }
-      const notes = driverProfileState.notes;
+      const notes = sortDriverNotes(driverProfileState.notes);
       body.innerHTML = `
         <div class="field">
           <label for="dp-note-input">Add a note</label>
@@ -6061,7 +6083,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         </div>
         <div style="margin-top:14px;">
           ${notes.length
-            ? notes.map((n) => `<div class="ld-history-row" style="grid-template-columns: 150px 1fr;"><span class="subtext">${escapeHtml(new Date(n.created_at).toLocaleString())}</span><span>${escapeHtml(n.note_text)}</span></div>`).join("")
+            ? notes.map((n) => driverNoteRowHtml(n, escapeHtml)).join("")
             : `<div class="subtext">No notes yet.</div>`}
         </div>`;
     }
@@ -6069,19 +6091,22 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
   async function submitDriverNote() {
     if (!driverProfileState || !supabaseClient) return;
+    const requestedProfile = driverProfileState;
     const input = $("#dp-note-input");
     if (!input) return;
     const text = input.value.trim();
     if (!text) return;
     const submitBtn = $("#dp-note-submit");
+    if (submitBtn?.disabled) return;
     if (submitBtn) submitBtn.disabled = true;
     try {
       const { data, error } = await supabaseClient.from(DRIVER_NOTES_TABLE)
-        .insert({ driver_id: Number(driverProfileState.driverId), note_text: text }).select();
+        .insert({ driver_id: Number(requestedProfile.driverId), note_text: text, created_by: currentUserName(), note_type: "note" }).select();
       if (error) throw error;
+      if (driverProfileState !== requestedProfile) return;
       if (driverProfileState.notes === null) driverProfileState.notes = [];
       driverProfileState.notes.unshift(data[0]);
-      renderAddDriverProfileTabContent();
+      if (driverProfileState.activeTab === "notes") renderAddDriverProfileTabContent();
     } catch (e) {
       console.error("submitDriverNote failed:", e);
       setDriverSyncStatus(`Couldn't save that note (${e.message || e}).`, "error");
