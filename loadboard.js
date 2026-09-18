@@ -6650,7 +6650,15 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           const found = loadDetailsState ? findRowAnywhere(loadDetailsState.rowId) : null;
           const row = found ? found.row : null;
           const nameVal = (row && row.driverNameText || "").trim().toLowerCase();
-          const match = resolveDriverByName(nameVal, row && row.location).driver;
+          const scopedMatch = resolveDriverByName(nameVal, row && row.location).driver;
+          // A load can retain a typed driver name even when that driver's
+          // profile is filed under a different board/location. If the name is
+          // unique across the full loaded driver list, Link should still be
+          // able to attach that profile and open it.
+          const allNameMatches = (state.drivers || []).filter((driver) =>
+            String(driver.name || "").trim().toLowerCase() === nameVal
+          );
+          const match = scopedMatch || (allNameMatches.length === 1 ? allNameMatches[0] : null);
           if (match) {
             // Exact match already exists — link it for real (persists to
             // the database, same as picking it from the autocomplete
