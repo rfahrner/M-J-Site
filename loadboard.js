@@ -5826,7 +5826,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     // driver_id. Resolve that name so cancellation notes still land on the
     // driver's profile.
     const scopedMatch = resolveDriverByName(row.driverNameText || "", row.location).driver;
-    const nameKey = String(row.driverNameText || "").replace(/\\s*-\\s*$/, "").trim().toLowerCase();
+    const nameKey = String(row.driverNameText || "").replace(/\s*-\s*$/, "").trim().toLowerCase();
     const nameMatches = (state.drivers || []).filter((d) => String(d.name || "").trim().toLowerCase() === nameKey);
     const driverId = row.driverId || scopedMatch?.id || (nameMatches.length === 1 ? nameMatches[0].id : null);
     if (!driverId) return;
