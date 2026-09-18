@@ -7094,6 +7094,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   /* ---------------- init ---------------- */
 
   async function init() {
+    // The home page forwards recovery tokens before normal authentication starts.
+    if (window.passwordRecoveryRedirect) return;
     await initSupabaseClient();
     const ok = await requireAuth();
     if (!ok) return; // requireAuth() already redirected to login.html
