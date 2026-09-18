@@ -206,5 +206,43 @@ Object.assign(trip1, applicable, { id: trip1.id });
 check('route 1 is protected too', trip1.tripId, 'ROUTE1-NEW');
 
 // =========================================================================
+console.log('\n6. the "someone is editing this row" outline survives a redraw');
+
+// isRowBeingEdited reads two module-level presence stores, so declare them
+// alongside the lifted function.
+const editCtx = {};
+new Function('ctx', `
+  let editingRowId = null;
+  const remoteEditingTimeouts = new Map();
+  ${extractFunction('isRowBeingEdited')}
+  ctx.isRowBeingEdited = isRowBeingEdited;
+  ctx.setLocal = (id) => { editingRowId = id; };
+  ctx.setRemote = (dbId) => remoteEditingTimeouts.set(dbId, 1);
+  ctx.clearRemote = (dbId) => remoteEditingTimeouts.delete(dbId);
+`)(editCtx);
+
+check('a row nobody is editing is not outlined',
+  editCtx.isRowBeingEdited({ id: ROW, dbId: 10 }), false);
+
+editCtx.setLocal(ROW);
+check('this session\'s own edited row is outlined',
+  editCtx.isRowBeingEdited({ id: ROW, dbId: 10 }), true);
+check('a different row is not', editCtx.isRowBeingEdited({ id: 'r_2', dbId: 11 }), false);
+
+editCtx.setLocal(null);
+editCtx.setRemote(11);
+check('a row another dispatcher is editing is outlined',
+  editCtx.isRowBeingEdited({ id: 'r_2', dbId: 11 }), true);
+editCtx.clearRemote(11);
+check('and stops being outlined when they leave',
+  editCtx.isRowBeingEdited({ id: 'r_2', dbId: 11 }), false);
+check('an unsaved row (no dbId) never matches a remote edit',
+  editCtx.isRowBeingEdited({ id: 'r_3', dbId: null }), false);
+
+// The whole point: rowClasses must emit it, so a full redraw rebuilds it.
+check('rowClasses derives the class at render time',
+  /isRowBeingEdited\(row\) \? "is-being-edited"/.test(SRC), true);
+
+// =========================================================================
 console.log(failures ? `\n${failures} check(s) FAILED\n` : '\nAll checks passed.\n');
 process.exit(failures ? 1 : 0);
