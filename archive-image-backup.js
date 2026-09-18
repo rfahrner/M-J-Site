@@ -74,6 +74,16 @@ function injectStyles() {
     .image-backup-bucket { background:#f8fafc; border:1px solid #e2e8f0; border-radius:7px; padding:7px 9px; font-size:11px; color:#475569; }
     .image-backup-note { margin-top:10px; font-size:11px; color:#64748b; line-height:1.45; }
     .image-backup-error { margin-top:10px; padding:9px 10px; border-radius:7px; background:#fff1f2; color:#9f1239; font-size:12px; }
+    .image-backup-actions { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:14px; padding-top:12px; border-top:1px solid #e2e8f0; }
+    .image-backup-run-btn { border:1px solid #24527a; background:#24527a; color:#fff; font-weight:800; font-size:13px; padding:9px 16px; border-radius:7px; cursor:pointer; }
+    .image-backup-run-btn:hover:not(:disabled) { background:#1d4265; }
+    .image-backup-run-btn:disabled { opacity:.55; cursor:not-allowed; }
+    .image-backup-run-btn.stop { background:#b91c1c; border-color:#b91c1c; }
+    .image-backup-progress { font-size:12px; color:#475569; min-height:17px; }
+    .image-backup-progress strong { color:#172542; }
+    .image-backup-mode { font-size:11px; font-weight:800; border-radius:999px; padding:4px 9px; white-space:nowrap; }
+    .image-backup-mode.copy { background:#e0f2fe; color:#075985; }
+    .image-backup-mode.move { background:#fef3c7; color:#92400e; }
     @media (max-width:900px) { .image-backup-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
     @media (max-width:560px) { .image-backup-grid { grid-template-columns:1fr; } }
   `;
@@ -125,6 +135,11 @@ function panelShell() {
     <div class="image-backup-buckets" id="image-backup-buckets"></div>
     <div class="image-backup-note">“Image Backup Egress” is the traffic used by this automatic image archive, not all Supabase project traffic. The free-plan uncached egress allowance is shown as the comparison limit.</div>
     <div class="image-backup-error hidden" id="image-backup-error"></div>
+    <div class="image-backup-actions hidden" id="image-backup-actions">
+      <button type="button" class="image-backup-run-btn" id="image-backup-run">Back Up Now</button>
+      <span class="image-backup-mode copy" id="image-backup-mode">Copy only</span>
+      <span class="image-backup-progress" id="image-backup-progress"></span>
+    </div>
   `;
   return panel;
 }
@@ -203,6 +218,21 @@ function renderStatus(status) {
     return `<span class="image-backup-bucket"><strong>${esc(name)}</strong> · ${Number(data.objects || 0).toLocaleString()} files · ${formatBytes(data.bytes)}</span>`;
   }).join('') || '<span class="image-backup-bucket">No image objects currently stored.</span>';
 
+  const actions = document.getElementById('image-backup-actions');
+  const mode = document.getElementById('image-backup-mode');
+  if (actions) actions.classList.toggle('hidden', !status.can_run);
+  if (mode) {
+    const copyOnly = status.delete_after_archive !== true;
+    mode.textContent = copyOnly ? 'Copy only — nothing is deleted' : 'Move — originals are deleted after upload';
+    mode.className = `image-backup-mode ${copyOnly ? 'copy' : 'move'}`;
+  }
+  if (!running) {
+    const remaining = Number(status.remaining || 0);
+    setProgress(remaining
+      ? `<strong>${remaining.toLocaleString()}</strong> image${remaining === 1 ? '' : 's'} waiting to be backed up.`
+      : 'Everything eligible has already been backed up.');
+  }
+
   if (!status.microsoft_configured) {
     setState('Microsoft connection required', 'wait');
     setError('Automatic deletion is safely paused until the one-time Microsoft service connection is configured. Nothing will be removed from Supabase before that connection is verified.');
@@ -215,6 +245,111 @@ function renderStatus(status) {
   } else {
     setState('Automatic backup active', 'ok');
     setError('');
+  }
+}
+
+let running = false;
+let cancelRequested = false;
+
+function setProgress(html) {
+  const el = document.getElementById('image-backup-progress');
+  if (el) el.innerHTML = html;
+}
+
+async function authToken() {
+  const { data } = await client.auth.getSession();
+  const token = data?.session?.access_token;
+  if (!token) throw new Error('Sign in to run a backup.');
+  return token;
+}
+
+async function runOnePass(token) {
+  const response = await fetch(ARCHIVE_FUNCTION_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ action: 'run' }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `Backup run failed (${response.status}).`);
+  return payload;
+}
+
+/*
+ * One press keeps going until nothing eligible is left.
+ *
+ * A single request can only do so much: the function stops itself short of the
+ * caller's timeout so it never dies part-way through a file, and reports how
+ * many are still waiting. Rather than make someone press the button over and
+ * over, this loops on that number. The pass cap is a safety net -- if a pass
+ * ever stops making progress, going round again would not help either.
+ */
+const MAX_PASSES = 60;
+
+async function runBackupUntilDone() {
+  if (running) { cancelRequested = true; return; }
+  const button = document.getElementById('image-backup-run');
+  running = true;
+  cancelRequested = false;
+  if (button) { button.textContent = 'Stop'; button.classList.add('stop'); }
+
+  let passes = 0;
+  let totalArchived = 0;
+  let totalFailures = 0;
+  try {
+    const token = await authToken();
+    for (;;) {
+      passes += 1;
+      setProgress(`Pass ${passes}: working… <strong>${totalArchived.toLocaleString()}</strong> backed up so far.`);
+      const result = await runOnePass(token);
+
+      if (result.status === 'configuration_required') {
+        setProgress('Stopped — the Microsoft connection is not configured, so there is nowhere to send images yet.');
+        setError(result.error || 'Microsoft connection required.');
+        return;
+      }
+      if (result.status === 'disabled') {
+        setProgress('Stopped — the archive is switched off and this run was not authorized to override it.');
+        return;
+      }
+
+      totalArchived += Number(result.filesArchived || 0);
+      totalFailures += Number(result.failures || 0);
+      const remaining = Number(result.remaining || 0);
+
+      if (cancelRequested) {
+        setProgress(`Stopped after ${passes} pass${passes === 1 ? '' : 'es'}. <strong>${totalArchived.toLocaleString()}</strong> backed up, ${remaining.toLocaleString()} still waiting.`);
+        return;
+      }
+      // No remaining work, or a pass that moved nothing and hit no time limit:
+      // either way another identical pass has nothing new to try.
+      if (!remaining) break;
+      if (!result.filesArchived && !result.stoppedForTime) {
+        setProgress(`Stopped: ${remaining.toLocaleString()} image${remaining === 1 ? '' : 's'} could not be backed up. ${totalFailures.toLocaleString()} error${totalFailures === 1 ? '' : 's'} — see the last run details.`);
+        return;
+      }
+      if (passes >= MAX_PASSES) {
+        setProgress(`Paused after ${MAX_PASSES} passes with ${remaining.toLocaleString()} still waiting. Press Back Up Now again to continue.`);
+        return;
+      }
+    }
+
+    const failNote = totalFailures ? ` ${totalFailures.toLocaleString()} file${totalFailures === 1 ? '' : 's'} failed.` : '';
+    setProgress(`Done. <strong>${totalArchived.toLocaleString()}</strong> image${totalArchived === 1 ? '' : 's'} backed up in ${passes} pass${passes === 1 ? '' : 'es'}.${failNote}`);
+  } catch (error) {
+    console.error('Backup run failed:', error);
+    setProgress('');
+    setError(error instanceof Error ? error.message : String(error));
+  } finally {
+    running = false;
+    cancelRequested = false;
+    if (button) { button.textContent = 'Back Up Now'; button.classList.remove('stop'); }
+    // Newly archived files must be looked up afresh rather than served from a
+    // cache that predates them.
+    try {
+      const { forgetArchivedImageUrls } = await import('./archive-image-urls.js');
+      forgetArchivedImageUrls();
+    } catch (e) { /* the viewer falls back on its own */ }
+    try { await loadStatus(); } catch (e) { console.error('Status refresh after run failed:', e); }
   }
 }
 
@@ -240,6 +375,7 @@ async function loadStatus() {
 async function init() {
   injectStyles();
   mountPanel();
+  document.getElementById('image-backup-run')?.addEventListener('click', () => void runBackupUntilDone());
   try {
     await loadStatus();
   } catch (error) {

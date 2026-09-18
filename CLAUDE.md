@@ -110,6 +110,29 @@ The user wants an automated archive lifecycle:
 - High-volume planning target: up to ~200 images/day.
 - Database archive candidate batching was increased to support 250 files/run, and an emergency high-water rule can move files older than 7 days once image storage reaches ~80% of the 1 GB free-tier limit.
 
+### How the archive runs
+
+- `image-archive-onedrive` takes `status`, `sign`, `run`, and a GET `action=file`
+  proxy. `run` accepts either the cron secret (scheduled sweep, obeys the
+  `enabled` flag) or a signed-in **admin/IT** session (the Archive page's
+  "Back Up Now", which may run before `enabled` is turned on). Role is checked
+  server-side against `user_roles`; never trust anything the browser asserts.
+- `archive_backup_config.delete_after_archive` is the copy-first switch. While
+  it is false the sweep uploads and records but deletes nothing. Turning it on
+  later lets `cleanupAlreadyArchived()` collect the originals it already has
+  verified copies of -- nothing is re-uploaded. **Do not turn it on until
+  archived images have been confirmed viewable in the app.**
+- A run stops itself at `RUN_BUDGET_MS` (75s) between files, because the cron
+  caller only waits 120s and a run killed mid-file can leave an original with no
+  recorded copy. It reports `remaining`; the button loops on that, so one press
+  moves everything however many passes it takes.
+- Archived images stay viewable through `action:'sign'`, wired into
+  `batchSignImageUrls()` in `loadboard.js`, `accounting-route-images.js`, and the
+  Load Details attachment list. Anything storage cannot sign is looked up in the
+  archive before the slot is given up as empty. `archive-image-urls.js` is
+  deliberately a leaf module (takes the client as an argument) -- do not make it
+  import `loadboard.js`.
+
 ### IMPORTANT: Microsoft authorization is currently shelved
 
 Do not resume or alter the Microsoft/OneDrive authorization setup unless the user explicitly asks to return to it. The desired destination is a Microsoft 365 SharePoint/OneDrive folder named `M-J Site Backups`, but credentials/secrets must never be committed to GitHub.

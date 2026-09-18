@@ -70,11 +70,35 @@ async function loadAccountingRouteImages(accountingId) {
     if (signError) throw signError;
     if (serial !== requestSerial || activeAccountingId !== id) return;
 
+    const missing = [];
     refs.forEach((ref, index) => {
       const url = signed && signed[index] && signed[index].signedUrl;
-      if (!url || !activeRouteGroups[ref.groupIndex]) return;
-      activeRouteGroups[ref.groupIndex].urls[ref.imageIndex] = url;
+      if (!activeRouteGroups[ref.groupIndex]) return;
+      if (url) { activeRouteGroups[ref.groupIndex].urls[ref.imageIndex] = url; return; }
+      // Storage has no such object. Once the archive starts moving files, that
+      // is the normal state for anything past the retention window, and
+      // Accounting reviews old loads more than any other screen -- so this is
+      // precisely where a silently blank gallery would be noticed first.
+      missing.push(ref);
     });
+
+    if (missing.length) {
+      try {
+        const { resolveArchivedImageUrls } = await import('./archive-image-urls.js');
+        const archived = await resolveArchivedImageUrls(
+          supabaseClient,
+          missing.map((ref) => ({ bucket: ROUTE_IMAGE_BUCKET, path: ref.path })),
+        );
+        if (serial !== requestSerial || activeAccountingId !== id) return;
+        missing.forEach((ref) => {
+          const url = archived.get(`${ROUTE_IMAGE_BUCKET}\n${ref.path}`);
+          if (url && activeRouteGroups[ref.groupIndex]) activeRouteGroups[ref.groupIndex].urls[ref.imageIndex] = url;
+        });
+      } catch (e) {
+        console.error('Archived Accounting image lookup failed:', e);
+      }
+    }
+
     activeRouteGroups.forEach((group) => { group.urls = group.urls.filter(Boolean); });
     injectAccountingImages();
   } catch (e) {

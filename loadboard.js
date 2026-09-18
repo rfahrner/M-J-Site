@@ -167,27 +167,56 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // viewable without one.
   export async function batchSignImageUrls(bucket, paths, targets) {
     if (!paths.length || !supabaseClient) return;
+
+    // One place decides where a route image's URL comes from, so every screen
+    // that shows one -- board cells, Load Details, Accounting, the lightbox --
+    // keeps working after a file moves to the archive.
+    const applyUrl = (target, url) => {
+      if (!target || !url) return;
+      if (target.routeImageTarget) {
+        // Standard load-board rows use an explicit image target so every
+        // signed URL lands in the matching slot of the route gallery.
+        const trip = target.routeImageTarget;
+        trip.routeImageUrls = trip.routeImageUrls || [];
+        trip.routeImageUrls[target.index] = url;
+        if (target.index === 0) trip.routeImageUrl = url;
+      } else {
+        // Mondelez still passes its legacy { row, index } target and
+        // copies this value into its gallery after the batch completes.
+        target.routeImageUrl = url;
+      }
+    };
+
+    const unsigned = []; // paths storage could not sign, with their target
     try {
       const { data, error } = await supabaseClient.storage.from(bucket).createSignedUrls(paths, SIGNED_URL_EXPIRY_SECONDS);
       if (error) throw error;
       (data || []).forEach((entry, i) => {
-        if (!entry || !entry.signedUrl || !targets[i]) return;
-        const target = targets[i];
-        // Standard load-board rows use an explicit image target so every
-        // signed URL lands in the matching slot of the route gallery.
-        if (target.routeImageTarget) {
-          const trip = target.routeImageTarget;
-          trip.routeImageUrls = trip.routeImageUrls || [];
-          trip.routeImageUrls[target.index] = entry.signedUrl;
-          if (target.index === 0) trip.routeImageUrl = entry.signedUrl;
-        } else {
-          // Mondelez still passes its legacy { row, index } target and
-          // copies this value into its gallery after the batch completes.
-          target.routeImageUrl = entry.signedUrl;
-        }
+        if (!targets[i]) return;
+        if (entry && entry.signedUrl) { applyUrl(targets[i], entry.signedUrl); return; }
+        // No signed URL means storage has no such object. Once the archive is
+        // moving files that is the NORMAL state for anything older than the
+        // retention window -- the picture still exists, just not here.
+        unsigned.push({ path: paths[i], target: targets[i] });
       });
     } catch (e) {
       console.error("batchSignImageUrls failed:", e);
+      return;
+    }
+
+    if (!unsigned.length) return;
+    try {
+      const { resolveArchivedImageUrls } = await import("./archive-image-urls.js");
+      const archived = await resolveArchivedImageUrls(
+        supabaseClient,
+        unsigned.map((item) => ({ bucket, path: item.path })),
+      );
+      if (!archived.size) return;
+      unsigned.forEach((item) => applyUrl(item.target, archived.get(`${bucket}\n${item.path}`)));
+    } catch (e) {
+      // An image that is in neither place leaves its slot empty, exactly as
+      // before. This lookup is a recovery path, never a requirement.
+      console.error("archived image lookup failed:", e);
     }
   }
 
@@ -4559,6 +4588,25 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           }
         } catch (e) {
           console.warn("Could not sign trip-sheet image URLs:", e);
+        }
+        // Anything storage could not sign may have moved to the archive. Load
+        // Details is where a dispatcher goes to look at an old trip sheet, so
+        // this is worth the extra lookup.
+        const archivedPaths = attachmentPaths.filter((path) => !signedAttachmentUrls[path]);
+        if (archivedPaths.length) {
+          try {
+            const { resolveArchivedImageUrls } = await import("./archive-image-urls.js");
+            const archived = await resolveArchivedImageUrls(
+              supabaseClient,
+              archivedPaths.map((path) => ({ bucket: "trip-sheets", path })),
+            );
+            archivedPaths.forEach((path) => {
+              const url = archived.get(`trip-sheets\n${path}`);
+              if (url) signedAttachmentUrls[path] = url;
+            });
+          } catch (e) {
+            console.warn("Archived trip-sheet image lookup failed:", e);
+          }
         }
       }
       loadDetailsState.attachments = attachmentRows.map((a) => {
