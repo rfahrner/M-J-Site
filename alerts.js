@@ -494,7 +494,7 @@ import './paperwork-load-integration.js';
         const alert = boardAlerts.find((a) => a.key === btn.dataset.alertActionKey);
         if (alert && alert.recipients && alert.recipients.length) {
           openSendTextModal(alert.recipients, alert.actionMessage || "", alert.markShiftIdsOnSent || null,
-            { onSent: () => dismissAlert(alert.key) });
+            { allowDnu: alert.recipients.length === 1, onSent: () => dismissAlert(alert.key) });
         }
         return;
       }
