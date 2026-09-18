@@ -3169,6 +3169,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       row.calledOffNotes = reasonText;
       row.calledOffAt = new Date().toISOString();
       await saveShiftNow(row);
+      await logDriverCancellationNote(row, reasonText);
       logChange(row.dbId, labelForRow(row), "called_off", "false", "true");
       close();
       renderBoardTable();
@@ -5763,6 +5764,20 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
   const DRIVER_NOTES_TABLE = "driver_notes";
   const LOAD_NOTES_TABLE = "load_notes";
+
+  async function logDriverCancellationNote(row, reasonText) {
+    if (!supabaseClient || !row.driverId) return;
+    const reasonLabel = String(reasonText || "").trim() || "No reason provided";
+    try {
+      const { error } = await supabaseClient.from(DRIVER_NOTES_TABLE).insert({
+        driver_id: Number(row.driverId),
+        note_text: `Cancellation — ${row.shiftDate || dateKey(new Date())} — ${labelForRow(row)} — ${reasonLabel}`,
+      });
+      if (error) throw error;
+    } catch (e) {
+      console.error("Failed to add driver cancellation note:", e);
+    }
+  }
 
   // Auto-logs a committed change to the board's Notes column into the
   // load's permanent notes log. This is the whole point of the two being

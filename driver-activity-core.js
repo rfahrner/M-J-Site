@@ -7,6 +7,7 @@ const VALID_SCOPES = new Set(['atlanta', 'buildingc', 'delaware', 'houston', 'mo
 let activityLoaded = false;
 let activityRows = new Map();
 let operatingDaysByScope = new Map();
+let cancellationCounts = new Map();
 let activitySortDir = null;
 let hydrateQueued = false;
 let tableObserver = null;
@@ -166,13 +167,23 @@ function activityForDriver(driver, selectedScope) {
 
   const activeDays = Number(record?.active_days || 0);
   const percent = record ? Number(record.activity_percent || 0) : 0;
-  const grade = record?.grade || '0';
+  const cancellations = cancellationCounts.get(`${scope}|${driver.id}`) || 0;
+  const cancellationPenalty = Math.floor(cancellations / 2);
+  const baseGrade = record?.grade || '0';
+  const gradeOrder = ['A', 'B', 'C', 'D', 'E', 'F'];
+  const baseGradeIndex = gradeOrder.indexOf(baseGrade);
+  const grade = baseGradeIndex === -1
+    ? baseGrade
+    : gradeOrder[Math.min(gradeOrder.length - 1, baseGradeIndex + cancellationPenalty)];
+  const cancellationNote = cancellations
+    ? ` · ${cancellations} cancellation${cancellations === 1 ? '' : 's'} in the last 60 days${cancellationPenalty ? ` · rating reduced ${cancellationPenalty} grade${cancellationPenalty === 1 ? '' : 's'}` : ''}`
+    : '';
   return {
     grade,
     activeDays,
     operatingDays,
     percent,
-    title: `${activeDays}/${operatingDays} operating days (${percent.toFixed(1)}%) — ${carrier}${inheritedNote}`,
+    title: `${activeDays}/${operatingDays} operating days (${percent.toFixed(1)}%) — ${carrier}${inheritedNote}${cancellationNote}`,
   };
 }
 
@@ -297,20 +308,32 @@ async function waitForSupabaseClient() {
 async function refreshActivityRatings() {
   try {
     const client = await waitForSupabaseClient();
-    const { data, error } = await client
-      .from(ACTIVITY_VIEW)
-      .select('scope,carrier_key,carrier_display,active_days,operating_days,activity_percent,grade');
-    if (error) throw error;
+    const from = new Date();
+    from.setHours(0, 0, 0, 0);
+    from.setDate(from.getDate() - 60);
+    const [activityResult, cancellationResult] = await Promise.all([
+      client.from(ACTIVITY_VIEW).select('scope,carrier_key,carrier_display,active_days,operating_days,activity_percent,grade'),
+      client.from('loads_shifts').select('driver_id, location').eq('called_off', true).gte('shift_date', from.toISOString().slice(0, 10)),
+    ]);
+    if (activityResult.error) throw activityResult.error;
+    if (cancellationResult.error) console.error('Driver cancellation activity failed to load:', cancellationResult.error);
 
     const nextRows = new Map();
     const nextOperatingDays = new Map();
-    (data || []).forEach((row) => {
+    (activityResult.data || []).forEach((row) => {
       nextRows.set(`${row.scope}|${row.carrier_key}`, row);
       const current = nextOperatingDays.get(row.scope) || 0;
       nextOperatingDays.set(row.scope, Math.max(current, Number(row.operating_days || 0)));
     });
     activityRows = nextRows;
     operatingDaysByScope = nextOperatingDays;
+    const nextCancellations = new Map();
+    (cancellationResult.data || []).forEach((row) => {
+      if (row.driver_id == null || !VALID_SCOPES.has(row.location)) return;
+      const key = `${row.location}|${row.driver_id}`;
+      nextCancellations.set(key, (nextCancellations.get(key) || 0) + 1);
+    });
+    cancellationCounts = nextCancellations;
     activityLoaded = true;
     scheduleHydrate();
   } catch (error) {
