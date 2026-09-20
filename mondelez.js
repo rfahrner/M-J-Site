@@ -56,7 +56,7 @@ let mondelezRateSettings = null; // { [locationKey]: { daily_rate, stop_rate, ov
 /* ---------------- data model ---------------- */
 function blankMondelezRow(locationKey) {
   return {
-    id: uid("mdz"), dbId: null,
+    id: uid("mdz"), dbId: null, shiftDate: state.activeDate || null,
     location: locationKey || mondelezState.activeTab,
     aljexNumber: "", deliveryGroup: "", startTime: "",
     driverAppId: "", trailerNumber: "", returnTrailerNumber: "",
@@ -106,7 +106,7 @@ function parseMondelezImagePaths(value) {
 }
 function mondelezRowFromDbRow(r) {
   return {
-    id: uid("mdz"), dbId: r.id,
+    id: uid("mdz"), dbId: r.id, shiftDate: r.shift_date || null,
     location: r.location,
     aljexNumber: r.aljex_number || "", deliveryGroup: r.delivery_group || "", startTime: r.start_time || "",
     driverAppId: r.driver_app_id || "", trailerNumber: r.trailer_number || "", returnTrailerNumber: r.return_trailer_number || "",
@@ -236,7 +236,12 @@ export async function loadMondelezDatesWithData() {
 async function saveMondelezRowNow(row) {
   if (!supabaseClient) return null;
   try {
-    const payload = mondelezRowToDbRow(row, state.activeDate);
+    // The row's OWN date, not whatever day is on screen when this fires.
+    // Saves are debounced 700ms and date navigation sets state.activeDate
+    // immediately, so typing and then clicking to the next day rewrote
+    // shift_date on the row just edited -- the load vanished from the day it
+    // belonged to and reappeared on the next one. Kroger already does this.
+    const payload = mondelezRowToDbRow(row, row.shiftDate || state.activeDate);
     if (row.dbId) {
       const { error } = await supabaseClient.from(MONDELEZ_TABLE).update(payload).eq("id", row.dbId);
       if (error) { console.error("Failed to save Mondelez row:", error); setDriverSyncStatus(`Couldn't save this load (${error.message}).`, "error"); return null; }

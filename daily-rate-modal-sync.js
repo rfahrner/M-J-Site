@@ -37,7 +37,8 @@ async function syncOpenLoadRate() {
   saveTimer = setTimeout(async () => {
     if (!lb?.supabaseClient || row.rateManual) return;
     const { error } = await lb.supabaseClient.from('loads_shifts')
-      .update({ rate: numeric || null, rate_manual: false })
+      // carrier_rate, not rate -- see the note in delaware-rate-tiers.js.
+      .update({ carrier_rate: numeric || null, rate_manual: false })
       .eq('id', row.dbId);
     if (error) console.error('Could not persist hierarchy-correct rate from Load Details', error);
   }, 150);

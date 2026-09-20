@@ -117,7 +117,8 @@ function scheduleStandardDbRateSave(row, numericRate) {
   standardSaveTimers.set(key, setTimeout(async () => {
     standardSaveTimers.delete(key);
     const { error } = await lb.supabaseClient.from("loads_shifts")
-      .update({ rate: numericRate > 0 ? numericRate : null, rate_manual: false })
+      // carrier_rate, not rate -- see the note in delaware-rate-tiers.js.
+      .update({ carrier_rate: numericRate > 0 ? numericRate : null, rate_manual: false })
       .eq("id", row.dbId);
     if (error) console.error("Could not persist recalculated rate", error);
   }, 250));

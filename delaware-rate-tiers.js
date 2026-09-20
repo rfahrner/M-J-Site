@@ -63,7 +63,11 @@ async function recalcAll() {
     });
     if (row.dbId && lb.supabaseClient) {
       const { error } = await lb.supabaseClient.from('loads_shifts')
-        .update({ rate: numericRate > 0 ? numericRate : null, rate_manual: false })
+        // The column is carrier_rate. This said `rate`, which does not exist on
+        // loads_shifts, so PostgREST rejected the whole request and neither the
+        // new rate nor rate_manual:false was ever written -- the board repainted
+        // and the database kept the old number.
+        .update({ carrier_rate: numericRate > 0 ? numericRate : null, rate_manual: false })
         .eq('id', row.dbId);
       if (error) console.error('Could not persist recalculated Delaware rate', error);
     }

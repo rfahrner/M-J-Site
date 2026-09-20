@@ -386,8 +386,42 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     };
   }
 
+  /*
+   * Numeric cells on the board are free text, and Number("1,250.00") is NaN.
+   * JSON.stringify turns NaN into null, so the request SUCCEEDS and writes NULL
+   * over a real value -- the cell still shows what was typed, the database is
+   * now blank, and nothing reports an error. Rate, route miles, stop count and
+   * the accounting money columns all went through that path.
+   *
+   * Three outcomes here, and the third is the point:
+   *   genuinely empty  -> null   (clearing a field must still clear it)
+   *   parseable        -> number (commas, $ and stray spaces are tolerated,
+   *                               since that is how people actually type money)
+   *   unparseable      -> undefined
+   *
+   * An undefined value is dropped by JSON.stringify, so the column is simply
+   * left alone rather than overwritten with null. Bad input stops being
+   * destructive and becomes a no-op.
+   */
+  function numOrNull(value) {
+    if (value === "" || value == null) return null;
+    if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+    const cleaned = String(value).replace(/[$,\s]/g, "");
+    if (cleaned === "") return null;
+    const n = Number(cleaned);
+    return Number.isFinite(n) ? n : undefined;
+  }
+
+  // supabase-js serializes the payload with JSON.stringify, which already drops
+  // undefined keys -- but stripping them here makes that guarantee explicit
+  // rather than incidental, and keeps the logged payload honest.
+  function withoutUndefined(payload) {
+    Object.keys(payload).forEach((k) => { if (payload[k] === undefined) delete payload[k]; });
+    return payload;
+  }
+
   function shiftToDbRow(row, locationKey, dKey) {
-    return {
+    return withoutUndefined({
       location: locationKey,
       shift_date: dKey,
       pro_number: row.proNumber || null,
@@ -399,7 +433,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       shift_start: row.shiftStart || null,
       shift_complete: !!row.shiftComplete,
       shift_complete_at: row.shiftCompleteAt || null,
-      carrier_rate: row.rate === "" || row.rate == null ? null : Number(row.rate),
+      carrier_rate: numOrNull(row.rate),
       notes: row.notes || null,
       pre_shift_text_sent: !!row.preShiftTextSent,
       pre_shift_call: !!row.preShiftCall,
@@ -413,7 +447,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       pre_shift_text_sent_at: row.preShiftTextSentAt || null,
       birm: !!row.birm,
       route_type: row.routeType || "birm",
-      hostler_hours: row.hostlerHours !== "" && row.hostlerHours != null ? Number(row.hostlerHours) : null,
+      hostler_hours: numOrNull(row.hostlerHours),
       rate_manual: !!row.rateManual,
       rate_overrides: (row.rateOverrides && (Object.keys(row.rateOverrides.tiers || {}).length || Object.keys(row.rateOverrides.settings || {}).length)) ? row.rateOverrides : null,
       called_off: !!row.calledOff,
@@ -426,7 +460,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       load_cancelled: !!row.loadCancelled,
       load_cancelled_reason: row.loadCancelledReason || null,
       load_cancelled_at: row.loadCancelledAt || null,
-    };
+    });
   }
   function shiftFromDbRow(dbRow) {
     return {
@@ -483,15 +517,16 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       trips: [blankTrip()],
     };
   }
+
   function tripToDbRow(trip, shiftDbId, tripNumber) {
-    return {
+    return withoutUndefined({
       shift_id: shiftDbId,
       trip_number: tripNumber,
       route_id: trip.routeId || null,
       trip_id: trip.tripId || null,
       trailer_out: trip.trailerOut || null,
-      route_miles: trip.routeMiles !== "" && trip.routeMiles != null ? Number(trip.routeMiles) : null,
-      stop_count: trip.stopCount !== "" && trip.stopCount != null ? Number(trip.stopCount) : null,
+      route_miles: numOrNull(trip.routeMiles),
+      stop_count: numOrNull(trip.stopCount),
       dispatch_time: trip.dispatchTime || null,
       last_stop_depart: trip.lastStopDepart || null,
       return_to_dc: trip.returnToDC || null,
@@ -517,9 +552,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       timesheet_end_time: trip.timesheetEndTime || null,
       drop_location_text: trip.dropLocationText || null,
       return_to_dc_text: trip.returnToDcText || null,
-      route_est_hours: trip.routeEstHours !== "" && trip.routeEstHours != null ? Number(trip.routeEstHours) : null,
+      route_est_hours: numOrNull(trip.routeEstHours),
       time_to_final_stop: trip.timeToFinalStop || null,
-      time_to_dc: trip.timeToDc !== "" && trip.timeToDc != null ? Number(trip.timeToDc) : null,
+      time_to_dc: numOrNull(trip.timeToDc),
       eta_to_final_stop: trip.etaToFinalStop || null,
       est_route_complete: trip.estRouteComplete || null,
       route_image_path: (() => {
@@ -528,7 +563,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           : (trip.routeImagePath ? [String(trip.routeImagePath)] : []);
         return imagePaths.length > 1 ? JSON.stringify(imagePaths) : (imagePaths[0] || null);
       })(),
-    };
+    });
   }
   function parseRouteImagePaths(value) {
     if (Array.isArray(value)) return value.filter(Boolean).map(String);
@@ -1430,6 +1465,26 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     }
   }
 
+  // The lowest trip_number not already taken on this shift, starting from the
+  // route's array position. Falls back to the position if the lookup fails --
+  // no worse than the old behaviour, and the INSERT still reports its own error.
+  async function nextFreeTripNumber(shiftDbId, preferred) {
+    const wanted = Math.max(1, Number(preferred) || 1);
+    try {
+      const { data, error } = await supabaseClient
+        .from(TRIPS_TABLE).select("trip_number").eq("shift_id", shiftDbId);
+      if (error) throw error;
+      const taken = new Set((data || []).map((r) => Number(r.trip_number)));
+      if (!taken.has(wanted)) return wanted;
+      let next = 1;
+      while (taken.has(next)) next += 1;
+      return next;
+    } catch (e) {
+      console.error("nextFreeTripNumber lookup failed:", e);
+      return wanted;
+    }
+  }
+
   async function saveTripNow(row, trip, tripNumber) {
     if (!supabaseClient) return null;
     try {
@@ -1439,12 +1494,28 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       // Captured before the round trip: what the acknowledgement will mean.
       const sent = snapshotDirtyFields(dirtyTripFields, trip.id, trip);
       if (trip.dbId) {
+        // Never rewrite trip_number on an existing route.
+        //
+        // Callers pass the route's POSITION in row.trips (indexOf + 1), but
+        // trip_number is an identity, not a position, and the two diverge the
+        // moment a route is deleted: the array closes the gap while the
+        // surviving rows keep their original numbers. loads_trips has
+        // UNIQUE (shift_id, trip_number), so re-sending the position either
+        // collided -- failing the whole update, losing whatever had just been
+        // typed behind a status banner -- or, if the other route happened to
+        // save first, silently renumbered this one on top of it. The database
+        // already holds the right number for a row that exists; only an INSERT
+        // needs to choose one.
+        delete payload.trip_number;
         const { error } = await supabaseClient.from(TRIPS_TABLE).update(payload).eq("id", trip.dbId);
         if (error) { console.error("Failed to save load:", error); setDriverSyncStatus(`Couldn't save this load (${error.message}).`, "error"); return null; }
         confirmDirtyFieldsSaved(dirtyTripFields, trip.id, sent, trip);
         queueAljexSync(shiftDbId, row.location); // route_id lives here — this is the Ref# feed
         return trip.dbId;
       }
+      // A new route picks the next number that is actually free on this shift,
+      // rather than its array position, for the same reason.
+      payload.trip_number = await nextFreeTripNumber(shiftDbId, tripNumber);
       const { data, error } = await supabaseClient.from(TRIPS_TABLE).insert(payload).select();
       if (error) { console.error("Failed to create load:", error); setDriverSyncStatus(`Couldn't save this load (${error.message}).`, "error"); return null; }
       trip.dbId = data[0].id;
@@ -1730,7 +1801,11 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           if (existing && existing.dbId) {
             await supabaseClient.from("trip_stops").update(payload).eq("id", existing.dbId);
           } else {
-            await supabaseClient.from("trip_stops").insert(payload);
+            // Upsert, not insert: trip_stops is UNIQUE (trip_id, stop_number),
+            // and another dispatcher may have created this stop since our copy
+            // of `existing` was loaded. An insert throws there, and the throw
+            // was only logged -- the times just typed were silently discarded.
+            await supabaseClient.from("trip_stops").upsert(payload, { onConflict: "trip_id,stop_number" });
           }
           if (timeIn || timeOut) trip.hasStopTimes = true; // at least one real stop record now exists — clears the red pill once paperwork's also in
         } catch (e) {
@@ -1771,6 +1846,23 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     });
   }
 
+
+  // Saves are debounced 700ms, so a row can be deleted with a write still in
+  // flight. Without cancelling it, the timer fires against a row that no longer
+  // exists: for a row that was never saved, saveShiftNow takes its INSERT path
+  // and creates a load nobody asked for -- invisible on this screen, pushed to
+  // every other dispatcher by realtime, and there on the next reload.
+  function cancelPendingSaves(rowId, tripIds) {
+    if (rowId != null) {
+      clearTimeout(shiftSaveTimers.get(rowId));
+      shiftSaveTimers.delete(rowId);
+    }
+    (tripIds || []).forEach((tripId) => {
+      if (tripId == null) return;
+      clearTimeout(tripSaveTimers.get(tripId));
+      tripSaveTimers.delete(tripId);
+    });
+  }
 
   function scheduleShiftSave(row) {
     clearTimeout(shiftSaveTimers.get(row.id));
@@ -2046,11 +2138,16 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // override into that field, in which case this is a no-op so we never
   // silently clobber what they typed. Updates the live DOM cell in place
   // when present, rather than forcing a full board redraw.
-  function recomputeRowRate(row) {
+  function recomputeRowRate(row, forceSave) {
     if (row.rateManual) return;
     const breakdown = getEffectiveRateInfo(row);
     const nextRate = breakdown.total ? String(breakdown.total) : "";
-    if (row.rate === nextRate) return;
+    // forceSave covers the case where the VALUE did not change but the meaning
+    // did. Clearing a manual rate on a load with no calculable rate leaves
+    // row.rate as "" both before and after, so this returned early and never
+    // scheduled a save -- the database kept rate_manual = true and the old
+    // dollar amount, which then reappeared on the next refresh.
+    if (row.rate === nextRate && !forceSave) return;
     markFieldDirty(dirtyShiftFields, row.id, "rate");
     row.rate = nextRate;
     scheduleShiftSave(row);
@@ -3797,6 +3894,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       : `\n\nThis removes the ENTIRE load.`;
     if (!confirm(`Delete the entire load ${label}?${routeNote}\n\nThis can't be undone.`)) return;
 
+    // Before anything else: stop any debounced write already queued for this
+    // load or its routes, or it will recreate what was just deleted.
+    cancelPendingSaves(rowId, (row.trips || []).map((t) => t.id));
+
     logChange(row.dbId, label, "deleted", "active", "deleted"); // logged before the row goes, in case the FK doesn't outlive it
 
     const rows = getSheet(state.activeLocation, state.activeDate);
@@ -3831,6 +3932,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const owner = [row.proNumber ? `PRO# ${row.proNumber}` : "", (drvForRoute ? drvForRoute.name : row.driverNameText) || ""].filter(Boolean).join(" — ");
     if (!confirm(`Delete route ${label}${owner ? ` on ${owner}` : ""}?\n\nOnly this route goes — the load itself stays.\n\nThis can't be undone.`)) return;
 
+    cancelPendingSaves(null, [tripId]);
     logChange(row.dbId, `${labelForRow(row)} — ${label}`, "route_deleted", "active", "deleted");
 
     const idx = row.trips.findIndex((t) => t.id === tripId);
@@ -5188,7 +5290,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     markFieldDirty(dirtyShiftFields, row.id, "rate");
     markFieldDirty(dirtyShiftFields, row.id, "rateManual");
     row.rateManual = false;
-    recomputeRowRate(row);
+    recomputeRowRate(row, true);
     if (before !== row.rate) logChange(row.dbId, labelForRow(row), "rate", before, row.rate);
     renderLoadDetailsTabContent();
     renderBoardTable();
@@ -5305,7 +5407,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
             if (existing && existing.dbId) {
               await supabaseClient.from("trip_stops").update(payload).eq("id", existing.dbId); // still update even if now blank, in case times were cleared out
             } else {
-              await supabaseClient.from("trip_stops").insert(payload);
+              // Same reason as the Stop Times modal path: trip_stops is
+              // UNIQUE (trip_id, stop_number), so a plain insert loses the
+              // typed times whenever another dispatcher got there first.
+              await supabaseClient.from("trip_stops").upsert(payload, { onConflict: "trip_id,stop_number" });
             }
             if (hasTime) trip.hasStopTimes = true;
           }
@@ -7139,7 +7244,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         found.row.rate = t.value;
         if (t.value.trim() === "") {
           found.row.rateManual = false;
-          recomputeRowRate(found.row);
+          // forceSave: turning the manual flag off is a change worth writing
+          // even when the calculated rate is blank too.
+          recomputeRowRate(found.row, true);
         } else {
           found.row.rateManual = true;
           scheduleShiftSave(found.row);
