@@ -120,6 +120,11 @@ async function saveMondelezImageState(row) {
 }
 
 function refreshMondelezImageCell(row) {
+  // Defensive: this is handed to the shared image code as a callback, and a
+  // caller that forgets the argument should degrade to doing nothing rather
+  // than throwing from inside somebody else's try block and reporting a
+  // successful upload as a failure.
+  if (!row || !row.id) return;
   const tr = document.getElementById(row.id);
   const cell = tr?.querySelector('.col-mdz-image');
   if (!cell) return;

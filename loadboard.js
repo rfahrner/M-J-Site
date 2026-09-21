@@ -1135,7 +1135,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       row.routeImagePath = paths[0] || "";
       row.routeImageUrl = urls[0] || "";
       await saveRowFn(row);
-      renderFn();
+      // Pass the row. Most boards redraw everything and ignore this, but
+      // Mondelez repaints one cell and needs to know which -- called with no
+      // argument it threw "Cannot read properties of undefined (reading 'id')"
+      // from inside this try, so a COMPLETED upload reported itself as failed
+      // and the cell never refreshed.
+      renderFn(row);
     } catch (e) {
       console.error("uploadRowImage failed:", e);
       setDriverSyncStatus("Couldn't upload that image (" + (e.message || e) + ").", "error");
@@ -1154,7 +1159,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     row.routeImageUrls = urls;
     row.routeImagePath = paths[0] || "";
     row.routeImageUrl = urls[0] || "";
-    renderFn();
+    // Same missing argument as the upload path above -- and worse here, since
+    // this ran BEFORE the storage delete and the save. A throw meant the image
+    // vanished from the screen while remaining in storage and in the database,
+    // so it came back on the next refresh. The redraw is also wrapped: failing
+    // to repaint must never cost the deletion itself.
+    try { renderFn(row); } catch (e) { console.error("deleteRowImage redraw failed:", e); }
     try {
       if (oldPath && supabaseClient) {
         const { error } = await supabaseClient.storage.from(BOARD_IMAGE_BUCKET).remove([oldPath]);

@@ -144,8 +144,10 @@ check('and not the one sitting in array slot 3', matchByDbId({ id: 33, trip_numb
 // ---------------------------------------------------------------------------
 console.log('\n4. a sent text dismisses the alert that opened the modal');
 
+// Match the parameter, not its punctuation -- `options` and `options = {}` are
+// both fine, and pinning the exact spelling only produces false alarms.
 checkTrue('openSendTextModal accepts an onSent hook',
-  /export function openSendTextModal\(recipients, prefilledMessage, markShiftIdsOnSent, options\)/.test(BOARD));
+  /export function openSendTextModal\(\s*recipients,\s*prefilledMessage,\s*markShiftIdsOnSent,\s*options\b/.test(BOARD));
 const FINISH = extractFunction(BOARD, 'finishSendTextModalAsSent');
 checkTrue('the shared exit hides the modal', /classList\.add\("hidden"\)/.test(FINISH));
 checkTrue('the shared exit clears modal state', /sendTextModalState = null/.test(FINISH));
