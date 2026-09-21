@@ -1483,6 +1483,38 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     }
   }
 
+  /*
+   * The row this route was already saved as, if its local dbId went missing.
+   *
+   * saveTripNow inserts whenever trip.dbId is falsy. That is correct for a new
+   * route and catastrophic for one that already exists: the route is written a
+   * SECOND time, the board shows it twice, and accounting copies both, so the
+   * customer is billed twice for one trip. 13 routes were duplicated this way
+   * between July and September, six of which reached an invoice.
+   *
+   * Trip ID is what identifies a route to a dispatcher and is unique within a
+   * shift -- unlike route_id, which is a free-text name and repeats constantly
+   * ("FRGT" twice on one load). So only a Trip ID is safe to match on.
+   *
+   * Deliberately conservative: no Trip ID yet means this really is a new route,
+   * and finding MORE than one match means the shift is already duplicated, and
+   * guessing which row to adopt would just pick one at random.
+   */
+  async function findExistingTripRow(shiftDbId, trip) {
+    const tripId = String(trip.tripId || "").trim();
+    if (!tripId || !shiftDbId) return null;
+    try {
+      const { data, error } = await supabaseClient
+        .from(TRIPS_TABLE).select("id").eq("shift_id", shiftDbId).eq("trip_id", tripId).limit(2);
+      if (error) throw error;
+      if (!data || data.length !== 1) return null;
+      return data[0].id;
+    } catch (e) {
+      console.error("findExistingTripRow lookup failed:", e);
+      return null; // fall through to the insert rather than lose the edit
+    }
+  }
+
   // The lowest trip_number not already taken on this shift, starting from the
   // route's array position. Falls back to the position if the lookup fails --
   // no worse than the old behaviour, and the INSERT still reports its own error.
@@ -1508,6 +1540,16 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     try {
       const shiftDbId = row.dbId || (await saveShiftNow(row)); // a trip can't exist without its parent shift
       if (!shiftDbId) return null;
+      // A route with no dbId is about to be INSERTed. Make sure it is not one
+      // that already exists under an id this tab lost track of -- a redraw, a
+      // realtime merge, or a reload can all drop it.
+      if (!trip.dbId) {
+        const existingDbId = await findExistingTripRow(shiftDbId, trip);
+        if (existingDbId) {
+          console.warn(`Route ${trip.tripId} already exists as row ${existingDbId}; updating it instead of inserting a duplicate.`);
+          trip.dbId = existingDbId;
+        }
+      }
       const payload = tripToDbRow(trip, shiftDbId, tripNumber);
       // Captured before the round trip: what the acknowledgement will mean.
       const sent = snapshotDirtyFields(dirtyTripFields, trip.id, trip);
