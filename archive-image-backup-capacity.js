@@ -6,7 +6,10 @@
 
     const meta = [...panel.querySelectorAll('.image-backup-meta > span')];
     const schedule = meta.find((el) => /schedule:/i.test(el.textContent || ''));
-    if (schedule) schedule.innerHTML = '<strong>Schedule:</strong> Every 15 minutes';
+    const scheduleHtml = '<strong>Schedule:</strong> Every 15 minutes';
+    // Replacing identical HTML still emits a childList mutation. Since this
+    // observer watches our writes too, only change the label when needed.
+    if (schedule && schedule.innerHTML !== scheduleHtml) schedule.innerHTML = scheduleHtml;
 
     let note = document.getElementById('image-backup-capacity-note');
     if (!note) {

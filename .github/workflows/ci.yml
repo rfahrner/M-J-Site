@@ -52,6 +52,9 @@ jobs:
       - name: Test driver note ordering and presentation
         run: node --test scripts/driver-profile-notes.test.mjs
 
+      - name: Test Archive dashboard observer
+        run: node --test scripts/archive-capacity-observer.test.mjs
+
       - name: Build site
         run: npm run build
 
