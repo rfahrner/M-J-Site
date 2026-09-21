@@ -214,6 +214,23 @@ pins all of it.
 - **`trip_stops` is upserted on `trip_id,stop_number`,** never inserted -- it
   has a unique constraint and two dispatchers routinely hold stale stop lists.
 
+## route_id is a name, not a key
+
+A route's `route_id` is free text a dispatcher types, and the same value
+repeats inside one load constantly -- two "FRGT" legs, two "Nestle" legs. Any
+lookup of the form `routes.find(r => r.route_id === text)` returns the first
+match and is therefore wrong for exactly those loads. That is what made the
+Accounting page print one route's Trip ID against another, colour the second
+route's pill from the first route's paperwork, and open the wrong route on
+click -- while the database held the correct values the whole time.
+
+Identify an accounting route by `route_number` (unique within the load) or
+`source_trip_id` (the real `loads_trips` row). The chips in `acctRouteIdsHtml`
+carry both as `data-acct-route-number` / `data-acct-source-trip`;
+`routeForChip()` and `findLiveTripForRoute()` in `accounting-columns.js` consume
+them. Matching on the text is a last-resort fallback for rows old enough to
+predate `route_number`, and only when the name is unambiguous.
+
 ## Database rules worth preserving
 
 - `loads_shifts` = standard board shifts.

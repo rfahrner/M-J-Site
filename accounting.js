@@ -138,16 +138,24 @@ let accountingRecords = [];
   }
   // Atlanta's own Routes column — sourced from loads_accounting_routes
   // rather than loads_trips (Delaware's source), since that's where each
-  // route's Cost/Revenue Level calc actually lives. Same click-to-open
-  // pattern, but has to match by route_id TEXT rather than a trip dbId —
-  // see the note by acctRoutesByAccountingId above.
+  // route's Cost/Revenue Level calc actually lives.
+  //
+  // Each chip carries the route's IDENTITY, not just its label. route_id is a
+  // free-text name and is routinely repeated within one load -- two "FRGT"
+  // routes, two "Nestle" routes -- so anything downstream that looked a route
+  // up by that text got the first one every time. That is what made the Trip ID
+  // column repeat a value across two different routes, and what sent a chip
+  // click to the wrong route's details. route_number is unique within the load,
+  // and source_trip_id is the real loads_trips row.
   export function acctRouteIdsHtml(rec) {
     const routes = acctRoutesByAccountingId[rec.id];
     if (!routes || !routes.length) return `<span class="subtext" style="font-size:11px;">—</span>`;
     return `<div style="display:flex; flex-direction:column; gap:2px; align-items:flex-start;">
       ${routes.map((r) => {
         const label = r.route_id || r.trip_id || "—";
-        return `<button type="button" class="trip-chip" data-open-acct-load="${rec.id}" data-open-acct-route-text="${escapeHtml(r.route_id || "")}" title="Open this route's details">${escapeHtml(label)}</button>`;
+        const routeNumberAttr = r.route_number != null ? ` data-acct-route-number="${escapeHtml(String(r.route_number))}"` : "";
+        const sourceTripAttr = r.source_trip_id != null ? ` data-acct-source-trip="${escapeHtml(String(r.source_trip_id))}"` : "";
+        return `<button type="button" class="trip-chip" data-open-acct-load="${rec.id}" data-open-acct-route-text="${escapeHtml(r.route_id || "")}"${routeNumberAttr}${sourceTripAttr} title="Open this route's details">${escapeHtml(label)}</button>`;
       }).join("")}
     </div>`;
   }
@@ -561,7 +569,11 @@ export function renderDriverStatsTable() {
       table.addEventListener("click", (e) => {
         const openBtn = e.target.closest("[data-open-acct-load]");
         if (!openBtn) return;
-        const openArgs = [openBtn.dataset.openAcctLoad, openBtn.dataset.openAcctTrip || null, openBtn.dataset.openAcctRouteText || null];
+        // Prefer the exact loads_trips id the chip carries. Falling back to
+        // route_id text opened whichever route happened to be named the same
+        // first -- wrong whenever a load has two routes sharing a name.
+        const exactTripDbId = openBtn.dataset.openAcctTrip || openBtn.dataset.acctSourceTrip || null;
+        const openArgs = [openBtn.dataset.openAcctLoad, exactTripDbId, openBtn.dataset.openAcctRouteText || null];
         const rec = accountingRecords.find((r) => r.id == openBtn.dataset.openAcctLoad);
         const shiftIncomplete = rec && rec.source_shift_id && acctShiftCompleteById[rec.source_shift_id] === false;
         if (shiftIncomplete) {
