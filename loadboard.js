@@ -1506,9 +1506,16 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // since logChange() skips logging that case entirely now.
   function fromToPhrase(label, ov, nv, prefix) {
     prefix = prefix || "";
+    // `label` is escaped like every other value here. Most callers pass a
+    // hard-coded string, but the default: branch below derives it from
+    // load_change_history.field_name -- a free-text column any signed-in user
+    // can write straight from the console. Unescaped, that column was a stored
+    // XSS: the History tab renders this string as HTML, so a crafted field_name
+    // ran in the session of whoever opened that load next, including an admin.
+    const safeLabel = escapeHtml(label);
     const boldNv = `<strong>${prefix}${escapeHtml(nv)}</strong>`;
-    if (!ov) return `${label} set to ${boldNv}`;
-    return `${label} changed from ${prefix}${escapeHtml(ov)} to ${boldNv}`;
+    if (!ov) return `${safeLabel} set to ${boldNv}`;
+    return `${safeLabel} changed from ${prefix}${escapeHtml(ov)} to ${boldNv}`;
   }
 
   // Returns a small HTML string (not plain text) — the changed value
