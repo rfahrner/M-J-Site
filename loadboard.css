@@ -1161,12 +1161,59 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
 .field.has-error .field-error { display: block; }
 #available-section { margin-top: 100px; padding-bottom: 40px; }
 .available-title { font-size: 16px; margin: 0 0 4px 0; }
+/* Five rows, then scroll.
+   The list is a working reference a dispatcher scans while on the phone, so it
+   should not push the rest of the page down as it fills up. Capping the height
+   keeps the page stable; the header stays put so the columns are still
+   readable once you are scrolling. Fewer than five rows and the box simply
+   shrinks to fit -- max-height, not height. */
+.available-scroll {
+  /* Measured against the real stylesheet rather than estimated: a row renders
+     at 37px (12px padding + the 22px notes field + a 1px border, rounded up by
+     the font metrics) and the header at 29px. Getting these wrong by 2px each
+     is what showed four rows instead of five. */
+  --avail-row-h: 37px;
+  --avail-head-h: 29px;
+  max-height: calc(var(--avail-head-h) + (5 * var(--avail-row-h)));
+  max-width: 1280px;
+  overflow-y: auto;
+  overflow-x: auto;
+  /* Reserve the scrollbar's width whether or not it is showing. Without this
+     every column shifts sideways the moment a fifth driver is added and the
+     scrollbar appears -- a visible jolt in a list people add to all day. */
+  scrollbar-gutter: stable;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fff;
+}
 table.available-table {
   border-collapse: collapse;
   width: 100%;
-  max-width: 900px;
+  /* 900px could not fit nine columns, so the phone numbers wrapped onto a
+     second line and every row grew to double height. */
+  min-width: 1180px;
   font-family: var(--font-ui);
 }
+/* The header has to survive scrolling, and needs its own background or the
+   rows show through it. */
+table.available-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+/* Nothing in these columns should ever wrap: a phone number, an MC number or a
+   dollar amount broken across two lines is harder to read and makes the row
+   twice as tall for no gain. */
+.available-table .col-cell,
+.available-table .col-dispatcherPhone,
+.available-table .col-mc,
+.available-table .col-rating,
+.available-table .col-availCarrierRate { white-space: nowrap; }
+.available-table .col-cell,
+.available-table .col-dispatcherPhone { min-width: 118px; }
+.available-table .col-email { min-width: 210px; }
+.available-table .col-mc { min-width: 84px; }
+.available-table .col-rating { min-width: 86px; }
 table.available-table thead th {
   background: var(--navy-950);
   color: #fff;
@@ -1183,8 +1230,8 @@ table.available-table td {
   font-size: 12.5px;
 }
 table.available-table tbody tr:nth-child(even) { background: #fbfcfe; }
-.col-availDriver { min-width: 200px; }
-.col-availCarrierRate { min-width: 100px; }
+.col-availDriver { min-width: 190px; }
+.col-availCarrierRate { min-width: 104px; }
 .col-availNotes { min-width: 240px; }
 .col-availNotes textarea { display: block; box-sizing: border-box; width: 100%; min-height: 22px; line-height: 16px; resize: none; overflow: hidden; }
 .col-availRemove { width: 32px; }
