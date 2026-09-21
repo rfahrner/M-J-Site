@@ -808,6 +808,7 @@ tr.is-new td.pin { background-color: rgba(192,54,44,0.22) !important; }
    in one shot, driven by a class toggled on <table class="board">. */
 table.board .col-schneider { min-width: 105px; }
 table.board.hide-col-schneider .col-schneider,
+table.board.hide-col-carrierRate .col-carrierRate,
 table.board.hide-col-cell .col-cell,
 table.board.hide-col-dispatcherPhone .col-dispatcherPhone,
 table.board.hide-col-email .col-email,

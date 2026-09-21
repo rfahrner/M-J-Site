@@ -700,6 +700,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   };
 
   const DRIVER_INFO_COLS = [
+    { key: "carrierRate", label: "Carrier Rate", location: "atlanta" },
     { key: "schneider", label: "Schneider", location: "delaware" },
     { key: "cell", label: "Cell" },
     { key: "dispatcherPhone", label: "Dispatcher Phone" },
@@ -724,6 +725,13 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // Mondelez), there's no mileage-tier structure, so normalRate IS the
   // rate. This is the single place that distinction gets made, so the
   // sort and the displayed column can never disagree with each other.
+  function atlantaCarrierRateLabel(driver) {
+    if (!driver) return "";
+    const tier = (getBoardRateTiers()?.atlanta || []).find(t => t.min === 61 && t.max === 140);
+    if (!tier) return "";
+    return fmtRateMoney(driver.atlantaRateOverrides?.tiers?.[tier.id] ?? tier.rate);
+  }
+
   function getDriverDisplayRate(d) {
     if (state.driverListTab === "atlanta") {
       const tiers = (getBoardRateTiers() && getBoardRateTiers().atlanta) || [];
@@ -2298,6 +2306,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           ${row.loadCancelled ? `<span title="${escapeHtml(row.loadCancelledReason || "")}" style="display:inline-block; margin-left:4px; padding:1px 6px; border-radius:4px; background:#475569; color:#fff; font-size:10px; font-weight:700; white-space:nowrap; vertical-align:middle;">LOAD CANCELLED</span>` : ""}
         </div>
       </td>
+      ${row.location === "atlanta" ? `<td class="col-carrierRate"${rs} title="Carrier's 61–140 MI rate"><span class="static-text">${escapeHtml(atlantaCarrierRateLabel(drv))}</span></td>` : ""}
         <td class="col-rate"${rs}>
           <input class="cell-input small" style="width:46px;" placeholder="Rate" data-row="${row.id}" data-field="rate" value="${escapeHtml(row.rate)}">
       </td>
@@ -2496,6 +2505,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         <th class="col-rating">Rating</th>
         <th class="col-driverPreference">Driver Preference</th>
         <th class="pin pin-driver board-sortable" data-board-sort="driverName">Driver<span class="sort-arrow"></span></th>
+        ${state.activeLocation === "atlanta" ? `<th class="col-carrierRate" title="Carrier's 61–140 MI rate">Carrier Rate</th>` : ""}
         <th class="col-rate">Rate</th>
         <th class="col-cell">Cell</th>
         <th class="col-shiftStart board-sortable" data-board-sort="shiftStart">Shift Start<span class="sort-arrow"></span></th>
@@ -2510,7 +2520,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         <th class="col-trip-actions"></th>
       </tr>
     </thead>`;
-    const totalCols = 20 + getOrderedTripSubcols().length + 1 + (["buildingc", "delaware"].includes(state.activeLocation) ? 1 : 0);
+    const totalCols = 20 + getOrderedTripSubcols().length + 1 + (["atlanta", "buildingc", "delaware"].includes(state.activeLocation) ? 1 : 0);
     const addRowHtml = `<tr class="quick-add-row"><td colspan="${totalCols}">
       <button type="button" class="quick-add-btn" id="btn-quick-add-row"><span class="quick-add-btn-label">+ Add Row</span></button>
       <button type="button" class="quick-add-btn quick-add-btn-secondary" id="btn-add-time-slots"><span class="quick-add-btn-label">+ Add Time Slots</span></button>
@@ -2558,6 +2568,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     setText(".col-mc .static-text", pick(drv && drv.mc, row.mcSnapshot));
     setText(".col-rating .static-text", pick(drv && drv.rating, row.ratingSnapshot));
     setText(".col-driverPreference .static-text", (drv && drv.preference) || "");
+    setText(".col-carrierRate .static-text", atlantaCarrierRateLabel(drv));
   }
 
   function recalcRowCalcCellsInPlace(rowId) {
