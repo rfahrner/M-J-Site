@@ -1160,7 +1160,7 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
 .field.has-error input, .field.has-error select { border-color: var(--red-600); }
 .field.has-error .field-error { display: block; }
 #available-section { margin-top: 100px; padding-bottom: 40px; }
-.available-title { font-size: 16px; margin: 0 0 4px 0; }
+.available-title { font-size: 16px; margin: 0 0 10px 0; }
 /* Five rows, then scroll.
    The list is a working reference a dispatcher scans while on the phone, so it
    should not push the rest of the page down as it fills up. Capping the height
@@ -1174,8 +1174,15 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
      is what showed four rows instead of five. */
   --avail-row-h: 37px;
   --avail-head-h: 29px;
-  max-height: calc(var(--avail-head-h) + (5 * var(--avail-row-h)));
-  max-width: 1280px;
+  /* The box is border-box, so its 1px top and bottom borders come out of the
+     same budget as the rows. Without the +2px a list of exactly five drivers
+     overflows by two pixels and becomes scrollable when it should sit still. */
+  max-height: calc(var(--avail-head-h) + (5 * var(--avail-row-h)) + 2px);
+  /* Wide enough that the nine columns and the reserved scrollbar gutter all
+     fit without a sideways scroll on a normal screen -- at 1280px the last
+     column (the remove button) sat just past the edge. Narrower screens
+     still get overflow-x below. */
+  max-width: 1320px;
   overflow-y: auto;
   overflow-x: auto;
   /* Reserve the scrollbar's width whether or not it is showing. Without this
