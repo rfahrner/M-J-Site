@@ -78,7 +78,7 @@ function render(status) {
 
   const state = document.getElementById('image-backup-state');
   if (state) {
-    state.textContent = status.enabled ? 'Automatic backup active' : 'Tracking online · backup paused';
+    state.textContent = status.enabled ? 'Automatic backup active' : 'Tracking online · automatic transfer off';
     state.className = `image-backup-state ${status.enabled ? 'ok' : 'wait'}`;
   }
 
@@ -86,7 +86,7 @@ function render(status) {
   if (error) {
     error.textContent = status.enabled
       ? ''
-      : 'Storage tracking is working. Automatic transfer remains paused until the Microsoft service connection is configured and verified.';
+      : 'Storage tracking is working. Use Export to your computer below, then upload the Archive folder to OneDrive manually. No Microsoft connection to this site is needed for local export.';
     error.classList.toggle('hidden', !!status.enabled);
   }
 }

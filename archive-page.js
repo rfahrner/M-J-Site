@@ -584,7 +584,7 @@ async function runExport() {
       supabase_deleted: false,
     }, null, 2) + "\n");
 
-    statusEl.textContent = `Export complete: ${total.toLocaleString()} loads confirmed in the local archive — ${exportedCount.toLocaleString()} written this run, ${skippedCount.toLocaleString()} already complete and skipped. In File Explorer, open ${selectedLabel}\\Archive. Nothing was deleted from Supabase.`;
+    statusEl.textContent = `Export complete: ${total.toLocaleString()} loads confirmed in the local archive — ${exportedCount.toLocaleString()} written this run, ${skippedCount.toLocaleString()} already complete and skipped. In File Explorer, open ${selectedLabel}\\Archive. Next: open OneDrive in your browser and upload this Archive folder. Wait for the upload to finish and verify the uploaded files before confirming any purge. Nothing was deleted from Supabase.`;
   } catch (error) {
     if (error?.name === "AbortError") {
       statusEl.textContent = `Export cancelled after ${(exportedCount + skippedCount).toLocaleString()} of ${total.toLocaleString()} loads. Nothing was changed in Supabase. Re-running picks up where this left off.`;

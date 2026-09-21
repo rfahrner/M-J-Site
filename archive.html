@@ -29,7 +29,7 @@
     <div class="toolbar" style="padding:0 0 12px; border:0;">
       <div class="toolbar-left">
         <h1 style="margin:0;">Historical Load Archive</h1>
-        <div class="subtext">Admin/IT only. Export complete records older than six months from every active customer/location to a local folder.</div>
+        <div class="subtext">Admin/IT only. Export records to your computer, then upload the folder to OneDrive in your browser. No Microsoft connection to this site is needed.</div>
       </div>
     </div>
 
@@ -37,7 +37,15 @@
       Exporting itself is non-destructive. After a successful export, you can optionally confirm that the OneDrive copy was uploaded and verified, then purge only the exact records included in that export. Analytics history is preserved before deletion.
     </div>
 
-    <div class="archive-panel">
+    <div class="archive-panel" id="manual-archive">
+      <h2 style="margin-top:0;">Export to your computer</h2>
+      <ol>
+        <li>Choose the cutoff date below and refresh the preview. Only loads before that date are included.</li>
+        <li>Click <strong>Choose Local Folder &amp; Export</strong> and select a regular folder, such as Documents / Dispatch Archive.</li>
+        <li>After export completes, open OneDrive in your browser, sign in to your own account, and upload the generated <strong>Archive</strong> folder.</li>
+        <li>Wait for the upload to finish and open the uploaded files to verify them before using the optional purge.</li>
+      </ol>
+      <p class="subtext">Use desktop Chrome or Edge for folder export. Keep this tab open until export finishes. This site cannot verify your manual OneDrive upload.</p>
       <div class="field" style="max-width:260px;">
         <label for="archive-cutoff">Archive loads before</label>
         <input type="date" id="archive-cutoff" class="cell-input">
@@ -45,7 +53,7 @@
       </div>
       <div class="archive-actions">
         <button class="btn btn-ghost" id="archive-preview">Refresh Preview</button>
-        <button class="btn" id="archive-export" disabled>Choose Folder &amp; Export</button>
+        <button class="btn" id="archive-export" disabled>Choose Local Folder &amp; Export</button>
         <a class="btn btn-ghost" href="index.html">Back to Dispatch</a>
       </div>
       <div id="archive-status" class="archive-status"></div>
