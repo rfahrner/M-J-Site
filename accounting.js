@@ -207,7 +207,27 @@ let accountingRecords = [];
     const showLevels = LOCATIONS_WITH_LEVELS.includes(rec.location);
     const showRoutesInstead = LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST.includes(rec.location);
     const showFsc = !showRoutesInstead && !LOCATIONS_WITHOUT_FSC.includes(rec.location);
-    const levelOptions = (selected) => [1, 2, 3, 4].map((n) => `<option value="${n}" ${n === selected ? "selected" : ""}>${n}${n === 4 ? " (Market)" : ""}</option>`).join("");
+    /*
+     * Say what each level MEANS. These read "1", "2", "3", "4 (Market)", which
+     * is unreadable for the one decision this dropdown exists to make: whether
+     * a load bills at Kroger Core or at the higher KR Holiday rate.
+     *
+     * Level 3 is deliberately absent. pricing_settings describes it as
+     * "currently unused, no tiers configured", and picking it used to bill zero
+     * linehaul revenue. An option that silently empties a customer rate should
+     * not be offered; if it is ever configured, add it back here.
+     *
+     * Anything not in this list -- an older record still carrying some other
+     * value -- is shown as-is and kept selectable, so opening the dropdown can
+     * never quietly re-bill a load just by rendering it.
+     */
+    const REVENUE_LEVELS = [[1, "1 — Kroger Core"], [2, "2 — KR Holiday"], [4, "4 — Market"]];
+    const COST_LEVELS = [[1, "1 — Carrier Core"], [2, "2 — Carrier Core Plus"], [3, "3 — Carrier Holiday"]];
+    const levelSelect = (choices, selected) => {
+      const known = choices.some(([n]) => n === Number(selected));
+      const all = known ? choices : [...choices, [Number(selected), `${selected} (not configured)`]];
+      return all.map(([n, label]) => `<option value="${n}"${n === Number(selected) ? " selected" : ""}>${escapeHtml(label)}</option>`).join("");
+    };
     const dayTypeOptions = ["weekday", "weekend", "holiday"].map((d) => `<option value="${d}" ${d === (rec.day_type || "weekday") ? "selected" : ""}>${d[0].toUpperCase() + d.slice(1)}</option>`).join("");
     const ms = acctMilesStopsHtml(rec);
     const isDimmed = rec.hidden || rec.status === "released";
@@ -229,8 +249,8 @@ let accountingRecords = [];
       <td>${escapeHtml(rec.driver_name_text || "—")}${isCancelled ? `<div class="subtext" style="text-decoration:none; color:var(--slate-500);">Cancelled — ${escapeHtml(rec.cancelled_reason || "no reason recorded")}</div>` : ""}</td>
       <td>${escapeHtml(rec.mc_dot || "—")}</td>
       ${showLevels ? `
-      <td><select class="cell-input" data-action="acct-cost-level" data-id="${rec.id}">${levelOptions(rec.cost_level)}</select></td>
-      <td><select class="cell-input" data-action="acct-revenue-level" data-id="${rec.id}">${levelOptions(rec.revenue_level)}</select></td>` : ""}
+      <td><select class="cell-input" data-action="acct-cost-level" data-id="${rec.id}" title="What D&L pays the carrier">${levelSelect(COST_LEVELS, rec.cost_level ?? 1)}</select></td>
+      <td><select class="cell-input" data-action="acct-revenue-level" data-id="${rec.id}" title="What Kroger is billed. Core unless this load ran at holiday rates.">${levelSelect(REVENUE_LEVELS, rec.revenue_level ?? 1)}</select></td>` : ""}
       ${showLevels ? `<td>${acctRouteIdsHtml(rec)}</td>` : ""}
       ${showRoutesInstead ? `<td>${acctRoutesChipsHtml(rec)}</td>` : ""}
       <td>${ms.miles}</td>
