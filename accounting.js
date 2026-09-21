@@ -190,7 +190,7 @@ let accountingRecords = [];
       <th>Aljex #</th>
       <th>Driver</th>
       <th>MC</th>
-      ${showLevels ? `<th>Cost Level</th><th>Revenue Level</th>` : ""}
+      ${showLevels ? `<th>Cost Level</th><th>Revenue Rate</th>` : ""}
       ${showLevels ? `<th>Routes</th>` : ""}
       ${showRoutesInstead ? `<th>Routes</th>` : ""}
       <th>Total Miles</th>
@@ -221,7 +221,7 @@ let accountingRecords = [];
      * value -- is shown as-is and kept selectable, so opening the dropdown can
      * never quietly re-bill a load just by rendering it.
      */
-    const REVENUE_LEVELS = [[1, "1 — Kroger Core"], [2, "2 — KR Holiday"], [4, "4 — Market"]];
+    const REVENUE_LEVELS = [[1, "1 — Kroger Core"], [2, "2 — KR Holiday"]];
     const COST_LEVELS = [[1, "1 — Carrier Core"], [2, "2 — Carrier Core Plus"], [3, "3 — Carrier Holiday"]];
     const levelSelect = (choices, selected) => {
       const known = choices.some(([n]) => n === Number(selected));
@@ -250,7 +250,7 @@ let accountingRecords = [];
       <td>${escapeHtml(rec.mc_dot || "—")}</td>
       ${showLevels ? `
       <td><select class="cell-input" data-action="acct-cost-level" data-id="${rec.id}" title="What D&L pays the carrier">${levelSelect(COST_LEVELS, rec.cost_level ?? 1)}</select></td>
-      <td><select class="cell-input" data-action="acct-revenue-level" data-id="${rec.id}" title="What Kroger is billed. Core unless this load ran at holiday rates.">${levelSelect(REVENUE_LEVELS, rec.revenue_level ?? 1)}</select></td>` : ""}
+      <td><select class="cell-input" data-action="acct-revenue-level" data-id="${rec.id}" ${isCancelled ? "disabled" : ""} title="What Kroger is billed. Core unless this load ran at holiday rates.">${levelSelect(REVENUE_LEVELS, rec.revenue_level ?? 1)}</select></td>` : ""}
       ${showLevels ? `<td>${acctRouteIdsHtml(rec)}</td>` : ""}
       ${showRoutesInstead ? `<td>${acctRoutesChipsHtml(rec)}</td>` : ""}
       <td>${ms.miles}</td>
@@ -350,6 +350,21 @@ export function renderDriverStatsTable() {
     renderAcctDateChrome();
     renderAccountingTable();
   }
+  async function changeAccountingRevenueRate(accountingId, level) {
+    try {
+      const { data, error } = await supabaseClient.rpc("set_accounting_revenue_rate", {
+        p_accounting_id: Number(accountingId), p_level: level,
+      });
+      if (error) throw error;
+      if (!data) throw new Error("Revenue rate was not saved.");
+      const rec = accountingRecords.find(r => Number(r.id) === Number(accountingId));
+      if (rec) Object.assign(rec, data);
+    } catch (e) {
+      setDriverSyncStatus(`Couldn't change Revenue Rate (${e.message || e}).`, "error");
+    }
+    renderAccountingTable();
+  }
+
   export async function recalcAccountingRecord(accountingId, patch) {
     accountingId = Number(accountingId);
     const rec = accountingRecords.find((r) => Number(r.id) === accountingId);
@@ -472,7 +487,10 @@ export function renderDriverStatsTable() {
       table.addEventListener("change", (e) => {
         const t = e.target;
         if (t.dataset.action === "acct-cost-level") recalcAccountingRecord(t.dataset.id, { cost_level: Number(t.value) });
-        else if (t.dataset.action === "acct-revenue-level") recalcAccountingRecord(t.dataset.id, { revenue_level: Number(t.value) });
+        else if (t.dataset.action === "acct-revenue-level") {
+          t.disabled = true;
+          changeAccountingRevenueRate(t.dataset.id, Number(t.value));
+        }
         else if (t.dataset.action === "acct-hidden") {
           const rec = accountingRecords.find((r) => r.id == t.dataset.id);
           if (!rec) return;

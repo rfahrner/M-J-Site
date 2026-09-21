@@ -5,7 +5,7 @@
  * dollar fields remain normal editable Accounting fields after they arrive.
  * "Applied" is informational only and is derived from the SAME rate inputs
  * the load board used: Base rate / Daily Rate / Driver Rate / Carrier rate.
- * Day Type and the old Revenue Level mechanic are no longer shown.
+ * Revenue Rate selects Core or Holiday customer pricing. Day Type is hidden.
  */
 import { supabaseClient } from './loadboard.js';
 import { getAccountingRecordById } from './accounting.js';
@@ -56,7 +56,6 @@ function normalizeHeader() {
     cost.title = 'Rate source that was applied on the load board';
   }
 
-  removeHeaderByText(headRow, 'Revenue Level');
   removeHeaderByText(headRow, 'Day Type');
 }
 
@@ -73,8 +72,6 @@ function normalizeRow(row) {
   const rec = getAccountingRecordById(id);
   if (!rec) return;
 
-  // Old Revenue Level is gone.
-  row.querySelector('[data-action="acct-revenue-level"]')?.closest('td')?.remove();
 
   // Applied is display-only. It reports what actually won on the board and
   // intentionally has no dropdown or change handler.

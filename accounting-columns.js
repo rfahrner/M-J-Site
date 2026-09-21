@@ -78,6 +78,8 @@ function ensureRateColumnOrder() {
   if (customerHeader.nextElementSibling !== carrierHeader) {
     headRow.insertBefore(customerHeader, carrierHeader);
   }
+  const revenueHeader = headers.find(th => th.textContent.trim() === 'Revenue Rate');
+  if (revenueHeader && revenueHeader.nextElementSibling !== customerHeader) headRow.insertBefore(revenueHeader, customerHeader);
 
   body.querySelectorAll('tr[id^="acct-"]').forEach((row) => {
     const carrierInput = row.querySelector('[data-action="acct-carrier-pay"]');
@@ -95,6 +97,8 @@ function ensureRateColumnOrder() {
     if (customerCell.nextElementSibling !== carrierCell) {
       row.insertBefore(customerCell, carrierCell);
     }
+    const revenueCell = row.querySelector('[data-action="acct-revenue-level"]')?.closest('td');
+    if (revenueCell && revenueCell.nextElementSibling !== customerCell) row.insertBefore(revenueCell, customerCell);
   });
 
   const emptyCell = body.querySelector('tr:not([id^="acct-"]) > td[colspan]');
