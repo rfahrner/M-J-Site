@@ -37,18 +37,34 @@
         import('./loadboard.js'),
       ]);
 
-      // Re-scan so the button is resolved against the same live alert rules
-      // that created it, rather than trying to reconstruct recipients/message
-      // from DOM text.
-      const alerts = await alertsModule.scanForBoardAlerts();
-      const alert = (alerts || []).find((item) => item.key === key);
+      // The alert the widget is already showing. This used to re-run
+      // scanForBoardAlerts() -- a full database scan -- on every click, and
+      // return silently when the re-scan came back without this key, so the
+      // button did nothing at all and said nothing about why. The widget holds
+      // the object the button was rendered from; ask it.
+      let alert = alertsModule.getBoardAlert(key);
+
+      // Only if the widget has somehow lost it (a redraw mid-click) is a scan
+      // worth the round trip.
+      if (!alert) {
+        const alerts = await alertsModule.scanForBoardAlerts();
+        alert = (alerts || []).find((item) => item.key === key) || null;
+      }
 
       if (!alert) {
         console.warn('Alert Text click could not resolve alert key:', key);
+        loadboardModule.setDriverSyncStatus(
+          "That alert is no longer current, so there's nothing to text. It will reappear if the load still needs attention.",
+          'error',
+        );
         return;
       }
       if (!Array.isArray(alert.recipients) || !alert.recipients.length) {
         console.warn('Alert Text click has no recipient:', key);
+        loadboardModule.setDriverSyncStatus(
+          'No phone number on file for this driver, so there is nobody to text.',
+          'error',
+        );
         return;
       }
 

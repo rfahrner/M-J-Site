@@ -52,6 +52,19 @@ import './paperwork-load-integration.js';
   // roll a tier into their key every interval, so the NEXT reminder is a new
   // key and still arrives on schedule -- this only silences the one that was
   // just acted on, it does not switch the rule off.
+  // The alert the widget is currently showing for this key.
+  //
+  // The Text button used to re-run scanForBoardAlerts() -- a fresh database
+  // scan -- on every click just to recover the alert it was rendered from, and
+  // silently did nothing when that scan came back without it. Anything that
+  // changed in between (a dispatcher entering an ETA, a slow query, a location
+  // switch, a repeating alert rolling to its next tier) turned a click into a
+  // no-op with nothing on screen to explain it. The object is right here.
+  export function getBoardAlert(key) {
+    if (!key) return null;
+    return boardAlerts.find((a) => a.key === String(key)) || null;
+  }
+
   export function dismissAlert(key) {
     if (!key) return;
     getDismissedAlertKeys().add(String(key));
@@ -310,8 +323,15 @@ import './paperwork-load-integration.js';
       const names = list.map((d) => d.driverName).join(", ");
       const withPhone = list.filter((d) => d.driverPhone);
       const recipients = withPhone.map((d) => ({ name: d.driverName, phone: d.driverPhone }));
+      // The key names WHICH drivers this alert is about, not just the shift
+      // time. Dismissing an alert silences its key for the rest of the day, and
+      // this one groups every driver due at that hour -- so texting the 23:00
+      // group would have permanently suppressed the 23:00 alert, and a driver
+      // who became due later would never have been flagged at all. Naming the
+      // shifts makes a different group a different alert.
+      const groupKey = [...new Set(list.map((d) => d.shiftDbId))].sort((a, b) => a - b).join("_");
       alerts.push({
-        key: `preshift-${shiftStartMin}`, type: "preshift_text", location: state.activeLocation,
+        key: `preshift-${shiftStartMin}-${groupKey}`, type: "preshift_text", location: state.activeLocation,
         message: `${list.length > 1 ? `${list.length} drivers` : names} due for a pre-shift check-in text — ${clockLabel} shift${list.length > 1 ? "s" : ""} (${names})`,
         recipients,
         actionMessage: `This is D&L Transportation, could we have an ETA for your ${clockLabel} kroger shift`,
