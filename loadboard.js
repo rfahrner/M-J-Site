@@ -5146,6 +5146,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
             <fieldset class="field-box${missCls("image")}" style="grid-column: span 2;"><legend>Image</legend>${rowImageDropzoneHtml(trip, trip.id)}</fieldset>
           </div>
           <div class="ld-edit-bar">
+            <button type="button" class="btn btn-danger" data-ld-delete-trip="${tripLocalId}"${(row.trips || []).length <= 1 ? ' disabled title="A load needs at least one route. Clear its fields instead."' : ' title="Permanently delete this route from the load"'}>Delete Route</button>
+            <span style="flex:1 1 auto;"></span>
             <button type="button" class="btn btn-ghost" data-ld-cancel="${tripLocalId}">Cancel</button>
             <button type="button" class="btn" data-ld-save="${tripLocalId}">Save</button>
           </div>
@@ -5206,6 +5208,39 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       };
     }
     renderLoadDetailsTabContent();
+  }
+
+  /*
+   * Permanently remove one route from the open load.
+   *
+   * deleteTrip() already owns the rules -- it names the route in its
+   * confirmation, says plainly that the load itself stays, refuses to remove a
+   * load's only route, logs the deletion, clears any debounced write still
+   * queued for that route, and recalculates the load's rate afterwards. This
+   * only has to hand it the right route and then repair the modal, which is
+   * currently displaying a tab that is about to stop existing.
+   */
+  async function deleteTripFromLoadDetails(tripLocalId) {
+    if (!loadDetailsState) return;
+    const rowId = loadDetailsState.rowId;
+    const found = findRowAnywhere(rowId);
+    if (!found) return;
+    const before = (found.row.trips || []).length;
+
+    await deleteTrip(rowId, tripLocalId);
+
+    // deleteTrip returns early when the user cancels the confirmation, or when
+    // this is the only route left. Nothing changed, so leave the modal alone.
+    const after = (found.row.trips || []).length;
+    if (after === before) return;
+
+    // The tab the modal was showing is gone. Drop the edit state and fall back
+    // to Overview rather than rendering a route that no longer exists.
+    loadDetailsState.editMode = null;
+    loadDetailsState.editDraft = null;
+    delete loadDetailsState.stopsByTrip[tripLocalId];
+    if (loadDetailsState.activeTab === `trip-${tripLocalId}`) loadDetailsState.activeTab = "overview";
+    renderLoadDetailsTabs();
   }
 
   export function cancelLoadDetailsEdit() {
@@ -6813,6 +6848,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         if (cancelBtn) cancelLoadDetailsEdit();
         const saveBtn = e.target.closest("[data-ld-save]");
         if (saveBtn) saveLoadDetailsEdit(saveBtn.dataset.ldSave);
+        const deleteTripBtn = e.target.closest("[data-ld-delete-trip]");
+        if (deleteTripBtn) deleteTripFromLoadDetails(deleteTripBtn.dataset.ldDeleteTrip);
         if (e.target.id === "ld-rate-reset") resetRateToCalculated();
         if (e.target.id === "ld-note-submit") submitLoadNote();
         if (e.target.id === "ld-hist-notes-save-all") saveAllHistoryNotes();
