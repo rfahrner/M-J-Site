@@ -97,8 +97,8 @@ function panelShell() {
   panel.innerHTML = `
     <div class="image-backup-head">
       <div>
-        <h2>Automatic Image Backup</h2>
-        <div class="subtext">Images stay in Supabase for 21 days, then move automatically to OneDrive / SharePoint in the background.</div>
+        <h2>Image Storage &amp; Optional Automatic Backup</h2>
+        <div class="subtext">For manual archiving, use <a href="#manual-archive">Export to your computer</a> below, then upload the folder in your own OneDrive browser session. Automatic image transfers are a separate option requiring a Microsoft service connection.</div>
       </div>
       <span class="image-backup-state wait" id="image-backup-state">Checking…</span>
     </div>
@@ -234,8 +234,8 @@ function renderStatus(status) {
   }
 
   if (!status.microsoft_configured) {
-    setState('Microsoft connection required', 'wait');
-    setError('Automatic deletion is safely paused until the one-time Microsoft service connection is configured. Nothing will be removed from Supabase before that connection is verified.');
+    setState('Automatic transfer off', 'wait');
+    setError('Local folder export is available below without connecting Microsoft. Upload the exported Archive folder to OneDrive manually. No automatic transfer is running.');
   } else if (!status.enabled) {
     setState('Ready, not enabled', 'wait');
     setError('Microsoft is connected, but the automatic archive is still paused. It must be enabled only after archived-image viewing has been verified.');
