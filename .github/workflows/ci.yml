@@ -55,6 +55,9 @@ jobs:
       - name: Test Archive dashboard observer
         run: node --test scripts/archive-capacity-observer.test.mjs
 
+      - name: Test Available list notes and carrier rates
+        run: node --test scripts/available-notes.test.mjs
+
       - name: Build site
         run: npm run build
 

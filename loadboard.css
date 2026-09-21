@@ -1184,6 +1184,9 @@ table.available-table td {
 }
 table.available-table tbody tr:nth-child(even) { background: #fbfcfe; }
 .col-availDriver { min-width: 200px; }
+.col-availCarrierRate { min-width: 100px; }
+.col-availNotes { min-width: 240px; }
+.col-availNotes textarea { width: 100%; min-height: 44px; resize: vertical; }
 .col-availRemove { width: 32px; }
 .available-remove-btn {
   border: none;

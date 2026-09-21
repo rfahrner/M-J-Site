@@ -2656,7 +2656,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       selector += ds.trip ? `[data-trip="${ds.trip}"]` : `:not([data-trip])`;
     }
     else if (ds.mdzRow && ds.mdzField) selector = `[data-mdz-row="${ds.mdzRow}"][data-mdz-field="${ds.mdzField}"]`;
-    else if (ds.availRow) selector = `[data-avail-row="${ds.availRow}"]`;
+    else if (ds.availRow) selector = `[data-avail-row="${ds.availRow}"][data-avail-field="${ds.availField || "driverName"}"]`;
     else if (el.id) selector = `#${el.id}`;
     if (!selector) return () => {};
     const selStart = typeof el.selectionStart === "number" ? el.selectionStart : null;
@@ -6468,9 +6468,11 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
      clearing needed, the date scoping does that on its own. ---------------- */
 
   export const AVAILABLE_TABLE = "board_available_drivers";
+  const dirtyAvailableFields = new Map();
+  const availableSavesInFlight = new Map();
 
   function blankAvailableRow() {
-    return { id: uid("avail"), dbId: null, driverId: null, driverName: "" };
+    return { id: uid("avail"), dbId: null, driverId: null, driverName: "", notes: "" };
   }
 
   function availableRowToDbRow(row, locationKey, dKey) {
@@ -6479,6 +6481,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       shift_date: dKey,
       driver_id: row.driverId ? Number(row.driverId) : null,
       driver_name: row.driverName || null,
+      notes: row.notes || "",
     };
   }
   function availableRowFromDbRow(dbRow) {
@@ -6487,6 +6490,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       dbId: dbRow.id,
       driverId: dbRow.driver_id != null ? String(dbRow.driver_id) : null,
       driverName: dbRow.driver_name || "",
+      notes: dbRow.notes || "",
     };
   }
 
@@ -6520,21 +6524,39 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   }
 
   async function saveAvailableRowNow(row, locationKey, dKey) {
+    const previous = availableSavesInFlight.get(row.id);
+    const saving = (previous || Promise.resolve()).then(() => persistAvailableRow(row, locationKey, dKey));
+    availableSavesInFlight.set(row.id, saving);
+    try { return await saving; }
+    finally { if (availableSavesInFlight.get(row.id) === saving) availableSavesInFlight.delete(row.id); }
+  }
+
+  async function persistAvailableRow(row, locationKey, dKey) {
     if (!supabaseClient) return null;
     try {
       const payload = availableRowToDbRow(row, locationKey, dKey);
+      const sent = snapshotDirtyFields(dirtyAvailableFields, row.id, row);
       if (row.dbId) {
-        const { error } = await supabaseClient.from(AVAILABLE_TABLE).update(payload).eq("id", row.dbId);
-        if (error) { console.error("Failed to save Available row:", error); return null; }
+        const fields = { driverName: "driver_name", driverId: "driver_id", notes: "notes" };
+        const changes = Object.fromEntries((sent || []).map(([key]) => [fields[key], payload[fields[key]]]));
+        if (!Object.keys(changes).length) return row.dbId;
+        const { error } = await supabaseClient.from(AVAILABLE_TABLE).update(changes).eq("id", row.dbId);
+        if (error) throw error;
+        confirmDirtyFieldsSaved(dirtyAvailableFields, row.id, sent, row);
         return row.dbId;
       }
+      row.pendingInsert = payload;
       const { data, error } = await supabaseClient.from(AVAILABLE_TABLE).insert(payload).select();
-      if (error) { console.error("Failed to create Available row:", error); return null; }
+      if (error) throw error;
       row.dbId = data[0].id;
+      confirmDirtyFieldsSaved(dirtyAvailableFields, row.id, sent, row);
       return row.dbId;
     } catch (e) {
       console.error("saveAvailableRowNow threw:", e);
+      setDriverSyncStatus(`Could not save Available list changes: ${e.message || e}`, "error");
       return null;
+    } finally {
+      delete row.pendingInsert;
     }
   }
 
@@ -6544,18 +6566,26 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     availableSaveTimers.set(row.id, setTimeout(() => saveAvailableRowNow(row, locationKey, dKey), SAVE_DEBOUNCE_MS));
   }
 
+  function availableCarrierRateLabel(driver, location) {
+    if (!driver) return "";
+    if (location === "atlanta" || location === "buildingc") return atlantaCarrierRateLabel(driver);
+    return driver.normalRate !== "" && driver.normalRate != null ? fmtRateMoney(Number(driver.normalRate)) : "";
+  }
+
   function availableRowHtml(row) {
     const drv = row.driverId ? findDriver(row.driverId) : null;
     const displayName = drv ? drv.name : row.driverName;
     return `<tr id="${row.id}">
       <td class="col-availDriver">
-        <input class="cell-input" data-driver-ac="true" placeholder="Type driver name…" data-avail-row="${row.id}" value="${escapeHtml(displayName)}">
+        <input class="cell-input" data-driver-ac="true" data-avail-field="driverName" placeholder="Type driver name…" data-avail-row="${row.id}" value="${escapeHtml(displayName)}">
       </td>
+      <td class="col-availCarrierRate"><span class="static-text">${escapeHtml(availableCarrierRateLabel(drv, state.activeLocation))}</span></td>
       <td class="col-cell"><span class="static-text">${escapeHtml(drv && drv.phone ? drv.phone : "—")}</span></td>
       <td class="col-dispatcherPhone"><span class="static-text">${escapeHtml(drv && drv.dispatcherPhone ? drv.dispatcherPhone : "—")}</span></td>
       <td class="col-email"><span class="static-text">${escapeHtml(drv && drv.email ? drv.email : "—")}</span></td>
       <td class="col-mc"><span class="static-text">${escapeHtml(drv && drv.mc ? drv.mc : "—")}</span></td>
       <td class="col-rating"><span class="static-text">${escapeHtml(drv && drv.rating ? drv.rating : "—")}</span></td>
+      <td class="col-availNotes"><textarea class="cell-input" data-avail-row="${row.id}" data-avail-field="notes" aria-label="Available driver notes" placeholder="Add a note…" rows="2">${escapeHtml(row.notes || "")}</textarea></td>
       <td class="col-availRemove"><button type="button" class="available-remove-btn" data-avail-remove="${row.id}" title="Remove">&times;</button></td>
     </tr>`;
   }
@@ -6583,6 +6613,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const drv = row.driverId ? findDriver(row.driverId) : null;
     const input = tr.querySelector("input[data-avail-row]");
     if (input && document.activeElement !== input) input.value = drv ? drv.name : row.driverName;
+    const notes = tr.querySelector('[data-avail-field="notes"]');
+    if (notes && document.activeElement !== notes) notes.value = row.notes || "";
+    const rate = tr.querySelector('.col-availCarrierRate .static-text');
+    if (rate) rate.textContent = availableCarrierRateLabel(drv, state.activeLocation);
     const setText = (selector, value) => {
       const el = tr.querySelector(selector);
       if (el) el.textContent = value || "—";
@@ -6673,13 +6707,18 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     // exact name so the echo cannot create a duplicate.
     const dbName = String(dbRow.driver_name || "").trim().toLowerCase();
     const existing = sheet.find((r) => r.dbId === dbRow.id) ||
+      sheet.find((r) => !r.dbId && r.pendingInsert &&
+        (r.pendingInsert.driver_name || "") === (dbRow.driver_name || "") &&
+        (r.pendingInsert.notes || "") === (dbRow.notes || "")) ||
       sheet.find((r) => !r.dbId && dbName && String(r.driverName || "").trim().toLowerCase() === dbName);
     if (existing) {
       const activeInput = document.activeElement;
       const editingThisRow = !!activeInput && activeInput.dataset && activeInput.dataset.availRow === existing.id;
       const preservedDriverName = existing.driverName;
       const preservedDriverId = existing.driverId;
-      Object.assign(existing, availableRowFromDbRow(dbRow), { id: existing.id });
+      const editingNotes = editingThisRow && activeInput.dataset.availField === "notes";
+      const fresh = dbFieldsSafeToApply(availableRowFromDbRow(dbRow), dirtyAvailableFields, existing.id, editingNotes ? "notes" : null);
+      Object.assign(existing, fresh, { id: existing.id });
       if (editingThisRow) {
         existing.driverName = preservedDriverName;
         existing.driverId = preservedDriverId;
@@ -6687,7 +6726,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (k === availableSheetKey(state.activeLocation, state.activeDate)) updateAvailableRowInPlace(existing);
     } else {
       // Drop the lone starting blank row once real data arrives, same as the board's own sheets do
-      const onlyBlank = sheet.length === 1 && !sheet[0].dbId && !sheet[0].driverName.trim();
+      const onlyBlank = sheet.length === 1 && !sheet[0].dbId && !sheet[0].driverName.trim() && !sheet[0].notes?.trim();
       if (onlyBlank) sheet.length = 0;
       sheet.push(availableRowFromDbRow(dbRow));
       if (k === availableSheetKey(state.activeLocation, state.activeDate)) {
@@ -6723,10 +6762,18 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (!t.dataset.availRow) return;
       const row = getAvailableSheet(state.activeLocation, state.activeDate).find((r) => r.id === t.dataset.availRow);
       if (!row) return;
+      if (t.dataset.availField === "notes") {
+        row.notes = t.value;
+        markFieldDirty(dirtyAvailableFields, row.id, "notes");
+        scheduleAvailableRowSave(row, state.activeLocation, state.activeDate);
+        return;
+      }
       row.driverName = t.value;
       row.driverId = null;
       const match = resolveDriverByName(t.value).driver;
       if (match) row.driverId = match.id;
+      markFieldDirty(dirtyAvailableFields, row.id, "driverName");
+      markFieldDirty(dirtyAvailableFields, row.id, "driverId");
       scheduleAvailableRowSave(row, state.activeLocation, state.activeDate);
       if (t.dataset.driverAc === "true") updateDriverAutocomplete(t, state.activeLocation);
     });
@@ -6740,7 +6787,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         if (row) {
           row.driverName = drv.name;
           row.driverId = drv.id;
+          markFieldDirty(dirtyAvailableFields, row.id, "driverName");
+          markFieldDirty(dirtyAvailableFields, row.id, "driverId");
           scheduleAvailableRowSave(row, state.activeLocation, state.activeDate);
+          updateAvailableRowInPlace(row);
         }
       });
     });
@@ -6748,7 +6798,8 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       const t = e.target;
       if (!t.dataset.availRow) return;
       if (t.dataset.driverAc === "true") closeDriverAutocomplete();
-      renderAvailableTable(); // refresh the driver-linked columns now that typing is done, without disrupting the datalist mid-type
+      const row = getAvailableSheet(state.activeLocation, state.activeDate).find(r => r.id === t.dataset.availRow);
+      if (row) updateAvailableRowInPlace(row);
     });
   }
 
