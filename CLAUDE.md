@@ -231,6 +231,26 @@ carry both as `data-acct-route-number` / `data-acct-source-trip`;
 them. Matching on the text is a last-resort fallback for rows old enough to
 predate `route_number`, and only when the name is unambiguous.
 
+## Accounting revenue levels
+
+Customer billing comes from `pricing_tiers`: `revenue_1` is Kroger Core
+(309/365), `revenue_2` is KR Holiday (412/459). Which one a load uses is a
+per-load decision made from the **Revenue Level dropdown on the Accounting
+page**, which recalculates that record's routes through `calcRoute()`.
+
+`auto_send_shifts_to_accounting()` prices everything from `revenue_1` and stamps
+`revenue_level = 1` to match. It used to stamp 99, which matched no pricing
+table -- and `calcRoute()` answered an unknown level with ZERO linehaul revenue,
+so recalculating such a record billed stop charges alone. Both halves are fixed:
+the trigger stamps the level it actually used, and `calcRoute()` falls back to
+level 1 with a console warning rather than billing nothing. If a level is ever
+added, configure its tiers before offering it in the dropdown -- level 3 is
+deliberately not offered because `pricing_settings` marks it unconfigured.
+
+`loads_shifts.rev_level` exists, is mapped through `shiftToDbRow`, has a hidden
+board column, and is read by nothing. It is null on every shift. Either wire it
+up or remove it; do not assume it carries the level.
+
 ## Database rules worth preserving
 
 - `loads_shifts` = standard board shifts.

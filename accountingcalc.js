@@ -62,8 +62,19 @@ import { supabaseClient, SHIFTS_TABLE } from './loadboard.js';
     if (revenueLevel === 4) {
       revenue = (contractRate || 0) / (settings.market_revenue_divisor || 1);
     } else {
-      const revTable = tiers[`revenue_${revenueLevel}`];
-      const revPerMile = settings[`revenue_${revenueLevel}_per_mile`] || 0;
+      // A revenue level with neither a tier table nor a per-mile rate used to
+      // fall all the way through to zero linehaul revenue -- an 84.9-mile route
+      // billed $100 of stop charges instead of $465, with no error anywhere.
+      // Every auto-created record carried revenue_level 99 for exactly that
+      // reason, so touching any other field on such a row would have wiped its
+      // customer rate. Bill the documented default instead of billing nothing.
+      let level = revenueLevel;
+      if (!tiers[`revenue_${level}`] && !settings[`revenue_${level}_per_mile`]) {
+        console.warn(`Revenue level ${level} has no pricing configured — billing at level 1 instead.`);
+        level = 1;
+      }
+      const revTable = tiers[`revenue_${level}`];
+      const revPerMile = settings[`revenue_${level}_per_mile`] || 0;
       revenue = tierLookup(revTable, miles);
       if (revenue === null) revenue = revPerMile ? miles * revPerMile : 0;
     }
