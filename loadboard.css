@@ -664,6 +664,9 @@ tr.quick-add-row td { background: var(--slate-100) !important; padding: 0; borde
   border-radius: var(--radius-sm);
   color: var(--navy-950);
 }
+.acct-driver-sort { border: 0; padding: 0; background: transparent; color: inherit; font: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer; }
+.acct-driver-sort:hover { text-decoration: underline; }
+.acct-driver-sort:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 .cell-input:hover { border-color: var(--line); }
 .cell-input:focus {
   outline: none;

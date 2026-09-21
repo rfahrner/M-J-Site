@@ -12,6 +12,17 @@ import {
 import { ACCOUNTING_TABLE, ACCOUNTING_ROUTES_TABLE, loadPricingData, calcRoute, getPricingTiers, getPricingSettings } from './accountingcalc.js';
 import { releaseToAljex } from './aljex-outbox.js';
 let accountingRecords = [];
+  let accountingDriverSort = 0;
+  function compareAccountingDriverNames(a, b) {
+    const left = String(a || "").trim();
+    const right = String(b || "").trim();
+    if (!left || !right) return left ? -1 : right ? 1 : 0;
+    return accountingDriverSort * left.localeCompare(right, "en", { sensitivity: "base", numeric: true });
+  }
+  function accountingDriverHeaderHtml() {
+    const label = accountingDriverSort === 1 ? "A–Z" : accountingDriverSort === -1 ? "Z–A" : "↕";
+    return `<button type="button" class="acct-driver-sort" data-acct-driver-sort title="Sort drivers alphabetically">Driver ${label}</button>`;
+  }
   // Date descending (most recent first), then status within the same date
   // — active loads before released ones, since those are the ones more
   // likely to still need attention.
@@ -188,7 +199,7 @@ let accountingRecords = [];
     return `<tr>
       <th>Date</th>
       <th>Aljex #</th>
-      <th>Driver</th>
+      <th aria-sort="${accountingDriverSort === 1 ? "ascending" : accountingDriverSort === -1 ? "descending" : "none"}">${accountingDriverHeaderHtml()}</th>
       <th>MC</th>
       ${showLevels ? `<th>Cost Level</th><th>Revenue Rate</th>` : ""}
       ${showLevels ? `<th>Routes</th>` : ""}
@@ -278,6 +289,7 @@ let accountingRecords = [];
     let filtered = accountingRecords.filter((r) => r.location === loc);
     if (state.acctDateFilter) filtered = filtered.filter((r) => r.shift_date === state.acctDateFilter);
     if (!state.acctShowHidden) filtered = filtered.filter((r) => !r.hidden);
+    if (accountingDriverSort) filtered.sort((a, b) => compareAccountingDriverNames(a.driver_name_text, b.driver_name_text) || acctSortCompare(a, b));
     return filtered;
   }
 
@@ -326,7 +338,12 @@ export function renderDriverStatsTable() {
       d.revenue += Number(r.total_revenue) || 0;
       d.carrierPay += Number(r.total_carrier_pay) || 0;
     });
-    const rows = Object.values(byDriver).sort((a, b) => b.loads - a.loads);
+    const rows = Object.values(byDriver).sort((a, b) => accountingDriverSort ? compareAccountingDriverNames(a.name, b.name) : b.loads - a.loads);
+    const driverHeader = document.querySelector('#accounting-driver-table thead th');
+    if (driverHeader) {
+      driverHeader.innerHTML = accountingDriverHeaderHtml();
+      driverHeader.setAttribute('aria-sort', accountingDriverSort === 1 ? 'ascending' : accountingDriverSort === -1 ? 'descending' : 'none');
+    }
     body.innerHTML = rows.length
       ? rows.map((d) => `<tr>
           <td>${escapeHtml(d.name)}</td>
@@ -451,6 +468,13 @@ export function renderDriverStatsTable() {
       });
     }
     on("acct-show-all", "click", () => setAcctDateFilter(null));
+    for (const selector of ["#accounting-table", "#accounting-driver-table"]) {
+      $(selector)?.addEventListener("click", e => {
+        if (!e.target.closest("[data-acct-driver-sort]")) return;
+        accountingDriverSort = accountingDriverSort === 1 ? -1 : 1;
+        renderAccountingTable();
+      });
+    }
     if ($("#btn-show-hidden")) {
       $("#btn-show-hidden").addEventListener("click", () => {
         state.acctShowHidden = !state.acctShowHidden;
