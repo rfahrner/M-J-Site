@@ -251,6 +251,21 @@ button {
   border: 1px solid var(--red-600);
 }
 .btn-danger-outline:hover { background: var(--red-bg); }
+/* Solid red, for an action that destroys something. Deliberately louder than
+   the outline variant: this is the button that permanently removes a route. */
+.btn-danger {
+  background: var(--red-600, #dc2626);
+  color: #fff;
+  border: 1px solid var(--red-600, #dc2626);
+}
+.btn-danger:hover:not(:disabled) { background: #b91c1c; border-color: #b91c1c; }
+.btn-danger:disabled {
+  background: #fff;
+  color: var(--slate-500, #64748b);
+  border-color: var(--line);
+  opacity: .7;
+  cursor: not-allowed;
+}
 /* Columns visibility panel */
 .columns-panel {
   position: absolute;
