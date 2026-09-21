@@ -127,7 +127,7 @@ async function fetchAtlantaRouteIds() {
       const ids = missingIds.slice(i, i + 150);
       const { data, error } = await supabaseClient
         .from(ACCOUNTING_ROUTES_TABLE)
-        .select('accounting_id,route_number,route_id,trip_id')
+        .select('accounting_id,route_number,route_id,trip_id,source_trip_id')
         .in('accounting_id', ids);
       if (error) throw error;
 
@@ -148,6 +148,31 @@ async function fetchAtlantaRouteIds() {
   }
 }
 
+/*
+ * The accounting route a chip stands for.
+ *
+ * route_id is a free-text route NAME and is routinely repeated inside a single
+ * load -- two "FRGT" routes, two "Nestle" routes. Matching on it returned the
+ * first one every time, which is why the Trip ID column showed the same number
+ * against two different routes while the database held the right ones, and why
+ * the completion pill beside the second route described the first.
+ *
+ * route_number is unique within the load, so it is tried first. The positional
+ * fallback is sound because both arrays are sorted by route_number. Matching on
+ * the text is last and only helps genuinely old rows that predate route_number.
+ */
+function routeForChip(routes, button, index) {
+  if (!Array.isArray(routes) || !routes.length) return null;
+  const wantedNumber = String(button.dataset.acctRouteNumber || '').trim();
+  if (wantedNumber) {
+    const byNumber = routes.find((r) => String(r.route_number ?? '').trim() === wantedNumber);
+    if (byNumber) return byNumber;
+  }
+  if (routes[index]) return routes[index];
+  const routeId = String(button.dataset.openAcctRouteText || '').trim();
+  return routes.find((r) => String(r.route_id || '').trim() === routeId) || null;
+}
+
 function applyAtlantaTripIds() {
   if (activeLocation() !== 'atlanta') return;
   document.querySelectorAll('#accounting-table-body tr[id^="acct-"]').forEach((row) => {
@@ -157,8 +182,7 @@ function applyAtlantaTripIds() {
 
     const buttons = [...row.querySelectorAll('[data-open-acct-route-text]')];
     buttons.forEach((button, index) => {
-      const routeId = String(button.dataset.openAcctRouteText || '').trim();
-      const route = routes.find((candidate) => String(candidate.route_id || '').trim() === routeId) || routes[index];
+      const route = routeForChip(routes, button, index);
       const tripId = String(route?.trip_id || '').trim();
       if (button.textContent !== (tripId || '—')) button.textContent = tripId || '—';
       button.title = tripId ? 'Open this trip\'s details' : 'Trip ID was not recorded for this older route';
@@ -210,15 +234,37 @@ function setPillState(button, good, title) {
   if (title) button.title = title;
 }
 
+/*
+ * The live loads_trips row an accounting route came from.
+ *
+ * Ordered most-specific first, which is the opposite of how this used to read.
+ * source_trip_id IS the loads_trips id, so it is exact. Trip ID is the
+ * dispatcher-facing number and is effectively unique. route_id is a route NAME
+ * and repeats within a load -- matching on it first meant two routes called
+ * "FRGT" resolved to the same live trip, so the second one's completion pill
+ * described the first one's paperwork.
+ */
 function findLiveTripForRoute(rec, route, index) {
   const trips = liveTripsByShiftId.get(Number(rec.source_shift_id)) || [];
   if (!trips.length) return null;
-  const routeId = String(route?.route_id || '').trim();
+
+  const sourceTripId = route?.source_trip_id;
+  if (sourceTripId != null) {
+    const exact = liveTripsById.get(Number(sourceTripId));
+    if (exact) return exact;
+  }
   const tripId = String(route?.trip_id || '').trim();
-  return trips.find((trip) => routeId && String(trip.route_id || '').trim() === routeId)
-    || trips.find((trip) => tripId && String(trip.trip_id || '').trim() === tripId)
-    || trips[index]
-    || null;
+  if (tripId) {
+    const byTripId = trips.find((trip) => String(trip.trip_id || '').trim() === tripId);
+    if (byTripId) return byTripId;
+  }
+  const routeId = String(route?.route_id || '').trim();
+  // Only safe when the name is unambiguous within this shift.
+  if (routeId) {
+    const named = trips.filter((trip) => String(trip.route_id || '').trim() === routeId);
+    if (named.length === 1) return named[0];
+  }
+  return trips[index] || null;
 }
 
 function applyCompletionStatus() {
@@ -233,8 +279,7 @@ function applyCompletionStatus() {
       const routes = atlantaRoutesByAccountingId.get(Number(rec.id)) || [];
       const buttons = [...row.querySelectorAll('[data-open-acct-route-text]')];
       buttons.forEach((button, index) => {
-        const routeId = String(button.dataset.openAcctRouteText || '').trim();
-        const route = routes.find((candidate) => String(candidate.route_id || '').trim() === routeId) || routes[index];
+        const route = routeForChip(routes, button, index);
         const trip = findLiveTripForRoute(rec, route, index);
         if (!trip) return;
         const missing = tripMissing(trip, rec.location);
