@@ -20,7 +20,7 @@ export const HOUSTON_TABLE = "loads_houston";
 
   export function blankHoustonRow(driverId, driverName) {
     return {
-      id: uid("hrow"), dbId: null, driverId: driverId || null, driverName: driverName || "",
+      id: uid("hrow"), dbId: null, shiftDate: state.activeDate || null, driverId: driverId || null, driverName: driverName || "",
       aljexNumber: "", comments: "", ttc: "", ttt: "", rating: "", time: "",
       driverPhone: "", timeOutRemarks: "", dispatcherPhone: "", carrier: "", mc: "", normalRate: defaultHoustonRate(),
       tonu: false, highlighted: false, shiftComplete: false, selected: false,
@@ -30,7 +30,7 @@ export const HOUSTON_TABLE = "loads_houston";
   }
   export function houstonRowFromDbRow(r) {
     return {
-      id: uid("hrow"), dbId: r.id,
+      id: uid("hrow"), dbId: r.id, shiftDate: r.shift_date || null,
       driverId: r.driver_id != null ? String(r.driver_id) : null,
       driverName: r.driver_name || "",
       aljexNumber: r.aljex_number || "", comments: r.comments || "", ttc: r.ttc || "", ttt: r.ttt || "",
@@ -100,7 +100,9 @@ export const HOUSTON_TABLE = "loads_houston";
 
   export async function saveHoustonRowNow(row) {
     if (!supabaseClient) return null;
-    const payload = houstonRowToDbRow(row, state.activeDate);
+    // The row's own date -- see the note in mondelez.js. A debounced save
+    // must not inherit a date the user navigated to after typing.
+    const payload = houstonRowToDbRow(row, row.shiftDate || state.activeDate);
     try {
       if (row.dbId) {
         const { error } = await supabaseClient.from(HOUSTON_TABLE).update(payload).eq("id", row.dbId);

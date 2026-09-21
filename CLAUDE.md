@@ -182,6 +182,38 @@ body scrolling inside it. Load Details fills in piece by piece as its queries
 return; sized to its contents, the centered card moved on screen with every
 arrival, which read as the modal shaking while it opened.
 
+## Writing to Supabase: rules learned the hard way
+
+Every bug in this section failed **silently** -- the screen kept showing what
+was typed while the database held something else. When touching the write path,
+assume a wrong write will not announce itself. `scripts/supabase-write-path.test.mjs`
+pins all of it.
+
+- **`loads_shifts` has `carrier_rate`, not `rate`.** Three modules wrote `rate`.
+  PostgREST rejects the whole request, so the rate *and* `rate_manual:false`
+  were both dropped and only `console.error` knew. (`board_rate_tiers.rate` is
+  a real column -- that one is fine.)
+- **`trip_number` is an identity, not an array position.** Deleting a route
+  closes the gap in `row.trips` while the surviving rows keep their numbers, and
+  `loads_trips` is `UNIQUE (shift_id, trip_number)`. `saveTripNow` therefore
+  strips `trip_number` from every UPDATE, and an INSERT asks
+  `nextFreeTripNumber()` rather than using `indexOf + 1`.
+- **Free-text numeric cells must go through `numOrNull()`.** `Number("1,250.00")`
+  is NaN, `JSON.stringify` turns NaN into `null`, and the request then SUCCEEDS
+  while blanking a real value. `numOrNull` returns `null` only for a genuinely
+  empty field and `undefined` for anything unparseable; `withoutUndefined()`
+  drops those keys so the column is left alone. Never call `Number()` directly
+  in a `*ToDbRow` mapper.
+- **Deleting cancels pending writes.** Saves are debounced 700ms, so
+  `deleteRow`/`deleteTrip` call `cancelPendingSaves()` first -- otherwise the
+  timer fires against a row that no longer exists and the INSERT path recreates
+  it, invisibly.
+- **A row saves under its own `shiftDate`**, never `state.activeDate` alone.
+  Date navigation is instant and the save is 700ms late, so the active date
+  belongs to a different day by the time it fires.
+- **`trip_stops` is upserted on `trip_id,stop_number`,** never inserted -- it
+  has a unique constraint and two dispatchers routinely hold stale stop lists.
+
 ## Database rules worth preserving
 
 - `loads_shifts` = standard board shifts.
