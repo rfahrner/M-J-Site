@@ -1035,52 +1035,6 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
   transition: transform 0.12s ease;
 }
 .mdz-route-thumb:hover { transform: scale(1.08); }
-
-/* A PDF sits in the same cells as the route photographs, but it cannot be an
-   <img> -- that renders as a broken-image icon -- and the app's zoom/rotate
-   viewer is an <img> too. So it shows as a chip that opens the file in a
-   browser tab, where Chrome and Edge render it with their own viewer. Sized
-   to the 26px thumbnail beside it so a row holding both stays one line. */
-.mdz-pdf-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  max-width: 150px;
-  height: 26px;
-  padding: 0 7px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: #fff;
-  color: var(--navy-950);
-  font-family: var(--font-ui);
-  font-size: 11px;
-  font-weight: 700;
-  text-decoration: none;
-  cursor: pointer;
-  transition: transform 0.12s ease;
-}
-.mdz-pdf-chip:hover { transform: scale(1.04); border-color: var(--red-600); }
-.mdz-pdf-chip-badge {
-  flex: 0 0 auto;
-  border-radius: 3px;
-  padding: 1px 4px;
-  background: var(--red-600);
-  color: #fff;
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: .03em;
-}
-/* The filename is the useful part, so it truncates rather than wrapping --
-   a wrapped chip would double the row height, which is what made the phone
-   columns unreadable in the Available list. */
-.mdz-pdf-chip-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-/* The bigger slots show a roomier chip, matching their 52px thumbnails. */
-#st-image-slot .mdz-pdf-chip,
-.ld-image-item .mdz-pdf-chip { height: 32px; max-width: 220px; font-size: 12px; }
 .mdz-thumb-delete {
   position: absolute;
   top: -6px; right: -6px;
