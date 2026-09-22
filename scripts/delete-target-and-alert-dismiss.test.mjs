@@ -127,8 +127,14 @@ console.log('\n3. a realtime route payload is matched by database id');
 const RT = extractFunction(BOARD, 'handleRealtimeTripChange');
 checkTrue('the database id is tried before the trip_number slot',
   /find\(\(t\) => t\.dbId != null && String\(t\.dbId\) === String\(dbTrip\.id\)\)/.test(RT));
-checkTrue('the trip_number slot is still the fallback for a route with no id yet',
-  /if \(!localTrip\) \{[\s\S]{0,200}const idx = dbTrip\.trip_number - 1;/.test(RT));
+// The trip_number slot USED to be the fallback here. It was the source of the
+// duplicated routes -- see scripts/realtime-trip-merge.test.mjs. A payload this
+// tab cannot match by id is now matched by Trip ID, or adopted as its own
+// route; nothing is placed by position and nothing is padded.
+checkTrue('an unmatched payload falls back to Trip ID, not to a slot',
+  /String\(t\.tripId \|\| ""\)\.trim\(\) === tripIdText/.test(RT));
+checkTrue('and the positional fallback is gone',
+  !/const idx = dbTrip\.trip_number - 1;/.test(RT));
 
 // The case that matters: route 2 of 3 was deleted, so the surviving routes'
 // trip_numbers (1 and 3) no longer line up with their array positions (0 and 1).

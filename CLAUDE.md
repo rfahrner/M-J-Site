@@ -214,6 +214,28 @@ pins all of it.
 - **`trip_stops` is upserted on `trip_id,stop_number`,** never inserted -- it
   has a unique constraint and two dispatchers routinely hold stale stop lists.
 
+## The realtime route merge must never place a route by position
+
+`handleRealtimeTripChange()` matches an incoming `loads_trips` payload to a
+local route by **database id**, then by **Trip ID** (unique within a shift),
+and otherwise adopts it as a new route. It must never reach for
+`parentRow.trips[trip_number - 1]`, and must never pad the array with
+`blankTrip()`s to make an index exist.
+
+That fallback is where the duplicated routes came from. `trip_number` is an
+identity and the array index is a position; they diverge the moment a route is
+deleted, which is exactly when the id match misses. The padding left the load
+carrying routes with no `dbId` -- they render as an empty row under the real
+one, and `saveTripNow()` INSERTs anything without a `dbId`, so the next save
+wrote a SECOND copy of a real route under whatever number was free.
+
+Every duplicate has the same signature: identical Trip ID, and a trip_number
+LOWER than the original's because it filled a gap a delete had left
+(16141 Kelloggs 5→2, 16067 Kimberly Clark 3→2, 16066 PA6013 4→3). Six reached
+an invoice. `scripts/realtime-trip-merge.test.mjs` pins the merge;
+`scripts/trip-duplicate-guard.test.mjs` pins the guard in `saveTripNow()` that
+catches whatever still gets through.
+
 ## route_id is a name, not a key
 
 A route's `route_id` is free text a dispatcher types, and the same value
