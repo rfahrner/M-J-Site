@@ -877,6 +877,23 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     return [...pool].sort((a, b) => compareForSort(a, b, key, dir));
   }
 
+  // A route with no Route ID and no Trip ID is not a route -- it is an empty
+  // slot the dispatcher has not filled in yet. Those must never reach
+  // loads_trips: a row with no identity is invisible to every guard that
+  // matches on Trip ID, so it is the one shape that can be written twice.
+  //
+  // A dropped route image counts as content even with both ids blank, because
+  // the image is stored against the route row and discarding the row would
+  // throw the upload away.
+  function isBlankRoute(trip) {
+    if (!trip) return true;
+    if (String(trip.routeId || "").trim()) return false;
+    if (String(trip.tripId || "").trim()) return false;
+    if ((trip.routeImagePaths || []).length) return false;
+    if (String(trip.routeImagePath || "").trim()) return false;
+    return true;
+  }
+
   // Five routes is what the board has always been willing to show on one load
   // (the realtime merge used to express the same limit as `idx > 4`).
   const MAX_TRIPS_PER_LOAD = 5;
@@ -1619,6 +1636,11 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         queueAljexSync(shiftDbId, row.location); // route_id lives here — this is the Ref# feed
         return trip.dbId;
       }
+      // Nothing identifies this route yet, so there is nothing worth a row --
+      // and an identity-less row is the one thing findExistingTripRow() cannot
+      // recognise later, which is how a blank slot became a second copy of a
+      // real route. It saves itself the moment a Route ID or Trip ID is typed.
+      if (isBlankRoute(trip)) return null;
       // A new route picks the next number that is actually free on this shift,
       // rather than its array position, for the same reason.
       payload.trip_number = await nextFreeTripNumber(shiftDbId, tripNumber);
@@ -1756,9 +1778,37 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const row = found.row;
     const trip = row.trips.find((t) => t.id === tripId);
     if (!trip) return;
+    // Collapsing an empty slot means the dispatcher is done with it. Keeping it
+    // is what left loads carrying identity-less routes, so it goes -- here and
+    // in the database -- rather than being saved as a route. No confirmation:
+    // there is nothing on it to lose. A load still has to keep one route.
+    if (isBlankRoute(trip) && row.trips.length > 1) {
+      await discardRoute(row, trip);
+      return;
+    }
     trip.minimized = true;
     await saveTripNow(row, trip, row.trips.indexOf(trip) + 1);
     renderBoardTable();
+  }
+
+  // Remove a route from the board and from loads_trips, with no prompt. Shared
+  // by minimizeTrip() for empty slots; deleteTrip() confirms first because it
+  // is removing a route that has something on it.
+  async function discardRoute(row, trip) {
+    cancelPendingSaves(null, [trip.id]);
+    const idx = row.trips.findIndex((t) => t.id === trip.id);
+    if (idx !== -1) row.trips.splice(idx, 1);
+    forgetDirtyFields(null, [trip.id]);
+    renderBoardTable();
+    recomputeRowRate(row);
+    if (!trip.dbId || !supabaseClient) return;
+    try {
+      const { error } = await supabaseClient.from(TRIPS_TABLE).delete().eq("id", trip.dbId);
+      if (error) throw error;
+    } catch (e) {
+      console.error("discardRoute failed:", e);
+      setDriverSyncStatus(`Empty route removed here, but couldn't delete it from the database (${e.message || e}) — it may come back on refresh.`, "error");
+    }
   }
 
   async function restoreTrip(rowId, tripId) {

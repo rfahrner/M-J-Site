@@ -277,7 +277,15 @@ up or remove it; do not assume it carries the level.
 
 - `loads_shifts` = standard board shifts.
 - `loads_trips` = trip/route rows.
-- A blank visual route should not receive a database ID until it has meaningful route/trip data.
+- A blank visual route should not receive a database ID until it has meaningful
+  route/trip data. This is enforced, not just intended: `saveTripNow()` refuses
+  the INSERT while `isBlankRoute()` is true, and minimizing a blank route
+  discards it from the board and from `loads_trips` rather than saving it. A
+  route with no Route ID and no Trip ID has no identity, and both duplicate
+  guards -- `findExistingTripRow()` and the merge's Trip ID fallback -- match on
+  Trip ID, so an identity-less row is the one shape that can be written twice.
+  A dropped route image counts as content: it is stored against the route row.
+  See `scripts/blank-route-not-saved.test.mjs`.
 - There is a database-side safeguard to clear truly blank placeholder trip conflicts before insert, preventing duplicate `(shift_id, trip_number)` errors.
 - Do not reintroduce old monkey-patch/upsert guards that created circular startup problems.
 
