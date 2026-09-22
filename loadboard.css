@@ -1228,38 +1228,6 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
   transform: translateY(1px);
 }
 .shift-start-date { display: inline-block; margin-right: 5px; font-size: 11px; font-variant-numeric: tabular-nums; }
-body.night-shift-active {
-  --paper: #c5c9ce;
-  --slate-100: #cdd2d8;
-  --line: #a0a9b5;
-  --good-surf: #8e9aa1;
-  --pea-flower: #929cc2;
-  --butter-yellow: #c9bb8c;
-  --pistachio: #b2b994;
-  --amber-bg: #d1c8aa;
-  --blue-bg: #b5c3d3;
-  --red-bg: #cfb3b3;
-  --green-bg: #b4cabb;
-}
-body.night-shift-active .toolbar,
-body.night-shift-active .modal,
-body.night-shift-active .available-scroll,
-body.night-shift-active .alert-widget-body { background: #d1d5da; }
-body.night-shift-active table.board td,
-body.night-shift-active table.available-table td { background-color: #cdd2d8; }
-body.night-shift-active table.board tbody tr:nth-child(even) td,
-body.night-shift-active table.available-table tbody tr:nth-child(even) td { background-color: #c5cbd2; }
-body.night-shift-active .cell-input:focus { background-color: #e0e4e9; }
-body.night-shift-active .btn-ghost,
-body.night-shift-active .date-nav button,
-body.night-shift-active .date-nav input { background-color: #d1d5da; }
-body.night-shift-active table.board tbody tr.is-row-selected > td { box-shadow: inset 0 0 0 999px rgba(47,111,237,.15); }
-body.night-shift-active table.board :is(th, td):is(.col-dispatchTime, .col-lastStopDepart, .col-returnToDC) { background-color: #b5c3d3 !important; }
-body.night-shift-active table.board tbody tr.is-row-pinned > td { background-color: #cbbb87 !important; }
-body.night-shift-active table.board tbody tr:hover > td,
-body.night-shift-active table.available-table tbody tr:hover > td,
-body.night-shift-active table.board tbody tr.site-row-hover-current > td,
-body.night-shift-active table.board tbody tr.site-row-hover-parent > td.pin { background-color: #b7c9df !important; }
 .available-title { font-size: 16px; margin: 0 0 10px 0; }
 /* Five rows, then scroll.
    The list is a working reference a dispatcher scans while on the phone, so it
