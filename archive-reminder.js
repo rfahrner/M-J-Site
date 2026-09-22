@@ -59,6 +59,7 @@ function showArchiveDueBanner({ count, oldestDate, cutoff }) {
   banner.id = "archive-due-banner";
   banner.style.cssText = [
     "display:flex",
+    "flex-shrink:0",
     "align-items:center",
     "gap:12px",
     "padding:10px 18px",
@@ -88,8 +89,12 @@ function showArchiveDueBanner({ count, oldestDate, cutoff }) {
   });
 
   banner.append(message, review, dismiss);
+  // Board content already reserves space for the fixed navigation. A sibling
+  // before it sits behind that navigation and leaves an unexplained blank gap.
+  const board = document.getElementById("board-view");
   const topbar = document.querySelector(".topbar");
-  if (topbar && topbar.parentNode) topbar.insertAdjacentElement("afterend", banner);
+  if (board) board.prepend(banner);
+  else if (topbar && topbar.parentNode) topbar.insertAdjacentElement("afterend", banner);
   else document.body.prepend(banner);
 }
 
