@@ -24,6 +24,7 @@ async function syncOpenLoadRate() {
 
   // The board's priority logic, not the tier engine -- see loadboard.js.
   const breakdown = lb.getEffectiveRateInfo(row);
+  if (breakdown.notReady) return; // no rate tables, no answer -- see boardrates.js
   const numeric = Number(breakdown.total) || 0;
   const next = numeric ? String(Math.round(numeric * 100) / 100) : '';
   if (row.rate === next) return;

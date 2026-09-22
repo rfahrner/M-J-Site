@@ -74,6 +74,28 @@ export async function loadBoardRateData() {
 }
 
 export function getBoardRateTiers() { return cachedTiers; }
+
+/*
+ * Whether this module actually has the numbers a location prices with.
+ *
+ * cachedTiers starts null, and loadBoardRateData() returns early on any query
+ * error without setting it. Until it is populated, calcLoadRateBreakdown()
+ * below asks carrierMileageTier() to find a band in an EMPTY list, gets null,
+ * and quietly falls through to the over-tier per-mile rate -- a real, much
+ * lower number that looks like an answer. Callers then saved it: a 140.8-mile
+ * Atlanta route priced at 140.8 x $3.50 + stops = $532.80 instead of its
+ * $700 tier + stops = $740, and wrote that to carrier_rate.
+ *
+ * A location that prices by mileage band has no answer at all without its
+ * bands, so say so rather than inventing one.
+ */
+export function isBoardRateDataReady(locationKey) {
+  if (!cachedTiers || !cachedSettings) return false;
+  if (locationKey === "atlanta" || locationKey === "delaware") {
+    return !!(cachedTiers[locationKey] || []).length;
+  }
+  return true;
+}
 export function getBoardRateSettings() { return cachedSettings; }
 export function getDailyRateOverrides() { return cachedDaily; }
 
@@ -277,6 +299,15 @@ function withDriverFlatFloor(row, breakdown) {
 }
 
 export function calcLoadRateBreakdown(locationKey, row) {
+  // No bands loaded means no calculation, not a cheaper one. `notReady` is
+  // what every caller that PERSISTS a rate has to check; the panels can still
+  // render this and will show the note.
+  if (!isBoardRateDataReady(locationKey)) {
+    return {
+      total: 0, mode: "rates-not-loaded", lines: [], notReady: true,
+      note: "Rate tables haven't loaded yet — this load's rate can't be calculated right now.",
+    };
+  }
   const tiers = (cachedTiers?.[locationKey]) || [];
   let breakdown;
 

@@ -253,6 +253,35 @@ carry both as `data-acct-route-number` / `data-acct-source-trip`;
 them. Matching on the text is a last-resort fallback for rows old enough to
 predate `route_number`, and only when the name is unambiguous.
 
+## An empty rate table is not a cheaper rate
+
+`boardrates.js` caches `board_rate_tiers` in `cachedTiers`, which starts null,
+and `loadBoardRateData()` returns early on any query error without setting it.
+Before this was gated, `calcLoadRateBreakdown()` looked for a mileage band in
+that empty list, `carrierMileageTier()` answered null, and the code fell
+through to the over-tier per-mile rate -- a real, much lower number that looks
+like an answer. Callers then SAVED it.
+
+On 2026-09-22 two loads had `carrier_rate` rewritten about twice a second for
+an hour, 9,443 rows of churn in `load_change_history` across 22 shifts, the
+Rate cell visibly flickering between two values. Shift 16133 (one route,
+140.8 miles, 4 stops, Christopher Woods) alternated between `740` -- his
+tier-3 rate of 700 plus two chargeable stops -- and `532.80`, which is
+140.8 x $3.50 over-tier plus the same $40 of stops.
+
+`isBoardRateDataReady(locationKey)` now gates it, and a location that prices by
+mileage band is not ready without its bands. `calcLoadRateBreakdown()` returns
+`{ notReady: true }` instead of a number, and **every caller that persists a
+rate must check `breakdown.notReady` and do nothing**: `recomputeRowRate()`,
+`daily-rate-hierarchy`, `delaware-rate-tiers`, `daily-rate-modal-sync`.
+
+Separately, `rate-write-limiter.js` stops this client rewriting one load's
+calculated rate after a dozen times in a minute, because two clients that
+disagree write at each other forever and neither can win. A rate the
+dispatcher types clears the count. Keep it a leaf module -- it is imported by
+`loadboard.js` and by the decorators that load after it.
+`scripts/rate-not-ready.test.mjs` pins all of this.
+
 ## Accounting revenue levels
 
 Customer billing comes from `pricing_tiers`: `revenue_1` is Kroger Core

@@ -167,8 +167,12 @@ const RECOMPUTE = extractFunction(BOARD, 'recomputeRowRate');
 checkTrue('the early return can be overridden', /if \(row\.rate === nextRate && !forceSave\) return;/.test(RECOMPUTE));
 checkTrue('the board cell forces it when the rate is cleared',
   /found\.row\.rateManual = false;[\s\S]{0,200}recomputeRowRate\(found\.row, true\)/.test(BOARD));
+// Asserted against the function rather than against adjacent lines: what
+// matters is that clearing the flag is followed by a forced recompute, not
+// that nothing sits between them.
+const RESET_RATE = extractFunction(BOARD, 'resetRateToCalculated');
 checkTrue('Reset to calculated forces it too',
-  /row\.rateManual = false;\s*\n\s*recomputeRowRate\(row, true\);/.test(BOARD));
+  /row\.rateManual = false;[\s\S]*recomputeRowRate\(row, true\);/.test(RESET_RATE));
 
 console.log(failures ? `\n  ${failures} check(s) FAILED\n` : '\n  All checks passed.\n');
 process.exit(failures ? 1 : 0);

@@ -26,7 +26,8 @@ import { initLocationAnalyticsPage } from './location-analytics.js';
 import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_MIN, PRE_SHIFT_CALL_FOLLOWUP_MIN, PRE_SHIFT_ESCALATION_MIN, LAST_STOP_RETURN_FOLLOWUP_MIN } from './alerts.js';
 import { queueLoadUpdateDebounced, flushQueuedUpdates } from './aljex-outbox.js';
 import { UPLOAD_ACCEPT, acceptedUploads, isAcceptedUpload, isPdfRef, pdfChipHtml } from './upload-file-types.js';
-import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRateBreakdown, effectiveTierRate, effectiveSetting, isTierOverridden, isSettingOverridden, isDriverTierOverridden, isDriverSettingOverridden, saveTierRate, saveSetting } from './boardrates.js';
+import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRateBreakdown, isBoardRateDataReady, effectiveTierRate, effectiveSetting, isTierOverridden, isSettingOverridden, isDriverTierOverridden, isDriverSettingOverridden, saveTierRate, saveSetting } from './boardrates.js';
+import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
 
   /* ---------------- page map (single source of truth for nav) ---------------- */
 
@@ -2313,6 +2314,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   function recomputeRowRate(row, forceSave) {
     if (row.rateManual) return;
     const breakdown = getEffectiveRateInfo(row);
+    // Without the rate tables there is no answer, and writing the per-mile
+    // fallback over a real tier total is how a load gets repriced downward
+    // behind the dispatcher's back.
+    if (breakdown.notReady) return;
     const nextRate = breakdown.total ? String(breakdown.total) : "";
     // forceSave covers the case where the VALUE did not change but the meaning
     // did. Clearing a manual rate on a load with no calculable rate leaves
@@ -2320,6 +2325,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     // scheduled a save -- the database kept rate_manual = true and the old
     // dollar amount, which then reappeared on the next refresh.
     if (row.rate === nextRate && !forceSave) return;
+    // Two clients that disagree about a rate rewrite it at each other forever,
+    // and neither can win. Give up on this load rather than keep saving.
+    if (!allowRateWrite(row.dbId, `${labelForRow(row)}`)) return;
     markFieldDirty(dirtyShiftFields, row.id, "rate");
     row.rate = nextRate;
     scheduleShiftSave(row);
@@ -5652,6 +5660,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (!found) return;
     const row = found.row;
     const before = row.rate;
+    // A dispatcher deciding the rate by hand ends any argument the automatic
+    // writers were having about this load, so let it start saving again.
+    forgetRateWrites(row.dbId);
     markFieldDirty(dirtyShiftFields, row.id, "rate");
     markFieldDirty(dirtyShiftFields, row.id, "rateManual");
     if (String(newValue).trim() === "") {
@@ -5678,6 +5689,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     markFieldDirty(dirtyShiftFields, row.id, "rate");
     markFieldDirty(dirtyShiftFields, row.id, "rateManual");
     row.rateManual = false;
+    forgetRateWrites(row.dbId);
     recomputeRowRate(row, true);
     if (before !== row.rate) logChange(row.dbId, labelForRow(row), "rate", before, row.rate);
     renderLoadDetailsTabContent();
