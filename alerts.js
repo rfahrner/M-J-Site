@@ -140,6 +140,7 @@ import './paperwork-load-integration.js';
     const nowMin = minsSinceMidnightNow();
     const alerts = [];
     const preShiftTextNeeded = []; // collected across all shifts, then grouped by shift time below
+    const preShiftEscalations = []; // stage 3, grouped the same way -- see below
     for (const s of shifts) {
       if (s.shift_complete) continue; // finished loads don't need attention
       const rowTrips = (tripsByShift[s.id] || []).sort((a, b) => a.trip_number - b.trip_number);
@@ -160,13 +161,11 @@ import './paperwork-load-integration.js';
         const minsUntilShift = shiftStartMin - nowMin;
         const clockLabel = minsToClock(shiftStartMin);
         if (minsUntilShift <= PRE_SHIFT_ESCALATION_MIN && minsUntilShift > -180) {
-          // Stage 3: driver hasn't confirmed their shift at all
-          alerts.push({
-            key: `preshift-escalate-${s.id}`, type: "preshift_escalate", location: s.location, shiftDbId: s.id,
-            message: `${driverName} (${label}) — has not confirmed their ${clockLabel} shift today`,
-            recipients: driverPhone ? [{ name: driverName, phone: driverPhone }] : [],
-            actionMessage: `This is D&L Transportation, could we have an ETA for your ${clockLabel} kroger shift`,
-          });
+          // Stage 3: driver hasn't confirmed their shift at all. Collected
+          // rather than pushed, so several drivers due at the same time
+          // become one alert with one Text button -- grouped below exactly
+          // the way stage 1 already is.
+          preShiftEscalations.push({ shiftStartMin, clockLabel, driverName, driverPhone, label, shiftDbId: s.id, location: s.location });
         } else if (minsUntilShift <= PRE_SHIFT_CALL_FOLLOWUP_MIN && minsUntilShift > -180) {
           // Stage 2: no ETA yet, prompt a call (no text button -- a text already went out in stage 1)
           alerts.push({
@@ -318,6 +317,40 @@ import './paperwork-load-integration.js';
     // the same message text, so one alert with one button covers all of them.
     const byShiftTime = {};
     preShiftTextNeeded.forEach((d) => { (byShiftTime[d.shiftStartMin] = byShiftTime[d.shiftStartMin] || []).push(d); });
+    // Stage 3 escalations, grouped the same way and for the same reason: every
+    // driver due at one time gets the identical message, so chasing four of
+    // them should be one button rather than four. Grouped by LOCATION as well
+    // as time -- alerts carry their shift's own location, and two boards can
+    // both run a 09:00.
+    const escalationsByGroup = {};
+    preShiftEscalations.forEach((d) => {
+      const k = `${d.location}|${d.shiftStartMin}`;
+      (escalationsByGroup[k] = escalationsByGroup[k] || []).push(d);
+    });
+    Object.values(escalationsByGroup).forEach((list) => {
+      const { clockLabel, location } = list[0];
+      const withPhone = list.filter((d) => d.driverPhone);
+      // Same reasoning as the stage-1 key below: dismissing silences a key for
+      // the rest of the day, so the key has to name WHICH drivers it covers.
+      // Without that, clearing a 09:00 group would also suppress the alert for
+      // a driver who only became overdue afterwards.
+      const groupKey = [...new Set(list.map((d) => d.shiftDbId))].sort((a, b) => a - b).join("_");
+      // One driver reads exactly as it always did, PRO# and all. The grouped
+      // wording only appears once there is actually a group.
+      const message = list.length === 1
+        ? `${list[0].driverName} (${list[0].label}) — has not confirmed their ${clockLabel} shift today`
+        : `${list.length} drivers have not confirmed their ${clockLabel} shift today (${list.map((d) => d.driverName).join(", ")})`;
+      alerts.push({
+        key: `preshift-escalate-${groupKey}`, type: "preshift_escalate", location,
+        ...(list.length === 1 ? { shiftDbId: list[0].shiftDbId } : {}),
+        // Which rows the alert jumps to is a different question from which
+        // shifts get marked as texted -- they only coincided for stage 1.
+        jumpShiftIds: list.map((d) => d.shiftDbId),
+        message,
+        recipients: withPhone.map((d) => ({ name: d.driverName, phone: d.driverPhone })),
+        actionMessage: `This is D&L Transportation, could we have an ETA for your ${clockLabel} kroger shift`,
+      });
+    });
     Object.entries(byShiftTime).forEach(([shiftStartMin, list]) => {
       const clockLabel = minsToClock(Number(shiftStartMin));
       const names = list.map((d) => d.driverName).join(", ");
@@ -369,7 +402,12 @@ import './paperwork-load-integration.js';
     // newest first
     const sorted = [...boardAlerts].sort((a, b) => alertFirstSeenAt[b.key] - alertFirstSeenAt[a.key]);
     body.innerHTML = sorted.map((a) => {
-      const targetIds = a.markShiftIdsOnSent && a.markShiftIdsOnSent.length ? a.markShiftIdsOnSent : (a.shiftDbId != null ? [a.shiftDbId] : []);
+      // jumpShiftIds wins where it is set: a grouped alert needs to highlight
+      // every row it covers, and that list is not always the same as the
+      // shifts a send would mark.
+      const targetIds = a.jumpShiftIds && a.jumpShiftIds.length
+        ? a.jumpShiftIds
+        : (a.markShiftIdsOnSent && a.markShiftIdsOnSent.length ? a.markShiftIdsOnSent : (a.shiftDbId != null ? [a.shiftDbId] : []));
       return `
       <div class="alert-chat-item" ${targetIds.length ? `data-alert-jump-ids="${targetIds.join(",")}"` : ""}>
         <span class="alert-chat-icon">${ICONS[a.type] || "•"}</span>

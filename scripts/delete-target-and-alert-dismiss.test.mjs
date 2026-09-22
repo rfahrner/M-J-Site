@@ -156,8 +156,11 @@ checkTrue('the shared exit runs the hook', /onSent\(\)/.test(FINISH));
 const SUBMIT = extractFunction(BOARD, 'submitSendTextModal');
 const exits = (SUBMIT.match(/finishSendTextModalAsSent\(\)/g) || []).length;
 check('both the automatic send and the Outlook fallback use it', exits, 2);
+// Specifically the MODAL. submitSendTextModal hides and shows its own footer
+// buttons in there now, so matching any classList.add("hidden") flagged that
+// as a violation -- which is what had this test red on main.
 check('neither path hides the modal without it',
-  /classList\.add\("hidden"\)/.test(SUBMIT), false);
+  /#modal-send-text"\)\.classList\.add\("hidden"\)/.test(SUBMIT), false);
 
 checkTrue('alerts.js dismisses on send',
   /openSendTextModal\([\s\S]{0,200}onSent: \(\) => dismissAlert\(alert\.key\)/.test(ALERTS));

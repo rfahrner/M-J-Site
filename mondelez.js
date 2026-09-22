@@ -25,6 +25,7 @@ import {
   handleRowAwareTab, openEditDriverModal, batchSignImageUrls, wireImageViewer,
   openLocationNotesModal, closeLocationNotesModal, saveLocationNotes,
 } from './loadboard.js';
+import { UPLOAD_ACCEPT, acceptedUploads, isAcceptedUpload, isPdfRef, pdfChipHtml } from './upload-file-types.js';
 export const MONDELEZ_TABLE = "mondelez_loads";
 export const MONDELEZ_RATE_SETTINGS_TABLE = "mondelez_rate_settings";
 export const MONDELEZ_IMAGE_BUCKET = "mondelez-routes";
@@ -375,9 +376,13 @@ function mondelezRowHtml(row) {
     <td class="col-mdz-image">
       <div class="mdz-image-dropzone" tabindex="0" data-action="image-dropzone" data-mdz-row="${row.id}" title="Click to browse, or drag/paste an image here">
         ${(row.routeImageUrls || []).filter(Boolean).length
-          ? (row.routeImageUrls || []).map((url, index) => `<div class="mdz-thumb-wrap"><img src="${escapeHtml(url)}" class="mdz-route-thumb" data-action="view-route-image" data-mdz-row="${row.id}" data-mdz-image-index="${index}" alt="Route image ${index + 1}" title="Click to view full size"><button type="button" class="mdz-thumb-delete" data-action="delete-route-image" data-mdz-row="${row.id}" data-mdz-image-index="${index}" title="Delete image">&times;</button></div>`).join("")
+          ? (row.routeImageUrls || []).map((url, index) => `<div class="mdz-thumb-wrap">${
+              isPdfRef(url)
+                ? pdfChipHtml(url, { dataAttrs: `data-action="view-route-image" data-mdz-row="${row.id}" data-mdz-image-index="${index}"` })
+                : `<img src="${escapeHtml(url)}" class="mdz-route-thumb" data-action="view-route-image" data-mdz-row="${row.id}" data-mdz-image-index="${index}" alt="Route image ${index + 1}" title="Click to view full size">`
+            }<button type="button" class="mdz-thumb-delete" data-action="delete-route-image" data-mdz-row="${row.id}" data-mdz-image-index="${index}" title="Delete attachment">&times;</button></div>`).join("")
           : `<span class="mdz-upload-hint">Drop / paste / click</span>`}
-        <input type="file" accept="image/*" multiple data-action="upload-route-image" data-mdz-row="${row.id}" class="mdz-hidden-file-input">
+        <input type="file" accept="${UPLOAD_ACCEPT}" multiple data-action="upload-route-image" data-mdz-row="${row.id}" class="mdz-hidden-file-input">
       </div>
     </td>
     <td class="col-availRemove"><button type="button" class="available-remove-btn" data-action="delete-mdz-row" data-mdz-row="${row.id}" title="Delete">&times;</button></td>
@@ -467,7 +472,7 @@ async function uploadRouteImage(rowId, files) {
   if (!row || !supabaseClient) return;
   if (!row.dbId) await saveMondelezRowNow(row);
   if (!row.dbId) { setDriverSyncStatus("Couldn't save this load before uploading — try again.", "error"); return; }
-  const list = Array.from(files || []).filter((file) => file && file.type.startsWith("image/"));
+  const list = acceptedUploads(files);
   if (!list.length) return;
   try {
     row.routeImagePaths = row.routeImagePaths || parseMondelezImagePaths(row.routeImagePath);
@@ -489,6 +494,12 @@ function viewRouteImage(rowId, imageIndex = 0) {
   const urls = (row?.routeImageUrls || []).filter(Boolean);
   if (!urls.length) return;
   const startIndex = Math.max(0, Math.min(Number(imageIndex) || 0, urls.length - 1));
+  // The lightbox is an <img> with zoom and rotate, so a PDF goes to the
+  // browser's own viewer instead. Same call the chip's anchor makes.
+  if (isPdfRef(urls[startIndex])) {
+    window.open(urls[startIndex], "_blank", "noopener");
+    return;
+  }
   const overlay = document.createElement("div");
   overlay.className = "overlay image-lightbox-overlay mdz-image-lightbox-overlay";
   overlay.id = "mdz-image-overlay";
@@ -1023,7 +1034,7 @@ export async function initMondelezPage() {
     const items = e.clipboardData && e.clipboardData.items;
     if (!items) return;
     for (const item of items) {
-      if (item.type.startsWith("image/")) {
+      if (item.kind === "file" && isAcceptedUpload(item.getAsFile())) {
         e.preventDefault();
         const file = item.getAsFile();
         if (file) uploadRouteImage(dropzone.dataset.mdzRow, [file]);

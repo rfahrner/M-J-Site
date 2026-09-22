@@ -22,7 +22,8 @@ async function syncOpenLoadRate() {
   const locationKey = row.location || lb.state.activeLocation;
   if (!locationKey || locationKey === 'houston') return;
 
-  const breakdown = rates.calcLoadRateBreakdown(locationKey, row);
+  // The board's priority logic, not the tier engine -- see loadboard.js.
+  const breakdown = lb.getEffectiveRateInfo(row);
   const numeric = Number(breakdown.total) || 0;
   const next = numeric ? String(Math.round(numeric * 100) / 100) : '';
   if (row.rate === next) return;

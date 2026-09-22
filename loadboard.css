@@ -402,7 +402,13 @@ table.board tbody tr.is-being-edited td.pin {
 table.board tbody tr.is-being-edited td.pin-select {
   box-shadow: inset 3px 0 0 0 #2563eb, inset 0 3px 0 0 #2563eb, inset 0 -3px 0 0 #2563eb;
 }
-table.board tbody tr:hover td { background: #f0f5ff; }
+/* Board hover is driven by board-row-hover-enhancements.js, not by native
+   :hover. A load's shift-level cells are rowspanned out of its first row, so
+   native :hover reassigns the highlight to route 1 the moment the pointer
+   enters the pinned Driver/PRO# columns and reassigns it back on the way out
+   -- the highlight flickering between two rows for one continuous move. The
+   script decides which logical row the pointer is on and marks it. */
+table.board tbody tr.site-row-hover-current td { background: #f0f5ff; }
 /* Column highlights, per request: Shift Start in pea flower, Next Call
    Time in butter yellow, the whole Route ID -> Ppwk Rec'd range in
    pistachio. Full column, header through every data row. */
@@ -418,8 +424,8 @@ table.board td.col-pistachio { background: var(--pistachio) !important; }
 table.board tbody tr.is-row-pinned > td {
   background: rgba(234, 179, 8, 0.22) !important;
 }
-table.board tbody tr:hover > td,
-table.board tbody tr.is-row-pinned:hover > td,
+table.board tbody tr.site-row-hover-current > td,
+table.board tbody tr.is-row-pinned.site-row-hover-current > td,
 table.driverlist tbody tr:hover > td,
 table.available-table tbody tr:hover > td {
   background: #d7e8ff !important;
@@ -451,13 +457,13 @@ table.available-table tbody tr:hover > td {
 table.board tbody tr:nth-child(even) td.pin { background: #fbfcfe; }
 table.board tbody tr.is-row-pinned td.pin { background: rgba(234, 179, 8, 0.22) !important; }
 table.board tbody tr.is-row-selected td.pin { background: rgba(59, 130, 246, 0.22); }
-table.board tbody tr:hover td.pin { background: #eaf1ff; }
+table.board tbody tr.site-row-hover-current td.pin { background: #eaf1ff; }
 table.board thead th.pin { z-index: 6; }
 /* Shift Complete — green tint specifically on the PRO# cell */
 td.pin-pro.shift-complete-tint {
   background: rgba(34, 197, 94, 0.18) !important;
 }
-table.board tbody tr:hover td.pin-pro.shift-complete-tint { background: rgba(34, 197, 94, 0.28) !important; }
+table.board tbody tr.site-row-hover-current td.pin-pro.shift-complete-tint { background: rgba(34, 197, 94, 0.28) !important; }
 /* Fully documented — every trip clean (no red pill) AND the time sheet is
    in. A stricter, more saturated green than the basic completion tint
    above, since a shift can be "complete" while a trip is still missing
@@ -466,7 +472,7 @@ td.pin-pro.pro-fully-documented {
   background: rgba(21, 128, 61, 0.32) !important;
   border-color: #15803d !important;
 }
-table.board tbody tr:hover td.pin-pro.pro-fully-documented { background: rgba(21, 128, 61, 0.42) !important; }
+table.board tbody tr.site-row-hover-current td.pin-pro.pro-fully-documented { background: rgba(21, 128, 61, 0.42) !important; }
 .trip-chip.shift-complete-tint { background: rgba(34, 197, 94, 0.18) !important; }
 @keyframes tripCompletedFlash {
   0% { background: rgba(34, 197, 94, 0.55); }
@@ -771,7 +777,7 @@ tr.is-load-cancelled { background: rgba(71, 85, 105, 0.06); }
 tr.is-load-cancelled { opacity: 0.55; }
 /* Hover lifts it back to full strength: a dispatcher checking why something
    was cancelled should not have to fight the styling to read it. */
-table.board tbody tr.is-load-cancelled:hover { opacity: 1; }
+table.board tbody tr.is-load-cancelled.site-row-hover-current { opacity: 1; }
 /* Driver call-offs are persisted separately from explicit load cancellations,
    but both mean the load is no longer running. Keep the same visual treatment
    even when the board is rebuilt from Supabase. */
@@ -1035,6 +1041,52 @@ table.driverlist tr.is-new td { animation: pulseIn 1.4s ease-out 1; background-c
   transition: transform 0.12s ease;
 }
 .mdz-route-thumb:hover { transform: scale(1.08); }
+
+/* A PDF sits in the same cells as the route photographs, but it cannot be an
+   <img> -- that renders as a broken-image icon -- and the app's zoom/rotate
+   viewer is an <img> too. So it shows as a chip that opens the file in a
+   browser tab, where Chrome and Edge render it with their own viewer. Sized
+   to the 26px thumbnail beside it so a row holding both stays one line. */
+.mdz-pdf-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 150px;
+  height: 26px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--navy-950);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+.mdz-pdf-chip:hover { transform: scale(1.04); border-color: var(--red-600); }
+.mdz-pdf-chip-badge {
+  flex: 0 0 auto;
+  border-radius: 3px;
+  padding: 1px 4px;
+  background: var(--red-600);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .03em;
+}
+/* The filename is the useful part, so it truncates rather than wrapping --
+   a wrapped chip would double the row height, which is what made the phone
+   columns unreadable in the Available list. */
+.mdz-pdf-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The bigger slots show a roomier chip, matching their 52px thumbnails. */
+#st-image-slot .mdz-pdf-chip,
+.ld-image-item .mdz-pdf-chip { height: 32px; max-width: 220px; font-size: 12px; }
 .mdz-thumb-delete {
   position: absolute;
   top: -6px; right: -6px;
@@ -1682,3 +1734,32 @@ fieldset.rate-tier-box.is-overridden {
 .image-viewer-footer {
   flex: 0 0 auto;
 }
+
+/* The skipped / shared-number / DNU notes used to stack above the send buttons
+   and push them off the bottom of a long batch. They fold into one summary
+   that starts closed -- worth keeping, since who was skipped and why is what
+   gets asked afterwards, but not worth the height every time. */
+.text-modal-details { margin-top: 8px; }
+.text-modal-details > summary {
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--slate-100);
+  color: var(--slate-500);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  user-select: none;
+}
+.text-modal-details > summary::-webkit-details-marker { display: none; }
+.text-modal-details > summary::before { content: "\25B8"; font-size: 10px; }
+.text-modal-details[open] > summary::before { content: "\25BE"; }
+.text-modal-details > summary:hover { border-color: var(--slate-500); }
+.text-modal-details > .calc-note { margin-top: 6px; }

@@ -31,7 +31,7 @@
       <label for="proNumber" class="label" style="display:block; margin-top:14px;">Aljex / Pro Number <span class="count">Optional</span></label><input id="proNumber" class="input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="20" autocomplete="off" placeholder="Enter Pro number if available">
       <div class="section-heading"><span class="label">Paperwork</span><span id="imageCount" class="count">0 / 12 images</span></div>
       <div class="button-row"><button id="cameraButton" class="secondary-button" type="button">Take Photo</button><button id="libraryButton" class="secondary-button" type="button">Choose Photos</button></div>
-      <input id="cameraInput" class="hidden-input" type="file" accept="image/*" capture="environment"><input id="libraryInput" class="hidden-input" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" multiple>
+      <input id="cameraInput" class="hidden-input" type="file" accept="image/*" capture="environment"><input id="libraryInput" class="hidden-input" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif,application/pdf,.pdf" multiple>
       <div id="processingRow" class="processing hidden" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span>Preparing photos for a reliable upload…</span></div>
       <div id="previewStrip" class="previews" aria-label="Selected paperwork photos"></div>
       <button id="submitButton" class="submit-button" type="button" disabled>Submit Paperwork</button><p id="uploadStatus" class="upload-status hidden" role="status" aria-live="polite"></p>

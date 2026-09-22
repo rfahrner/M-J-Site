@@ -1,6 +1,7 @@
 import {
-  sendCurrentGroupBatchDirect,
+  groupSendNowPressed,
   openCurrentGroupBatch,
+  openCurrentGroupBatchInWeb,
   confirmGroupBatchSent,
 } from './loadboard.js';
 
@@ -22,21 +23,23 @@ function initDriverListTextBatchFix() {
 
   const setup = document.getElementById('tg-setup-step');
   const progress = document.getElementById('tg-progress-step');
-  const startBtn = document.getElementById('tg-start');
   const sendBtn = document.getElementById('tg-send-now');
   const outlookBtn = document.getElementById('tg-open-batch');
+  const outlookWebBtn = document.getElementById('tg-open-web');
   const confirmBtn = document.getElementById('tg-confirm-sent');
   const finishBtn = document.getElementById('tg-finish');
   const errorEl = document.getElementById('tg-error');
 
   function resetSetupButtons() {
     if (!isVisible(setup)) return;
-    if (startBtn) startBtn.classList.remove('hidden');
+    // Start stays hidden: it is only a binding point for this page's starter
+    // now, and Send Now is what triggers it.
     if (sendBtn) {
-      sendBtn.classList.add('hidden');
+      sendBtn.classList.remove('hidden');
       sendBtn.disabled = false;
     }
     if (outlookBtn) outlookBtn.classList.add('hidden');
+    if (outlookWebBtn) outlookWebBtn.classList.add('hidden');
     if (confirmBtn) confirmBtn.classList.add('hidden');
     if (finishBtn) finishBtn.classList.add('hidden');
   }
@@ -48,26 +51,19 @@ function initDriverListTextBatchFix() {
     setTimeout(resetSetupButtons, 0);
   });
 
-  // Once Start successfully creates batches, it belongs to the setup step
-  // and should not remain beside the active batch actions.
-  modal.addEventListener('click', (event) => {
-    if (!event.target.closest('#tg-start')) return;
-    setTimeout(() => {
-      if (startBtn) startBtn.classList.toggle('hidden', isVisible(progress));
-    }, 0);
-  });
-
   modal.addEventListener('click', async (event) => {
-    const btn = event.target.closest('#tg-send-now, #tg-open-batch, #tg-confirm-sent');
+    const btn = event.target.closest('#tg-send-now, #tg-open-web, #tg-open-batch, #tg-confirm-sent');
     if (!btn || btn.classList.contains('hidden') || btn.disabled) return;
 
     // Stop the two pre-existing target listeners from both running.
     event.preventDefault();
     event.stopImmediatePropagation();
 
-    if (!isVisible(progress)) {
+    // Send Now legitimately runs from the setup step now: it builds the batch
+    // and then sends it.
+    if (!isVisible(progress) && btn.id !== 'tg-send-now') {
       if (errorEl) {
-        errorEl.textContent = 'Click Start first to build the recipient batch.';
+        errorEl.textContent = 'Press Send Now to build the recipient batch first.';
         errorEl.classList.remove('hidden');
       }
       resetSetupButtons();
@@ -76,7 +72,9 @@ function initDriverListTextBatchFix() {
 
     try {
       if (btn.id === 'tg-send-now') {
-        await sendCurrentGroupBatchDirect();
+        await groupSendNowPressed();
+      } else if (btn.id === 'tg-open-web') {
+        openCurrentGroupBatchInWeb();
       } else if (btn.id === 'tg-open-batch') {
         openCurrentGroupBatch();
       } else if (btn.id === 'tg-confirm-sent') {
