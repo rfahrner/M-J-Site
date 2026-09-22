@@ -23,7 +23,7 @@
    - loads_shifts.rate_overrides: tier/setting values for one load only
    ================================================================ */
 import { supabaseClient, findDriver } from './loadboard.js';
-import { atlantaMileageTier, atlantaTierLabel } from './carrier-mileage-tiers.js';
+import { carrierMileageTier, carrierTierLabel } from './carrier-mileage-tiers.js';
 
 export const BOARD_RATE_TIERS_TABLE = "board_rate_tiers";
 export const BOARD_RATE_SETTINGS_TABLE = "board_rate_settings";
@@ -304,12 +304,12 @@ export function calcLoadRateBreakdown(locationKey, row) {
         return;
       }
 
-      const tier = locationKey === "atlanta" ? atlantaMileageTier(tiers, miles) : tiers.find((tr) => miles >= tr.min && miles <= tr.max);
+      const tier = carrierMileageTier(tiers, miles);
       let routeRate;
       let tierLabel;
       if (tier) {
         routeRate = effectiveTierRate(row, tier);
-        tierLabel = locationKey === "atlanta" ? `${atlantaTierLabel(tiers, tier)} tier` : `${tier.min}-${tier.max}mi tier`;
+        tierLabel = `${carrierTierLabel(tiers, tier)} tier`;
       } else {
         const perMileFallback = locationKey === "delaware" ? 4 : 2.4;
         const perMile = effectiveSetting(row, locationKey, "over_tier_per_mile", perMileFallback);

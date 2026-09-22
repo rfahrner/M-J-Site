@@ -8,7 +8,7 @@
  * Revenue Rate selects Core or Holiday customer pricing. Day Type is hidden.
  */
 import { supabaseClient } from './loadboard.js';
-import { atlantaMileageTier } from './carrier-mileage-tiers.js';
+import { carrierMileageTier } from './carrier-mileage-tiers.js';
 import { getAccountingRecordById } from './accounting.js';
 
 let scheduled = false;
@@ -192,7 +192,7 @@ function calcAtlantaTotal(shift, trips, driver, tiers, settings, dailyCard, mode
     if (!String(trip.route_id || trip.trip_id || '').trim()) continue;
     const miles = Number(trip.route_miles);
     if (!Number.isFinite(miles) || miles <= 0) continue;
-    const tier = atlantaMileageTier(tiers, miles);
+    const tier = carrierMileageTier(tiers, miles);
     let routeRate;
     if (tier) {
       const base = Number(tier.rate);
