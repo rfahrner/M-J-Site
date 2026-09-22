@@ -402,7 +402,13 @@ table.board tbody tr.is-being-edited td.pin {
 table.board tbody tr.is-being-edited td.pin-select {
   box-shadow: inset 3px 0 0 0 #2563eb, inset 0 3px 0 0 #2563eb, inset 0 -3px 0 0 #2563eb;
 }
-table.board tbody tr:hover td { background: #f0f5ff; }
+/* Board hover is driven by board-row-hover-enhancements.js, not by native
+   :hover. A load's shift-level cells are rowspanned out of its first row, so
+   native :hover reassigns the highlight to route 1 the moment the pointer
+   enters the pinned Driver/PRO# columns and reassigns it back on the way out
+   -- the highlight flickering between two rows for one continuous move. The
+   script decides which logical row the pointer is on and marks it. */
+table.board tbody tr.site-row-hover-current td { background: #f0f5ff; }
 /* Column highlights, per request: Shift Start in pea flower, Next Call
    Time in butter yellow, the whole Route ID -> Ppwk Rec'd range in
    pistachio. Full column, header through every data row. */
@@ -418,8 +424,8 @@ table.board td.col-pistachio { background: var(--pistachio) !important; }
 table.board tbody tr.is-row-pinned > td {
   background: rgba(234, 179, 8, 0.22) !important;
 }
-table.board tbody tr:hover > td,
-table.board tbody tr.is-row-pinned:hover > td,
+table.board tbody tr.site-row-hover-current > td,
+table.board tbody tr.is-row-pinned.site-row-hover-current > td,
 table.driverlist tbody tr:hover > td,
 table.available-table tbody tr:hover > td {
   background: #d7e8ff !important;
@@ -451,13 +457,13 @@ table.available-table tbody tr:hover > td {
 table.board tbody tr:nth-child(even) td.pin { background: #fbfcfe; }
 table.board tbody tr.is-row-pinned td.pin { background: rgba(234, 179, 8, 0.22) !important; }
 table.board tbody tr.is-row-selected td.pin { background: rgba(59, 130, 246, 0.22); }
-table.board tbody tr:hover td.pin { background: #eaf1ff; }
+table.board tbody tr.site-row-hover-current td.pin { background: #eaf1ff; }
 table.board thead th.pin { z-index: 6; }
 /* Shift Complete — green tint specifically on the PRO# cell */
 td.pin-pro.shift-complete-tint {
   background: rgba(34, 197, 94, 0.18) !important;
 }
-table.board tbody tr:hover td.pin-pro.shift-complete-tint { background: rgba(34, 197, 94, 0.28) !important; }
+table.board tbody tr.site-row-hover-current td.pin-pro.shift-complete-tint { background: rgba(34, 197, 94, 0.28) !important; }
 /* Fully documented — every trip clean (no red pill) AND the time sheet is
    in. A stricter, more saturated green than the basic completion tint
    above, since a shift can be "complete" while a trip is still missing
@@ -466,7 +472,7 @@ td.pin-pro.pro-fully-documented {
   background: rgba(21, 128, 61, 0.32) !important;
   border-color: #15803d !important;
 }
-table.board tbody tr:hover td.pin-pro.pro-fully-documented { background: rgba(21, 128, 61, 0.42) !important; }
+table.board tbody tr.site-row-hover-current td.pin-pro.pro-fully-documented { background: rgba(21, 128, 61, 0.42) !important; }
 .trip-chip.shift-complete-tint { background: rgba(34, 197, 94, 0.18) !important; }
 @keyframes tripCompletedFlash {
   0% { background: rgba(34, 197, 94, 0.55); }
@@ -771,7 +777,7 @@ tr.is-load-cancelled { background: rgba(71, 85, 105, 0.06); }
 tr.is-load-cancelled { opacity: 0.55; }
 /* Hover lifts it back to full strength: a dispatcher checking why something
    was cancelled should not have to fight the styling to read it. */
-table.board tbody tr.is-load-cancelled:hover { opacity: 1; }
+table.board tbody tr.is-load-cancelled.site-row-hover-current { opacity: 1; }
 /* Driver call-offs are persisted separately from explicit load cancellations,
    but both mean the load is no longer running. Keep the same visual treatment
    even when the board is rebuilt from Supabase. */

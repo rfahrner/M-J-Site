@@ -70,8 +70,10 @@ console.log('\n2. the board marks both flags with the same class');
 check('either flag sets is-load-cancelled',
   /\(row\.calledOff \|\| row\.loadCancelled\) \? "is-load-cancelled"/.test(SRC), true);
 check('the stylesheet fades that class', /tr\.is-load-cancelled \{ opacity: 0\.55; \}/.test(CSS), true);
+// Board hover is a JS-applied class, not native :hover -- see
+// scripts/board-row-hover.test.mjs for why.
 check('and lifts it on hover',
-  /tr\.is-load-cancelled:hover \{ opacity: 1; \}/.test(CSS), true);
+  /tr\.is-load-cancelled\.site-row-hover-current \{ opacity: 1; \}/.test(CSS), true);
 
 // ---------------------------------------------------------------------------
 console.log('\n3. the fade does not let columns bleed through the pinned ones');
