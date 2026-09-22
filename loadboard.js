@@ -23,6 +23,7 @@ import { initVolumePage } from './analytics-volume.js';
 import { initLocationAnalyticsPage } from './location-analytics.js';
 import { renderNav, startAlertScanning, IDLE_THRESHOLD_MIN, PRE_SHIFT_TEXT_LEAD_MIN, PRE_SHIFT_CALL_FOLLOWUP_MIN, PRE_SHIFT_ESCALATION_MIN, LAST_STOP_RETURN_FOLLOWUP_MIN } from './alerts.js';
 import { queueLoadUpdateDebounced, flushQueuedUpdates } from './aljex-outbox.js';
+import { UPLOAD_ACCEPT, acceptedUploads, isAcceptedUpload, isPdfRef, pdfChipHtml } from './upload-file-types.js';
 import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRateBreakdown, effectiveTierRate, effectiveSetting, isTierOverridden, isSettingOverridden, isDriverTierOverridden, isDriverSettingOverridden, saveTierRate, saveSetting } from './boardrates.js';
 
   /* ---------------- page map (single source of truth for nav) ---------------- */
@@ -1115,7 +1116,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (!supabaseClient) return;
     if (!row.dbId) await saveRowFn(row);
     if (!row.dbId) { setDriverSyncStatus("Couldn't save this load before uploading — try again.", "error"); return; }
-    const list = Array.from(files || []).filter((file) => file && String(file.type || "").startsWith("image/"));
+    const list = acceptedUploads(files);
     if (!list.length) return;
     const paths = row.routeImagePaths || parseRouteImagePaths(row.routeImagePath);
     const urls = row.routeImageUrls || [];
@@ -1303,6 +1304,14 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (!imageUrls.length && row.routeImageUrl) imageUrls.push(row.routeImageUrl);
     if (!imageUrls.length) return;
     const selectedIndex = Math.max(0, Math.min(Number(imageIndex) || 0, imageUrls.length - 1));
+    // This viewer is an <img> with zoom and rotate, so a PDF cannot go in it.
+    // The browser's own PDF viewer is better than anything worth building
+    // here, so hand it over. The chip is already an anchor to the same URL --
+    // this covers a PDF reached some other way, e.g. the keyboard path.
+    if (isPdfRef(imageUrls[selectedIndex])) {
+      window.open(imageUrls[selectedIndex], "_blank", "noopener");
+      return;
+    }
     const overlay = document.createElement("div");
     overlay.className = "overlay image-lightbox-overlay";
     overlay.id = "board-image-overlay";
@@ -1357,14 +1366,16 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const imageUrls = (row.routeImageUrls || []).filter(Boolean);
     if (!imageUrls.length && row.routeImageUrl) imageUrls.push(row.routeImageUrl);
     return `
-      <div class="mdz-image-dropzone" tabindex="0" data-action="row-image-dropzone" data-row-image-id="${rowIdAttr}" title="Click to browse, or drag/paste one or more images here">
+      <div class="mdz-image-dropzone" tabindex="0" data-action="row-image-dropzone" data-row-image-id="${rowIdAttr}" title="Click to browse, or drag/paste images and PDFs here">
         ${imageUrls.length
           ? imageUrls.map((url, index) => `<div class="mdz-thumb-wrap">
-               <img src="${escapeHtml(url)}" class="mdz-route-thumb" data-action="view-row-image" data-row-image-id="${rowIdAttr}" data-image-index="${index}" alt="Route image ${index + 1}" title="Click to view full size">
-               <button type="button" class="mdz-thumb-delete" data-action="delete-row-image" data-row-image-id="${rowIdAttr}" data-image-index="${index}" title="Delete image ${index + 1}">&times;</button>
+               ${isPdfRef(url)
+                 ? pdfChipHtml(url, { dataAttrs: `data-action="view-row-image" data-row-image-id="${rowIdAttr}" data-image-index="${index}"` })
+                 : `<img src="${escapeHtml(url)}" class="mdz-route-thumb" data-action="view-row-image" data-row-image-id="${rowIdAttr}" data-image-index="${index}" alt="Route image ${index + 1}" title="Click to view full size">`}
+               <button type="button" class="mdz-thumb-delete" data-action="delete-row-image" data-row-image-id="${rowIdAttr}" data-image-index="${index}" title="Delete attachment ${index + 1}">&times;</button>
              </div>`).join("")
           : `<span class="mdz-upload-hint">Drop / paste / click</span>`}
-        <input type="file" accept="image/*" multiple data-action="upload-row-image" data-row-image-id="${rowIdAttr}" class="mdz-hidden-file-input">
+        <input type="file" accept="${UPLOAD_ACCEPT}" multiple data-action="upload-row-image" data-row-image-id="${rowIdAttr}" class="mdz-hidden-file-input">
       </div>`;
   }
 
@@ -1429,10 +1440,11 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (!items) return;
       const files = [];
       for (const item of items) {
-        if (item.type.startsWith("image/")) {
-          const file = item.getAsFile();
-          if (file) files.push(file);
-        }
+        if (item.kind !== "file") continue;
+        const file = item.getAsFile();
+        // Judged on the file, not the clipboard item's type: a PDF pasted
+        // from Explorer often arrives with a blank or generic item type.
+        if (file && isAcceptedUpload(file)) files.push(file);
       }
       if (files.length) {
         e.preventDefault();
@@ -5181,7 +5193,11 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         label: `Route ${tripIndex + 1}${urls.length > 1 ? ` — Image ${imageIndex + 1}` : ""}`,
       }));
     });
-    return items.map((item) => `<div class="ld-image-item"><img class="ld-image-thumb" data-inline-image-src="${escapeHtml(item.url)}" src="${escapeHtml(item.url)}" alt="${escapeHtml(item.label)}" title="Click to enlarge"><div class="subtext">${escapeHtml(item.label)}</div></div>`).join("");
+    return items.map((item) => `<div class="ld-image-item">${
+      isPdfRef(item.url)
+        ? pdfChipHtml(item.url, { label: item.label })
+        : `<img class="ld-image-thumb" data-inline-image-src="${escapeHtml(item.url)}" src="${escapeHtml(item.url)}" alt="${escapeHtml(item.label)}" title="Click to enlarge">`
+    }<div class="subtext">${escapeHtml(item.label)}</div></div>`).join("");
   }
 
   function renderLoadDetailsTabContent() {
@@ -5361,13 +5377,15 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     } else if (tab === "images") {
       const attachmentGallery = loadDetailsState.attachments.map((a) => `
             <div class="ld-image-item">
-              <img class="ld-image-thumb" data-inline-image-src="${escapeHtml(a.publicUrl || "")}" src="${escapeHtml(a.publicUrl || "")}" alt="${escapeHtml(a.file_name)}" title="Click to enlarge">
+              ${isPdfRef(a.publicUrl || a.file_name || "")
+                ? pdfChipHtml(a.publicUrl || "", { label: a.file_name })
+                : `<img class="ld-image-thumb" data-inline-image-src="${escapeHtml(a.publicUrl || "")}" src="${escapeHtml(a.publicUrl || "")}" alt="${escapeHtml(a.file_name)}" title="Click to enlarge">`}
               <button type="button" class="ld-image-remove" data-remove-attachment="${a.id}" title="Remove">&times;</button>
             </div>`).join("");
       const routeGallery = loadDetailsTripSheetImagesHtml(row);
       const gallery = attachmentGallery + routeGallery || `<div class="subtext">No trip sheet images uploaded yet.</div>`;
       body.innerHTML = `
-        <input type="file" id="ld-file-input" accept="image/*" multiple>
+        <input type="file" id="ld-file-input" accept="${UPLOAD_ACCEPT}" multiple>
         <div class="ld-image-gallery" id="ld-image-gallery">${gallery}</div>
       `;
     } else if (tab === "history") {
@@ -7268,16 +7286,17 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           e.preventDefault();
           ppwkDropzone.classList.remove("mdz-dropzone-active");
           const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-          if (file && file.type.startsWith("image/")) uploadPaperworkImage(file);
+          if (file && isAcceptedUpload(file)) uploadPaperworkImage(file);
         });
         ppwkDropzone.addEventListener("paste", (e) => {
           const items = e.clipboardData && e.clipboardData.items;
           if (!items) return;
           for (const item of items) {
-            if (item.type.startsWith("image/")) {
+            if (item.kind !== "file") continue;
+            const file = item.getAsFile();
+            if (file && isAcceptedUpload(file)) {
               e.preventDefault();
-              const file = item.getAsFile();
-              if (file) uploadPaperworkImage(file);
+              uploadPaperworkImage(file);
               break;
             }
           }

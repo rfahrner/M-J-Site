@@ -13,6 +13,7 @@ import {
   setDriverSyncStatus,
   viewRowImage,
 } from './loadboard.js';
+import { UPLOAD_ACCEPT, acceptedUploads, isAcceptedUpload, isPdfRef, pdfChipHtml } from './upload-file-types.js';
 
 const FIELD_ID = 'ld-overview-timesheet-image-field';
 const ZONE_ID = 'ld-overview-timesheet-image-zone';
@@ -66,12 +67,14 @@ function renderField(field) {
   const list = attachments();
   const thumbs = list.map((att, index) => `
     <div class="mdz-thumb-wrap ld-overview-timesheet-thumb-wrap">
-      <img
+      ${isPdfRef(att.publicUrl || att.file_name || '')
+        ? pdfChipHtml(att.publicUrl || '', { label: att.file_name })
+        : `<img
         src="${safeText(att.publicUrl || '')}"
         class="mdz-route-thumb"
         data-ld-timesheet-view="${index}"
         alt="Time sheet image ${index + 1}"
-        title="Click to view full size">
+        title="Click to view full size">`}
       <button
         type="button"
         class="mdz-thumb-delete"
@@ -83,7 +86,7 @@ function renderField(field) {
     <legend>Time Sheet Image</legend>
     <div class="mdz-image-dropzone${uploadBusy ? ' is-uploading' : ''}" tabindex="0" id="${ZONE_ID}" title="Click to browse, or drag/paste one or more time sheet images here">
       ${thumbs || `<span class="mdz-upload-hint">${uploadBusy ? 'Uploading…' : 'Drop / paste / click'}</span>`}
-      <input type="file" accept="image/*" multiple id="ld-overview-timesheet-image-input" class="mdz-hidden-file-input" ${uploadBusy ? 'disabled' : ''}>
+      <input type="file" accept="${UPLOAD_ACCEPT}" multiple id="ld-overview-timesheet-image-input" class="mdz-hidden-file-input" ${uploadBusy ? 'disabled' : ''}>
     </div>`;
 }
 
@@ -151,7 +154,7 @@ async function deleteAttachment(id, ask = true) {
 
 async function uploadFiles(files) {
   const row = activeRow();
-  const imageFiles = [...(files || [])].filter((file) => file?.type?.startsWith('image/'));
+  const imageFiles = acceptedUploads(files);
   if (!imageFiles.length || uploadBusy) return;
   if (!row?.dbId || !supabaseClient) {
     setDriverSyncStatus?.('Save this load first before adding a time sheet image.', 'error');
@@ -277,7 +280,7 @@ function init() {
 
   document.addEventListener('paste', (event) => {
     if (!isZoneTarget(event.target)) return;
-    const files = [...(event.clipboardData?.files || [])].filter((file) => file.type.startsWith('image/'));
+    const files = acceptedUploads(event.clipboardData?.files);
     if (!files.length) return;
     event.preventDefault();
     void uploadFiles(files);
