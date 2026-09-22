@@ -4059,7 +4059,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // separate multiple recipients" has been switched on, and it is off by
   // default).
   const TEXT_DRAFT_HINT =
-    "Opens in whichever Outlook Windows treats as the default. If that is not the one your mail is in, copy the addresses and message and paste them into the Outlook you actually use.";
+    "Open in Outlook uses whichever mail app Windows treats as the default, which is not always the one your mail is in. If no draft appears, or it opens somewhere you are not signed in, use Outlook Web — or copy the addresses and message and paste them into the Outlook you actually use.";
 
   function openMailDraft(addresses, message) {
     const a = document.createElement("a");
@@ -4070,6 +4070,21 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     document.body.appendChild(a);
     a.click();
     a.remove();
+  }
+
+  // A third route that does not touch Windows at all. The mailto above depends
+  // on which app Windows has registered as the default mail client, and that
+  // has now failed two different ways on two different machines -- once
+  // opening an Outlook the mailbox was not signed into, once producing no
+  // draft window whatsoever. This opens the compose window in a browser tab
+  // instead, using the Outlook session the dispatcher is already signed into.
+  // Addresses stay unencoded: they are digits@textbetter.com, which needs no
+  // escaping, and the deeplink expects a plain comma-separated list.
+  const OUTLOOK_WEB_COMPOSE = "https://outlook.office.com/mail/deeplink/compose";
+
+  function openOutlookWebDraft(addresses, message) {
+    const url = `${OUTLOOK_WEB_COMPOSE}?to=${addresses.join(",")}&body=${encodeURIComponent(message)}`;
+    window.open(url, "_blank", "noopener");
   }
 
   async function copyToClipboard(text) {
@@ -4105,6 +4120,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   function textDraftControlsHtml(idPrefix, { withDone = false } = {}) {
     return `<div style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px; align-items:center;">
       <button type="button" class="btn btn-ghost" id="${idPrefix}-open">Open in Outlook</button>
+      <button type="button" class="btn btn-ghost" id="${idPrefix}-open-web">Open in Outlook Web</button>
       <button type="button" class="btn btn-ghost" id="${idPrefix}-copy-addrs">Copy Addresses</button>
       <button type="button" class="btn btn-ghost" id="${idPrefix}-copy-msg">Copy Message</button>
       ${withDone ? `<button type="button" class="btn btn-ghost" id="${idPrefix}-done">Done \u2014 mark as sent</button>` : ""}
@@ -4124,6 +4140,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     };
     on("open", () => {
       openMailDraft(addresses, message);
+      if (typeof onOpened === "function") onOpened();
+    });
+    on("open-web", () => {
+      openOutlookWebDraft(addresses, message);
       if (typeof onOpened === "function") onOpened();
     });
     on("copy-addrs", async () => {

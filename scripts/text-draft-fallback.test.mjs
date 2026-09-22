@@ -2,11 +2,12 @@
  * Regression test for taking a text into Outlook by hand.
  *
  * A mailto: goes to whatever Windows has registered as the default mail
- * client. That is not necessarily the Outlook the dispatcher's mailbox is set
- * up in: a machine migrated to new Outlook while the account still only exists
- * in classic Outlook opens the draft in an app that cannot send it, and a web
- * page cannot choose between the two. So the same draft is also offered as
- * copy-and-paste, which does not depend on the default app at all.
+ * client, and a web page cannot choose between the ones installed. That has
+ * now failed two different ways on two different machines: once opening an
+ * Outlook the mailbox was not signed into, and once producing no draft window
+ * at all. So the same draft is offered three more ways that do not depend on
+ * the default app -- Outlook on the web in a browser tab, and copy-and-paste
+ * of the addresses and the message.
  *
  * What this pins:
  *  - the mailto still uses COMMAS (what the mailto spec requires, and what
@@ -58,7 +59,7 @@ function extractFunction(src, name) {
 }
 
 const HINT = /const TEXT_DRAFT_HINT\s*=\s*\n?\s*"([^"]*)"/.exec(SRC);
-const bodies = ['openMailDraft', 'copyToClipboard', 'textDraftControlsHtml', 'wireTextDraftControls']
+const bodies = ['openMailDraft', 'openOutlookWebDraft', 'copyToClipboard', 'textDraftControlsHtml', 'wireTextDraftControls']
   .map((n) => extractFunction(SRC, n)).join('\n');
 
 const dom = new JSDOM('<!doctype html><html><body><div id="host"></div></body></html>', { url: 'https://example.test/' });
@@ -75,6 +76,10 @@ void origClick;
 const copied = [];
 const nav = { clipboard: { writeText: async (t) => { copied.push(t); } } };
 
+// Record the Outlook-on-the-web tab instead of opening one.
+const opens = [];
+window.open = (url, target, features) => { opens.push({ url, target, features }); return null; };
+
 const sandbox = {
   window, document: window.document, navigator: nav,
   escapeHtml: (v) => String(v == null ? '' : v).replace(/[&<>"']/g,
@@ -82,10 +87,11 @@ const sandbox = {
   $: (sel) => window.document.querySelector(sel),
   console: { error: () => {} },
   TEXT_DRAFT_HINT: HINT ? HINT[1] : '',
+  OUTLOOK_WEB_COMPOSE: /const OUTLOOK_WEB_COMPOSE = "([^"]+)"/.exec(SRC)[1],
 };
 const api = new Function(
   ...Object.keys(sandbox),
-  `${bodies}; return { openMailDraft, copyToClipboard, textDraftControlsHtml, wireTextDraftControls };`
+  `${bodies}; return { openMailDraft, openOutlookWebDraft, copyToClipboard, textDraftControlsHtml, wireTextDraftControls };`
 )(...Object.values(sandbox));
 
 const ADDRS = ['15551230001@textbetter.com', '15551230002@textbetter.com', '15551230003@textbetter.com'];
@@ -126,16 +132,34 @@ window.document.getElementById('t1-done').click();
 check('Done marked it sent too', done, 1);
 
 // ---------------------------------------------------------------------------
+console.log('\n3b. Outlook on the web needs no mail app at all');
+window.document.getElementById('t1-open-web').click();
+check('a compose tab was opened', opens.length, 1);
+check('opened in a new tab', opens[0]?.target, '_blank');
+check('noopener set', /noopener/.test(opens[0]?.features || ''), true);
+check('points at the Outlook web compose deeplink',
+  (opens[0]?.url || '').startsWith('https://outlook.office.com/mail/deeplink/compose?'), true);
+check('recipients comma-separated and unescaped',
+  (opens[0]?.url || '').includes(`to=${ADDRS.join(',')}`), true);
+check('body percent-encoded, not plus-encoded',
+  (opens[0]?.url || '').includes(`body=${encodeURIComponent(MESSAGE)}`), true);
+check('no raw spaces left in the url', /\s/.test(opens[0]?.url || ''), false);
+check('the web route marks it sent too', opened, 2);
+
+// ---------------------------------------------------------------------------
 console.log('\n4. the group flow gets copy controls but no Done button');
 window.document.getElementById('host').innerHTML = api.textDraftControlsHtml('t2');
 check('no Done button', window.document.getElementById('t2-done'), null);
 check('still has Copy Addresses', !!window.document.getElementById('t2-copy-addrs'), true);
 check('still has Open in Outlook', !!window.document.getElementById('t2-open'), true);
+check('still has Open in Outlook Web', !!window.document.getElementById('t2-open-web'), true);
 
 // ---------------------------------------------------------------------------
 console.log('\n5. the hint says what to do when the wrong Outlook opens');
 check('hint mentions copying', /copy the addresses and message/i.test(sandbox.TEXT_DRAFT_HINT), true);
 check('hint mentions the default', /default/i.test(sandbox.TEXT_DRAFT_HINT), true);
+check('hint names the web route', /Outlook Web/i.test(sandbox.TEXT_DRAFT_HINT), true);
+check('hint covers "no draft appears"', /no draft appears/i.test(sandbox.TEXT_DRAFT_HINT), true);
 
 // ---------------------------------------------------------------------------
 console.log('\n6. a single recipient reads correctly');
