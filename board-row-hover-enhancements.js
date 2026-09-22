@@ -107,6 +107,7 @@ function applyHover(table, tr) {
   clearHover(table);
   currentHover.set(table, tr);
   tr.classList.add(HOVER_CLASS);
+  watchForRedraws(table);
 
   // The rowspanned parent treatment is only needed on standard load boards.
   if (!table.matches('table.board')) return;
@@ -141,8 +142,62 @@ function holdsSharedCell(table, cell, tr) {
   return lit.dataset.parentRow === tr.id;
 }
 
+// A board redraw replaces the <tr> under the pointer. The browser sends no
+// further mouseover until the pointer MOVES, so the highlight vanished and only
+// came back when the dispatcher twitched the mouse -- on a board that redraws
+// while they are reading it, that reads as the row blinking. Remember where the
+// pointer is so the row can be found again after the table is rebuilt.
+let pointerX = -1;
+let pointerY = -1;
+
+// Lazily, and only on a table the pointer has actually been over: a
+// document-wide observer on this board is a mistake that has been made before
+// (see the note about injected wrappers in CLAUDE.md).
+const observedTables = new WeakSet();
+let reapplyQueued = false;
+
+function reapplyFromPointer() {
+  if (pointerX < 0) return;
+  const tr = rowFor(document.elementFromPoint(pointerX, pointerY));
+  if (!tr) return;
+  const table = tr.closest(TABLE_SELECTOR);
+  if (!table) return;
+  // The row that was lit before the redraw has been thrown away, so comparing
+  // against it would make applyHover() think nothing had changed and skip.
+  const lit = currentHover.get(table);
+  if (lit && !lit.isConnected) currentHover.delete(table);
+  applyHover(table, tr);
+}
+
+function watchForRedraws(table) {
+  if (typeof MutationObserver === 'undefined') return;
+  if (observedTables.has(table)) return;
+  observedTables.add(table);
+  new MutationObserver(() => {
+    if (reapplyQueued) return;
+    reapplyQueued = true;
+    const run = () => {
+      reapplyQueued = false;
+      reapplyFromPointer();
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+    else setTimeout(run, 16);
+  }).observe(table, { childList: true, subtree: true });
+}
+
 function installHoverBehavior() {
+  document.addEventListener('mousemove', (event) => {
+    pointerX = event.clientX;
+    pointerY = event.clientY;
+  }, { passive: true });
+
   document.addEventListener('mouseover', (event) => {
+    // Also recorded here, not only from mousemove: a dispatcher who has not
+    // moved the mouse since the page drew still needs the row found again
+    // after a redraw, and mouseover is the event that put them on it.
+    pointerX = event.clientX;
+    pointerY = event.clientY;
+
     const tr = rowFor(event.target);
     if (!tr) return;
     const table = tr.closest(TABLE_SELECTOR);
