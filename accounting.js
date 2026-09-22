@@ -11,6 +11,29 @@ import {
 } from './loadboard.js';
 import { ACCOUNTING_TABLE, ACCOUNTING_ROUTES_TABLE, loadPricingData, calcRoute, getPricingTiers, getPricingSettings } from './accountingcalc.js';
 import { releaseToAljex } from './aljex-outbox.js';
+import { saveAccountingFields } from './accounting-save.js';
+const pendingAccountingChecks = new Set();
+
+async function saveAccountingCheckbox(rec, patch, label) {
+  const key = String(rec.id);
+  if (pendingAccountingChecks.has(key)) return;
+  pendingAccountingChecks.add(key);
+  renderAccountingTable();
+  setDriverSyncStatus(`Saving ${label}…`, '');
+  try {
+    const saved = await saveAccountingFields(supabaseClient, rec.id, patch);
+    // Realtime may have replaced the original record while the save ran.
+    const current = getAccountingRecordById(rec.id);
+    if (current) for (const field of Object.keys(patch)) current[field] = saved[field];
+    accountingRecords.sort(acctSortCompare);
+    setDriverSyncStatus(`${label} saved.`, 'success');
+  } catch (err) {
+    setDriverSyncStatus(`Couldn't save ${label} (${err.message || err}).`, 'error');
+  } finally {
+    pendingAccountingChecks.delete(key);
+    renderAccountingTable();
+  }
+}
 let accountingRecords = [];
   let accountingDriverSort = 0;
   function compareAccountingDriverNames(a, b) {
@@ -279,9 +302,9 @@ let accountingRecords = [];
         </div>
       </td>${showFsc ? `<td>${fmtMoney(rec.fsc_payment)}</td>` : ""}`}
       <td><select class="cell-input" data-action="acct-day-type" data-id="${rec.id}">${dayTypeOptions}</select></td>
-      <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-sent" data-id="${rec.id}" ${rec.sent ? "checked" : ""} title="Sent"></td>
-      <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-released" data-id="${rec.id}" ${rec.status === "released" ? "checked" : ""} title="Released"></td>
-      <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-hidden" data-id="${rec.id}" ${rec.hidden ? "checked" : ""} title="Hidden"></td>
+      <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-sent" data-id="${rec.id}" ${pendingAccountingChecks.has(String(rec.id)) ? "disabled" : ""} ${rec.sent ? "checked" : ""} title="Sent"></td>
+      <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-released" data-id="${rec.id}" ${pendingAccountingChecks.has(String(rec.id)) ? "disabled" : ""} ${rec.status === "released" ? "checked" : ""} title="Released"></td>
+      <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-hidden" data-id="${rec.id}" ${pendingAccountingChecks.has(String(rec.id)) ? "disabled" : ""} ${rec.hidden ? "checked" : ""} title="Hidden"></td>
     </tr>`;
   }
   export function getFilteredAccountingRecords() {
@@ -518,36 +541,12 @@ export function renderDriverStatsTable() {
         else if (t.dataset.action === "acct-hidden") {
           const rec = accountingRecords.find((r) => r.id == t.dataset.id);
           if (!rec) return;
-          const wasHidden = rec.hidden;
-          rec.hidden = t.checked;
-          renderAccountingTable(); // the row disappears immediately unless Show Hidden is already on
-          supabaseClient.from(ACCOUNTING_TABLE).update({ hidden: t.checked }).eq("id", rec.id).select()
-            .then(({ data, error }) => {
-              if (error) throw error;
-              if (!data || data.length === 0) {
-                // Same silent failure mode already hit once with the drivers
-                // table: Supabase returns success with zero rows touched
-                // when a table has no UPDATE policy in Row Level Security —
-                // no error, but nothing actually saved. Revert the checkbox
-                // rather than let the UI keep showing a state that never
-                // made it to the database.
-                rec.hidden = wasHidden;
-                renderAccountingTable();
-                setDriverSyncStatus('Hidden didn\'t save — 0 rows were updated. loads_accounting needs an "update" Row Level Security policy.', "error");
-              }
-            })
-            .catch((err) => {
-              rec.hidden = wasHidden;
-              renderAccountingTable();
-              setDriverSyncStatus(`Couldn't save Hidden (${err.message || err}).`, "error");
-            });
+          void saveAccountingCheckbox(rec, { hidden: t.checked }, 'Hidden');
         }
         else if (t.dataset.action === "acct-sent") {
           const rec = accountingRecords.find((r) => r.id == t.dataset.id);
           if (!rec) return;
-          rec.sent = t.checked;
-          supabaseClient.from(ACCOUNTING_TABLE).update({ sent: t.checked }).eq("id", rec.id)
-            .catch((err) => setDriverSyncStatus(`Couldn't save Sent (${err.message || err}).`, "error"));
+          void saveAccountingCheckbox(rec, { sent: t.checked }, 'Sent');
         }
         else if (t.dataset.action === "acct-released") {
           const rec = accountingRecords.find((r) => r.id == t.dataset.id);
@@ -556,22 +555,20 @@ export function renderDriverStatsTable() {
           // Un-releasing is purely local bookkeeping — it can't recall
           // anything already handed to Aljex, so it never touches the outbox.
           if (!t.checked) {
-            rec.status = "active";
-            accountingRecords.sort(acctSortCompare);
-            renderAccountingTable();
-            supabaseClient.from(ACCOUNTING_TABLE).update({ status: "active" }).eq("id", rec.id)
-              .catch((err) => setDriverSyncStatus(`Couldn't save status (${err.message || err}).`, "error"));
+            void saveAccountingCheckbox(rec, { status: 'active' }, 'Released');
             return;
           }
 
           // Releasing is the hand-off: Accounting's numbers become the
           // authoritative payload and go out to Aljex.
-          t.disabled = true;
+          if (pendingAccountingChecks.has(String(rec.id))) return;
+          pendingAccountingChecks.add(String(rec.id));
+          renderAccountingTable();
           setDriverSyncStatus("Releasing to Aljex…", "");
           releaseToAljex(rec.id)
             .then((result) => {
-              rec.status = "released";
-              rec.sent = result.failed === 0;
+              const current = getAccountingRecordById(rec.id);
+              if (current) { current.status = "released"; current.sent = result.failed === 0; }
               accountingRecords.sort(acctSortCompare);
               renderAccountingTable();
               const refs = result.payload.refs.map((r) => r.value).join(", ") || "no route refs";
@@ -586,7 +583,7 @@ export function renderDriverStatsTable() {
               t.checked = false;
               setDriverSyncStatus(`Couldn't release to Aljex: ${err.message || err}`, "error");
             })
-            .finally(() => { t.disabled = false; });
+            .finally(() => { pendingAccountingChecks.delete(String(rec.id)); renderAccountingTable(); });
         }
         else if (t.dataset.action === "acct-day-type") {
           const rec = accountingRecords.find((r) => r.id == t.dataset.id);
