@@ -1,3 +1,4 @@
+import { UPLOAD_ACCEPT, isPdfRef, pdfChipHtml } from './upload-file-types.js';
 // Mondelez completed-row presentation.
 //
 // Mondelez rows represent the whole scheduled shift/load record. Completing a
@@ -68,11 +69,13 @@ function completedRowCells(row) {
       <div class="mdz-image-dropzone" tabindex="0" data-action="image-dropzone" data-mdz-row="${row.id}" title="Click to browse, or drag/paste an image here">
         ${row.routeImageUrl
           ? `<div class="mdz-thumb-wrap">
-               <img src="${escapeHtml(row.routeImageUrl)}" class="mdz-route-thumb" data-action="view-route-image" data-mdz-row="${row.id}" alt="Route image" title="Click to view full size">
+               ${isPdfRef(row.routeImageUrl)
+                 ? pdfChipHtml(row.routeImageUrl, { dataAttrs: `data-action="view-route-image" data-mdz-row="${row.id}"` })
+                 : `<img src="${escapeHtml(row.routeImageUrl)}" class="mdz-route-thumb" data-action="view-route-image" data-mdz-row="${row.id}" alt="Route image" title="Click to view full size">`}
                <button type="button" class="mdz-thumb-delete" data-action="delete-route-image" data-mdz-row="${row.id}" title="Delete image">&times;</button>
              </div>`
           : `<span class="mdz-upload-hint">Drop / paste / click</span>`}
-        <input type="file" accept="image/*" data-action="upload-route-image" data-mdz-row="${row.id}" class="mdz-hidden-file-input">
+        <input type="file" accept="${UPLOAD_ACCEPT}" data-action="upload-route-image" data-mdz-row="${row.id}" class="mdz-hidden-file-input">
       </div>
     </td>
     <td class="col-availRemove"><button type="button" class="available-remove-btn" data-action="delete-mdz-row" data-mdz-row="${row.id}" title="Delete">&times;</button></td>

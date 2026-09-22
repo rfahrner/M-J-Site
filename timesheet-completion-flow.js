@@ -12,6 +12,7 @@
  * listeners be installed before the integrity guard is imported.
  */
 import * as lb from './loadboard.js';
+import { UPLOAD_ACCEPT, isAcceptedUpload } from './upload-file-types.js';
 
 let modalObserver = null;
 let currentCompletionGeneration = 0;
@@ -110,7 +111,7 @@ function ensureImageField() {
     <label>Time Sheet Image <span class="subtext">(optional)</span></label>
     <div class="mdz-image-dropzone" tabindex="0" id="tsc-timesheet-image-zone" title="Click to browse, or drag/paste an image here">
       <span class="mdz-upload-hint">Drop / paste / click</span>
-      <input type="file" accept="image/*" id="tsc-timesheet-image" class="mdz-hidden-file-input">
+      <input type="file" accept="${UPLOAD_ACCEPT}" id="tsc-timesheet-image" class="mdz-hidden-file-input">
     </div>`;
   error.insertAdjacentElement('beforebegin', field);
 
@@ -138,7 +139,7 @@ function ensureImageField() {
     setTimesheetFile(event.dataTransfer?.files?.[0] || null);
   });
   zone.addEventListener('paste', (event) => {
-    const file = [...(event.clipboardData?.files || [])].find((f) => f.type.startsWith('image/'));
+    const file = [...(event.clipboardData?.files || [])].find(isAcceptedUpload);
     if (file) {
       event.preventDefault();
       setTimesheetFile(file);
