@@ -1610,14 +1610,24 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (oldIsBlank) return;
     if (String(oldValue) === String(newValue)) return;
     try {
-      await supabaseClient.from("load_change_history").insert({
-        shift_id: shiftDbId || null,
-        load_label: label || null,
-        field_name: fieldName,
-        old_value: oldValue != null ? String(oldValue) : null,
-        new_value: newValue != null ? String(newValue) : null,
-        changed_by: currentUserLabel || "unknown user",
-      }).select();
+      // log_load_change() instead of a plain INSERT, for the same reason the
+      // board's notes go through log_board_note(): this is called on focusout,
+      // and a redraw mid-typing fires focusout with partial text, so the audit
+      // trail was recording keystrokes as changes (740 of 36,352 entries). The
+      // function merges an entry that only extends the previous one from the
+      // same person on the same field within two minutes, keeping the ORIGINAL
+      // old_value -- the true "before" is what was there when editing started,
+      // not the previous keystroke. It re-checks the blank/no-op guards above
+      // server-side too, so any other caller gets the same behaviour.
+      const { error } = await supabaseClient.rpc("log_load_change", {
+        p_shift_id: shiftDbId || null,
+        p_load_label: label || null,
+        p_field_name: fieldName,
+        p_old_value: oldValue != null ? String(oldValue) : null,
+        p_new_value: newValue != null ? String(newValue) : null,
+        p_changed_by: currentUserLabel || "unknown user",
+      });
+      if (error) throw error;
     } catch (e) {
       console.error("logChange failed:", e); // never block the actual action over a logging failure
     }
@@ -6071,12 +6081,31 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // whatever passed through it is preserved here forever — even after
   // it's later changed or cleared from the board itself. Silently skips
   // empty commits, since clearing the field isn't itself a note worth logging.
+  // Goes through log_board_note() rather than a plain INSERT. This runs on
+  // focusout, which is the right moment in principle -- but the board also
+  // redraws while someone is typing (realtime echoes, debounced saves), and a
+  // redraw replaces the focused input, which fires focusout carrying whatever
+  // partial text was on screen. One sentence became a row per redraw:
+  //
+  //   "store"                                       7:48:54 PM
+  //   "store did not have S"                        7:48:58 PM
+  //   "store did not have Salvage for driver to..." 7:49:10 PM
+  //
+  // Only the last line is the note. The function merges a note that merely
+  // extends (or trims) the same author's board note from the last few minutes
+  // into that row, keeping the newest text and timestamp, and starts a fresh
+  // row for anything that is genuinely a different note. Doing it at the write
+  // rather than at the focusout means it holds whatever causes the duplicate --
+  // see supabase/migrations/20260922_coalesce_keystroke_notes_and_changes.sql.
   async function logBoardNoteToPermanentLog(shiftDbId, noteText) {
     if (!supabaseClient || !shiftDbId || !String(noteText || "").trim()) return;
     try {
-      await supabaseClient.from(LOAD_NOTES_TABLE).insert({
-        shift_id: shiftDbId, note_text: noteText, source: "board", created_by: currentUserLabel || "unknown user",
+      const { error } = await supabaseClient.rpc("log_board_note", {
+        p_shift_id: shiftDbId,
+        p_note_text: noteText,
+        p_created_by: currentUserLabel || "unknown user",
       });
+      if (error) throw error;
     } catch (e) {
       console.error("logBoardNoteToPermanentLog failed:", e);
     }
