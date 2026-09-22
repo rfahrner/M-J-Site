@@ -1,3 +1,4 @@
+import { saveAccountingFields } from './accounting-save.js';
 /* ================================================================
    Aljex outbox — queue, dedupe, and drain.
 
@@ -203,13 +204,12 @@ export async function releaseToAljex(accountingId) {
 
   const drained = await drainOutbox({ limit: 5 });
 
-  const { error: uErr } = await supabaseClient.from(ACCOUNTING_TABLE).update({
+  await saveAccountingFields(supabaseClient, accountingId, {
     status: "released",
     sent: drained.failed === 0,
     aljex_released_at: new Date().toISOString(),
     aljex_released_by: currentUserName(),
-  }).eq("id", accountingId);
-  if (uErr) throw new Error(`Couldn't stamp release: ${uErr.message}`);
+  });
 
   return { ...drained, payload: queued.payload };
 }

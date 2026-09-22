@@ -64,6 +64,9 @@ jobs:
       - name: Test Atlanta Night Shift
         run: node --test scripts/night-shift.test.mjs
 
+      - name: Test accounting checkbox persistence
+        run: node --test scripts/accounting-save.test.mjs
+
       - name: Test Atlanta and Delaware rounded-down mileage tiers
         run: node --test scripts/carrier-mileage-tiers.test.mjs
 
