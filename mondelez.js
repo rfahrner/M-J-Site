@@ -23,8 +23,9 @@ import {
   closeContextMenu, handleRealtimeDriverChange, pick, textDriverPhone, openAddDriverModal,
   openDriverAutocomplete, updateDriverAutocomplete, closeDriverAutocomplete, captureFocusForRerender,
   handleRowAwareTab, openEditDriverModal, batchSignImageUrls, wireImageViewer,
-  openLocationNotesModal, closeLocationNotesModal, saveLocationNotes,
+  openLocationNotesModal, closeLocationNotesModal, saveLocationNotes, parseHHMM,
 } from './loadboard.js';
+import { nextShiftDate, nightShiftRows, shortShiftDate } from './night-shift.js';
 import { UPLOAD_ACCEPT, acceptedUploads, isAcceptedUpload, isPdfRef, pdfChipHtml } from './upload-file-types.js';
 export const MONDELEZ_TABLE = "mondelez_loads";
 export const MONDELEZ_RATE_SETTINGS_TABLE = "mondelez_rate_settings";
@@ -203,8 +204,25 @@ function getMondelezRowsForDate(dKey) {
   if (!mondelezState.rowsByDate[dKey]) mondelezState.rowsByDate[dKey] = [];
   return mondelezState.rowsByDate[dKey];
 }
+/*
+ * Night Shift, same rule as every other board: the day on screen plus the next
+ * morning's starts up to 06:00, so one operating night reads as one board.
+ * Mondelez calls its start time `startTime`.
+ *
+ * state.nightShift is the toggle every board shares, so the button's pressed
+ * state and the date chrome stay consistent across the nav.
+ *
+ * Rows come back as the canonical objects from each day's cache -- a
+ * carried-over row keeps saving under its own shift_date.
+ */
+export function mondelezNightShiftActive() { return !!state.nightShift; }
+
 function getMondelezDisplayRows(dKey) {
-  const rows = getMondelezRowsForDate(dKey);
+  const rows = mondelezNightShiftActive()
+    ? nightShiftRows(getMondelezRowsForDate(dKey),
+                     mondelezState.rowsByDate[nextShiftDate(dKey)] || [],
+                     parseHHMM, "startTime")
+    : getMondelezRowsForDate(dKey);
   if (mondelezState.activeTab === "combined") return rows;
   return rows.filter((r) => r.location === mondelezState.activeTab);
 }
@@ -362,7 +380,7 @@ function mondelezRowHtml(row) {
       <div class="driver-name-wrap"><input class="cell-input" data-driver-ac="true" placeholder="Type driver name…" data-mdz-row="${row.id}" data-mdz-field="driverName" value="${escapeHtml(displayName)}"></div>
     </td>
     <td class="col-cell"><span class="static-text">${escapeHtml(pick(drv && drv.phone, ""))}</span></td>
-    <td class="col-shiftStart"><input class="cell-input small" style="width:52px;" placeholder="--:--" data-mdz-row="${row.id}" data-mdz-field="startTime" value="${escapeHtml(row.startTime)}"></td>
+    <td class="col-shiftStart">${mondelezNightShiftActive() ? `<span class="static-text shift-start-date">${shortShiftDate(row.shiftDate || state.activeDate)}</span>` : ""}<input class="cell-input small" style="width:52px;" placeholder="--:--" data-mdz-row="${row.id}" data-mdz-field="startTime" value="${escapeHtml(row.startTime)}"></td>
     <td class="col-mdz-group"><input class="cell-input small" style="width:88px;" placeholder="DG#" data-mdz-row="${row.id}" data-mdz-field="deliveryGroup" value="${escapeHtml(row.deliveryGroup)}"></td>
     <td class="col-mdz-driverapp"><input class="cell-input small" data-mdz-row="${row.id}" data-mdz-field="driverAppId" inputmode="numeric" maxlength="9" placeholder="9-digit ID" value="${escapeHtml(row.driverAppId)}"></td>
     <td class="col-mdz-trailer"><input class="cell-input small" data-mdz-row="${row.id}" data-mdz-field="trailerNumber" value="${escapeHtml(row.trailerNumber)}"></td>
@@ -431,7 +449,12 @@ function updateMondelezSelectCount() {
 function renderMondelezChrome() {
   const d = keyToDate(state.activeDate);
   const isToday = state.activeDate === state.todayKey;
-  if ($("#mondelez-subtext")) $("#mondelez-subtext").textContent = d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" }) + (isToday ? " · today" : "");
+  if ($("#mondelez-subtext")) {
+    $("#mondelez-subtext").textContent = d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })
+      + (isToday ? " · today" : "")
+      + (mondelezNightShiftActive() ? ` · Night Shift through ${shortShiftDate(nextShiftDate(state.activeDate))} 06:00` : "");
+  }
+  $("#btn-night-shift")?.setAttribute("aria-pressed", String(mondelezNightShiftActive()));
   if ($("#date-input")) {
     $("#date-input").value = state.activeDate;
     $("#date-input").min = state.minDate;
@@ -816,6 +839,7 @@ export function switchMondelezTab(tabKey) {
 export async function loadAndRenderMondelez() {
   renderMondelezChrome();
   await ensureMondelezDateLoaded(state.activeDate);
+  if (mondelezNightShiftActive()) await ensureMondelezDateLoaded(nextShiftDate(state.activeDate));
   renderMondelezTable();
 }
 export function setMondelezActiveDate(newKey) {
@@ -829,8 +853,12 @@ function handleRealtimeMondelezChange(payload) {
   const dbRow = payload.new;
   if (!dbRow) return;
   if (dbRow.shift_date >= state.minDate && dbRow.shift_date <= state.maxDate) mondelezState.datesWithData.add(dbRow.shift_date);
-  if (dbRow.shift_date !== state.activeDate) return;
-  const rows = mondelezState.rowsByDate[state.activeDate];
+  // Under Night Shift the board also shows the next morning, so a payload for
+  // that day has to merge too or a carried-over row goes stale.
+  const onScreen = dbRow.shift_date === state.activeDate
+    || (mondelezNightShiftActive() && dbRow.shift_date === nextShiftDate(state.activeDate));
+  if (!onScreen) return;
+  const rows = mondelezState.rowsByDate[dbRow.shift_date];
   if (!rows) return;
   const existing = rows.find((r) => r.dbId === dbRow.id);
   if (!existing) {
@@ -876,6 +904,12 @@ export async function initMondelezPage() {
   const requestedLoc = new URLSearchParams(window.location.search).get("loc");
   if (requestedLoc === "combined" || MONDELEZ_LOCATION_KEYS.has(requestedLoc)) {
     mondelezState.activeTab = requestedLoc;
+  }
+  if ($("#btn-night-shift")) {
+    $("#btn-night-shift").addEventListener("click", () => {
+      state.nightShift = !state.nightShift;
+      loadAndRenderMondelez();
+    });
   }
   await loadMondelezRateSettings();
   loadAndRenderMondelez();
