@@ -2587,9 +2587,16 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (!$("#board-table")) return; // this page (e.g. Accounting) has no board grid — nothing to redraw
     const rows = getVisibleBoardRows();
     const sortKey = state.boardSort.key;
+    // Terminal loads sink, ordered by how much attention they still deserve:
+    // whatever is still running stays on top, then completed shifts (they ran,
+    // so the paperwork can still matter), then cancellations at the very
+    // bottom -- those never ran at all. A cancelled load that is also flagged
+    // complete still sorts as cancelled, which is why this is a rank rather
+    // than two comparisons.
+    const sinkRank = (r) => ((r.calledOff || r.loadCancelled) ? 2 : (r.shiftComplete ? 1 : 0));
     const displayRows = [...rows].sort((a, b) => {
-      const completeDiff = (a.shiftComplete ? 1 : 0) - (b.shiftComplete ? 1 : 0); // completed shifts always sink to the bottom
-      if (completeDiff !== 0) return completeDiff;
+      const rankDiff = sinkRank(a) - sinkRank(b);
+      if (rankDiff !== 0) return rankDiff;
       if (!sortKey) return 0;
       return compareRowsForSort(a, b, sortKey, state.boardSort.dir);
     });

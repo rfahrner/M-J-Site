@@ -757,6 +757,21 @@ tr.is-load-cancelled td:not(.pin-select):not(.pin-text) span.static-text {
   color: var(--slate-500);
 }
 tr.is-load-cancelled { background: rgba(71, 85, 105, 0.06); }
+/* Faded back the same way a released row reads on the Accounting sheet, so a
+   cancellation is obvious without having to read it. Cancelled loads also
+   sort to the very bottom of the board -- see sinkRank() in loadboard.js.
+
+   Opacity goes on the whole row, pinned columns included. That looks like it
+   should let the scrolling cells show through PRO#/Driver, since those are
+   position:sticky and the row becomes one composited group -- but it does
+   not: the sticky cells still paint above their siblings INSIDE the group on
+   their own opaque background, and only the finished group is faded against
+   the page. Checked by sampling pixels inside the pinned Driver cell with
+   1200px of columns scrolled underneath it: no bleed-through. */
+tr.is-load-cancelled { opacity: 0.55; }
+/* Hover lifts it back to full strength: a dispatcher checking why something
+   was cancelled should not have to fight the styling to read it. */
+table.board tbody tr.is-load-cancelled:hover { opacity: 1; }
 /* Driver call-offs are persisted separately from explicit load cancellations,
    but both mean the load is no longer running. Keep the same visual treatment
    even when the board is rebuilt from Supabase. */
