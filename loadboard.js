@@ -1610,14 +1610,24 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (oldIsBlank) return;
     if (String(oldValue) === String(newValue)) return;
     try {
-      await supabaseClient.from("load_change_history").insert({
-        shift_id: shiftDbId || null,
-        load_label: label || null,
-        field_name: fieldName,
-        old_value: oldValue != null ? String(oldValue) : null,
-        new_value: newValue != null ? String(newValue) : null,
-        changed_by: currentUserLabel || "unknown user",
-      }).select();
+      // log_load_change() instead of a plain INSERT, for the same reason the
+      // board's notes go through log_board_note(): this is called on focusout,
+      // and a redraw mid-typing fires focusout with partial text, so the audit
+      // trail was recording keystrokes as changes (740 of 36,352 entries). The
+      // function merges an entry that only extends the previous one from the
+      // same person on the same field within two minutes, keeping the ORIGINAL
+      // old_value -- the true "before" is what was there when editing started,
+      // not the previous keystroke. It re-checks the blank/no-op guards above
+      // server-side too, so any other caller gets the same behaviour.
+      const { error } = await supabaseClient.rpc("log_load_change", {
+        p_shift_id: shiftDbId || null,
+        p_load_label: label || null,
+        p_field_name: fieldName,
+        p_old_value: oldValue != null ? String(oldValue) : null,
+        p_new_value: newValue != null ? String(newValue) : null,
+        p_changed_by: currentUserLabel || "unknown user",
+      });
+      if (error) throw error;
     } catch (e) {
       console.error("logChange failed:", e); // never block the actual action over a logging failure
     }
@@ -4032,6 +4042,126 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     return `${withCountryCode}@textbetter.com`;
   }
 
+  // A mailto: hands the draft to whatever Windows has registered as the
+  // default mail client -- which is not necessarily the Outlook the
+  // dispatcher's mailbox is actually set up in. On a machine that has been
+  // migrated to new Outlook while the account still only exists in classic
+  // Outlook, the draft opens in an app that cannot send it, and a web page has
+  // no way to pick between the two. Nothing here can fix that; what it can do
+  // is offer the same draft in a form that does not depend on the default app
+  // at all, which is copy and paste.
+  //
+  // The mailto keeps comma-separated addresses -- that is what the mailto spec
+  // requires, and it is working for everyone whose default app is correct. The
+  // CLIPBOARD copy uses semicolons instead, because that text is pasted into
+  // Outlook's own To: field, where the semicolon is the native separator in
+  // both Outlooks (classic only accepts commas if "Commas can be used to
+  // separate multiple recipients" has been switched on, and it is off by
+  // default).
+  const TEXT_DRAFT_HINT =
+    "Open in Outlook uses whichever mail app Windows treats as the default, which is not always the one your mail is in. If no draft appears, or it opens somewhere you are not signed in, use Outlook Web — or copy the addresses and message and paste them into the Outlook you actually use.";
+
+  function openMailDraft(addresses, message) {
+    const a = document.createElement("a");
+    a.href = `mailto:${addresses.join(",")}?body=${encodeURIComponent(message)}`;
+    // Attached to the document before the click: a synthetic click on a
+    // detached anchor is not guaranteed to reach the OS protocol handler.
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  // A third route that does not touch Windows at all. The mailto above depends
+  // on which app Windows has registered as the default mail client, and that
+  // has now failed two different ways on two different machines -- once
+  // opening an Outlook the mailbox was not signed into, once producing no
+  // draft window whatsoever. This opens the compose window in a browser tab
+  // instead, using the Outlook session the dispatcher is already signed into.
+  // Addresses stay unencoded: they are digits@textbetter.com, which needs no
+  // escaping, and the deeplink expects a plain comma-separated list.
+  const OUTLOOK_WEB_COMPOSE = "https://outlook.office.com/mail/deeplink/compose";
+
+  function openOutlookWebDraft(addresses, message) {
+    const url = `${OUTLOOK_WEB_COMPOSE}?to=${addresses.join(",")}&body=${encodeURIComponent(message)}`;
+    window.open(url, "_blank", "noopener");
+  }
+
+  async function copyToClipboard(text) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (e) {
+      console.error("Clipboard write failed, trying the older path:", e);
+    }
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.top = "-1000px";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      return ok;
+    } catch (e) {
+      console.error("Clipboard fallback failed:", e);
+      return false;
+    }
+  }
+
+  // idPrefix keeps the two callers' buttons apart; withDone adds an explicit
+  // "mark as sent" for the single-recipient modal, which otherwise has no way
+  // to finish once the dispatcher has taken the message into Outlook by hand.
+  // The group flow already has its own "Sent - Next Batch" step.
+  function textDraftControlsHtml(idPrefix, { withDone = false } = {}) {
+    return `<div style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px; align-items:center;">
+      <button type="button" class="btn btn-ghost" id="${idPrefix}-open">Open in Outlook</button>
+      <button type="button" class="btn btn-ghost" id="${idPrefix}-open-web">Open in Outlook Web</button>
+      <button type="button" class="btn btn-ghost" id="${idPrefix}-copy-addrs">Copy Addresses</button>
+      <button type="button" class="btn btn-ghost" id="${idPrefix}-copy-msg">Copy Message</button>
+      ${withDone ? `<button type="button" class="btn btn-ghost" id="${idPrefix}-done">Done \u2014 mark as sent</button>` : ""}
+      <span class="subtext" id="${idPrefix}-copied"></span>
+    </div>
+    <div class="subtext" style="margin-top:4px;">${escapeHtml(TEXT_DRAFT_HINT)}</div>`;
+  }
+
+  function wireTextDraftControls(idPrefix, addresses, message, { onOpened, onDone } = {}) {
+    const say = (text) => {
+      const el = $(`#${idPrefix}-copied`);
+      if (el) el.textContent = text;
+    };
+    const on = (id, handler) => {
+      const el = $(`#${idPrefix}-${id}`);
+      if (el) el.addEventListener("click", handler);
+    };
+    on("open", () => {
+      openMailDraft(addresses, message);
+      if (typeof onOpened === "function") onOpened();
+    });
+    on("open-web", () => {
+      openOutlookWebDraft(addresses, message);
+      if (typeof onOpened === "function") onOpened();
+    });
+    on("copy-addrs", async () => {
+      // Semicolons: see TEXT_DRAFT_HINT above.
+      say(await copyToClipboard(addresses.join("; "))
+        ? `${addresses.length} address${addresses.length === 1 ? "" : "es"} copied \u2014 paste into To:`
+        : "Couldn't copy \u2014 select the addresses manually.");
+    });
+    on("copy-msg", async () => {
+      say(await copyToClipboard(message)
+        ? "Message copied \u2014 paste into the email body."
+        : "Couldn't copy \u2014 select the message manually.");
+    });
+    on("done", () => {
+      if (typeof onDone === "function") onDone();
+    });
+  }
+
   // DNU is a hard recipient block, not just a Driver List filter. Keep the
   // explicit names as a fail-safe in case a duplicate/legacy record loses its
   // rating. Nathaneil is an existing misspelling of Nathaniel in the data.
@@ -4240,26 +4370,25 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       setDriverSyncStatus("Text sent.", "success");
     } catch (e) {
       console.error("send-text failed, falling back to email client:", e);
-      $("#send-text-status").innerHTML = `Couldn't send automatically (${escapeHtml(String(e.message || e))}). <button type="button" class="btn btn-ghost" id="send-text-fallback" style="margin-left:6px;">Open in email instead</button>`;
-      const fallbackBtn = $("#send-text-fallback");
-      if (fallbackBtn) fallbackBtn.addEventListener("click", async () => {
-        const filteredFallback = filterNeverTextRecipients(sendTextModalState.recipients, { allowDnu: sendTextModalState.allowDnu });
-        sendTextModalState.recipients = filteredFallback.allowed;
-        if (!sendTextModalState.recipients.length) {
-          $("#send-text-status").textContent = "This recipient is marked DNU and cannot be texted.";
-          return;
-        }
-        const addrs = sendTextModalState.recipients.map((r) => formatTextAddress(r.phone)).join(",");
-        const a = document.createElement("a");
-        a.href = `mailto:${addrs}?body=${encodeURIComponent(message)}`;
-        a.click();
-        // Falling back to the Outlook draft still counts as "sent" for
-        // tracking purposes -- the dispatcher still has to actually hit
-        // send in Outlook, but there's no way to detect that from here,
-        // so this marks it the moment they choose the fallback path.
+      const filteredFallback = filterNeverTextRecipients(sendTextModalState.recipients, { allowDnu: sendTextModalState.allowDnu });
+      sendTextModalState.recipients = filteredFallback.allowed;
+      if (!sendTextModalState.recipients.length) {
+        $("#send-text-status").textContent = "This recipient is marked DNU and cannot be texted.";
+        return;
+      }
+      const addresses = sendTextModalState.recipients.map((r) => formatTextAddress(r.phone)).filter(Boolean);
+      $("#send-text-status").innerHTML =
+        `Couldn't send automatically (${escapeHtml(String(e.message || e))}). Send it by hand:`
+        + textDraftControlsHtml("send-text-draft", { withDone: true });
+      // Taking the message into Outlook counts as "sent" for tracking: the
+      // dispatcher still has to press send over there, and there is no way to
+      // observe that from here. Opening the draft marks it, and so does Done,
+      // which is how someone who copied and pasted instead closes this out.
+      const markSent = async () => {
         if (sendTextModalState.markShiftIdsOnSent) await markPreShiftTextSent(sendTextModalState.markShiftIdsOnSent);
         finishSendTextModalAsSent();
-      });
+      };
+      wireTextDraftControls("send-text-draft", addresses, message, { onOpened: markSent, onDone: markSent });
     } finally {
       sendBtn.disabled = false;
     }
@@ -4544,13 +4673,29 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       <div class="subtext" style="font-weight:700;">Batch ${s.batchIndex + 1} of ${s.batches.length} — ${batch.length} recipient(s)</div>
       <div class="subtext" style="margin-top:6px;">${escapeHtml(batch.map((d) => d.name).join(", "))}</div>
       ${skipNote}${dedupedNote}${blockedNote}
-      <div class="calc-note" style="margin-top:10px;" id="tg-batch-status">Click "Send Now" to send this batch automatically, or fall back to Outlook if needed.</div>
+      <div class="calc-note" style="margin-top:10px;" id="tg-batch-status">Click "Send Now" to send this batch automatically, or take it into Outlook by hand.</div>
+      <div id="tg-batch-draft"></div>
     `;
     $("#tg-send-now").classList.remove("hidden");
     $("#tg-send-now").disabled = false;
     $("#tg-open-batch").classList.remove("hidden");
     $("#tg-confirm-sent").classList.add("hidden");
     $("#tg-finish").classList.add("hidden");
+
+    // The same draft, in a form that does not care which Outlook Windows
+    // opens. No Done button here -- the group flow's own "Sent - Next Batch"
+    // is the step that advances the batch.
+    const draftEl = $("#tg-batch-draft");
+    if (draftEl) {
+      const addresses = batch.map((d) => formatTextAddress(d.phone)).filter(Boolean);
+      draftEl.innerHTML = textDraftControlsHtml("tg-draft");
+      wireTextDraftControls("tg-draft", addresses, s.message, {
+        onOpened: () => {
+          $("#tg-open-batch").classList.add("hidden");
+          $("#tg-confirm-sent").classList.remove("hidden");
+        },
+      });
+    }
   }
 
   export async function sendCurrentGroupBatchDirect() {
@@ -4601,10 +4746,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       renderGroupTextProgress();
       return;
     }
-    const addrs = batch.map((d) => formatTextAddress(d.phone)).join(",");
-    const a = document.createElement("a");
-    a.href = `mailto:${addrs}?body=${encodeURIComponent(s.message)}`;
-    a.click();
+    openMailDraft(batch.map((d) => formatTextAddress(d.phone)).filter(Boolean), s.message);
     $("#tg-open-batch").classList.add("hidden");
     $("#tg-confirm-sent").classList.remove("hidden");
   }
@@ -6071,12 +6213,31 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // whatever passed through it is preserved here forever — even after
   // it's later changed or cleared from the board itself. Silently skips
   // empty commits, since clearing the field isn't itself a note worth logging.
+  // Goes through log_board_note() rather than a plain INSERT. This runs on
+  // focusout, which is the right moment in principle -- but the board also
+  // redraws while someone is typing (realtime echoes, debounced saves), and a
+  // redraw replaces the focused input, which fires focusout carrying whatever
+  // partial text was on screen. One sentence became a row per redraw:
+  //
+  //   "store"                                       7:48:54 PM
+  //   "store did not have S"                        7:48:58 PM
+  //   "store did not have Salvage for driver to..." 7:49:10 PM
+  //
+  // Only the last line is the note. The function merges a note that merely
+  // extends (or trims) the same author's board note from the last few minutes
+  // into that row, keeping the newest text and timestamp, and starts a fresh
+  // row for anything that is genuinely a different note. Doing it at the write
+  // rather than at the focusout means it holds whatever causes the duplicate --
+  // see supabase/migrations/20260922_coalesce_keystroke_notes_and_changes.sql.
   async function logBoardNoteToPermanentLog(shiftDbId, noteText) {
     if (!supabaseClient || !shiftDbId || !String(noteText || "").trim()) return;
     try {
-      await supabaseClient.from(LOAD_NOTES_TABLE).insert({
-        shift_id: shiftDbId, note_text: noteText, source: "board", created_by: currentUserLabel || "unknown user",
+      const { error } = await supabaseClient.rpc("log_board_note", {
+        p_shift_id: shiftDbId,
+        p_note_text: noteText,
+        p_created_by: currentUserLabel || "unknown user",
       });
+      if (error) throw error;
     } catch (e) {
       console.error("logBoardNoteToPermanentLog failed:", e);
     }

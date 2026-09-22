@@ -35,6 +35,7 @@ const previewBtn = $("#archive-preview");
 const cutoffInput = $("#archive-cutoff");
 const progressEl = $("#archive-progress");
 let currentPreview = null;
+let currentCounts = null;
 
 function sixMonthsAgoIso() {
   const d = new Date();
@@ -155,11 +156,80 @@ async function getEligibleRecords(cutoff) {
   return { items, krogerRows, houstonRows, mondelezRows };
 }
 
-async function buildPreview(cutoff) {
-  statusEl.textContent = "Checking historical loads across all locations…";
+// Counting used to mean downloading. The old preview pulled every eligible
+// load with select *, then every trip, attachment and accounting row for them
+// in 150-id chunks -- with ~21,000 old loads that is roughly 330 sequential
+// requests before the page can show four numbers, which is why the Archive
+// page looked dead on arrival and the six-month cutoff felt like it did
+// nothing. One server-side call replaces all of it, in about two seconds.
+//
+// archive_eligible_counts() is SECURITY INVOKER, so it counts exactly the rows
+// the signed-in user is allowed to read -- see
+// supabase/migrations/20260921_archive_eligible_counts.sql, which also records
+// the live numbers it was checked against.
+//
+// The full records are still needed to write the files, but they are fetched
+// only once Export is actually pressed.
+async function countEligible(cutoff) {
+  const { data, error } = await client.rpc("archive_eligible_counts", { p_cutoff: cutoff });
+  if (error) throw new Error(`Archive counts: ${error.message}`);
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) throw new Error("Archive counts came back empty.");
+
+  const num = (value) => Number(value || 0);
+  const kroger = num(row.kroger_loads) + num(row.houston_loads);
+  const mondelez = num(row.mondelez_loads);
+
+  return {
+    cutoff,
+    loads: kroger + mondelez,
+    kroger,
+    mondelez,
+    routes: num(row.routes),
+    attachments: num(row.attachments),
+    accounting: num(row.accounting_rows),
+  };
+}
+
+function describeCutoff(cutoff) {
+  const date = new Date(`${cutoff}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return cutoff;
+  return date.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+}
+
+async function refreshCounts(cutoff) {
+  statusEl.textContent = `Counting everything dated before ${describeCutoff(cutoff)}\u2026`;
   exportBtn.disabled = true;
+  currentCounts = null;
   currentPreview = null;
 
+  const counts = await countEligible(cutoff);
+  currentCounts = counts;
+
+  $("#archive-loads").textContent = counts.loads.toLocaleString();
+  $("#archive-routes").textContent = counts.routes.toLocaleString();
+  $("#archive-attachments").textContent = counts.attachments.toLocaleString();
+  $("#archive-accounting").textContent = counts.accounting.toLocaleString();
+
+  if (!counts.loads) {
+    statusEl.textContent = `Nothing is dated before ${describeCutoff(cutoff)}. Pick a later date to include more.`;
+    return counts;
+  }
+
+  const breakdown = [
+    counts.kroger ? `Kroger: ${counts.kroger.toLocaleString()}` : null,
+    counts.mondelez ? `Mondelez: ${counts.mondelez.toLocaleString()}` : null,
+  ].filter(Boolean).join(" \u2022 ");
+
+  statusEl.textContent =
+    `${counts.loads.toLocaleString()} loads dated before ${describeCutoff(cutoff)} \u2014 ${breakdown}. ` +
+    `Export writes them to a folder you choose, images included. Nothing is deleted from Supabase.`;
+  exportBtn.disabled = false;
+  return counts;
+}
+
+// The full record set, fetched only when an export actually starts.
+async function loadFullRecords(cutoff) {
   const eligible = await getEligibleRecords(cutoff);
   const shiftIds = eligible.krogerRows.map((s) => s.id);
   const houstonIds = eligible.houstonRows.map((s) => s.id);
@@ -170,11 +240,6 @@ async function buildPreview(cutoff) {
     fetchByIds("loads_accounting", "source_houston_id", houstonIds, "id,source_houston_id,total_cost,total_revenue"),
   ]);
 
-  const oldest = eligible.items[0]?.record?.shift_date || null;
-  const newest = eligible.items[eligible.items.length - 1]?.record?.shift_date || null;
-  const mondelezRouteCount = eligible.mondelezRows.length;
-  const internalRouteCount = trips.filter((t) => String(t.route_id || t.trip_id || "").trim()).length;
-
   currentPreview = {
     cutoff,
     ...eligible,
@@ -182,24 +247,7 @@ async function buildPreview(cutoff) {
     attachments,
     accounting: [...shiftAccounting, ...houstonAccounting],
   };
-
-  $("#archive-loads").textContent = eligible.items.length.toLocaleString();
-  $("#archive-routes").textContent = (internalRouteCount + mondelezRouteCount).toLocaleString();
-  $("#archive-attachments").textContent = attachments.length.toLocaleString();
-  $("#archive-accounting").textContent = (shiftAccounting.length + houstonAccounting.length).toLocaleString();
-
-  if (!eligible.items.length) {
-    statusEl.textContent = `No loads from any active location are older than ${cutoff}. Nothing is due yet.`;
-    return;
-  }
-
-  const byCustomer = eligible.items.reduce((acc, item) => {
-    acc[item.customer] = (acc[item.customer] || 0) + 1;
-    return acc;
-  }, {});
-  const breakdown = Object.entries(byCustomer).map(([name, count]) => `${name}: ${count.toLocaleString()}`).join(" • ");
-  statusEl.textContent = `${eligible.items.length.toLocaleString()} loads ready across all locations, covering ${oldest} through ${newest}. ${breakdown}. No Supabase records will be deleted.`;
-  exportBtn.disabled = false;
+  return currentPreview;
 }
 
 async function getOrCreateDir(parent, name) {
@@ -500,7 +548,8 @@ async function archiveOne(rootArchiveDir, item, cutoff) {
 }
 
 async function runExport() {
-  if (!currentPreview || !currentPreview.items.length) return;
+  const cutoff = cutoffInput.value;
+  if (!currentCounts || currentCounts.cutoff !== cutoff || !currentCounts.loads) return;
   if (!("showDirectoryPicker" in window)) {
     statusEl.textContent = "This browser does not support folder export. Use current Chrome or Edge on desktop.";
     return;
@@ -508,6 +557,28 @@ async function runExport() {
 
   exportBtn.disabled = true;
   previewBtn.disabled = true;
+
+  // The counts came from the server; the rows themselves are pulled now, once,
+  // for the export that is actually about to run.
+  if (!currentPreview || currentPreview.cutoff !== cutoff) {
+    statusEl.textContent =
+      `Loading the ${currentCounts.loads.toLocaleString()} load records to export\u2026 this part takes a minute.`;
+    try {
+      await loadFullRecords(cutoff);
+    } catch (error) {
+      console.error(error);
+      statusEl.textContent = `Could not load the records to export: ${error.message || error}`;
+      previewBtn.disabled = false;
+      exportBtn.disabled = false;
+      return;
+    }
+  }
+  if (!currentPreview?.items?.length) {
+    statusEl.textContent = "Nothing to export for that date.";
+    previewBtn.disabled = false;
+    return;
+  }
+
   progressEl.classList.remove("hidden");
   progressEl.value = 0;
 
@@ -641,7 +712,7 @@ async function runExport() {
   } finally {
     progressEl.classList.add("hidden");
     previewBtn.disabled = false;
-    exportBtn.disabled = !(currentPreview?.items?.length);
+    exportBtn.disabled = !(currentCounts?.loads);
   }
 }
 
@@ -653,17 +724,15 @@ async function init() {
   }
 
   cutoffInput.value = sixMonthsAgoIso();
-  previewBtn.addEventListener("click", () => buildPreview(cutoffInput.value).catch((e) => {
+  const recount = () => refreshCounts(cutoffInput.value).catch((e) => {
     console.error(e);
-    statusEl.textContent = `Could not load archive preview: ${e.message || e}`;
-  }));
-  cutoffInput.addEventListener("change", () => buildPreview(cutoffInput.value).catch((e) => {
-    console.error(e);
-    statusEl.textContent = `Could not load archive preview: ${e.message || e}`;
-  }));
+    statusEl.textContent = `Could not count the archive: ${e.message || e}`;
+  });
+  previewBtn.addEventListener("click", recount);
+  cutoffInput.addEventListener("change", recount);
   exportBtn.addEventListener("click", runExport);
 
-  await buildPreview(cutoffInput.value);
+  await recount();
 }
 
 init().catch((error) => {

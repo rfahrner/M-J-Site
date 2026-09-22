@@ -303,8 +303,8 @@ async function runBackupUntilDone() {
       const result = await runOnePass(token);
 
       if (result.status === 'configuration_required') {
-        setProgress('Stopped — the Microsoft connection is not configured, so there is nowhere to send images yet.');
-        setError(result.error || 'Microsoft connection required.');
+        setProgress('Stopped \u2014 this optional sweep has no Microsoft connection to send images to. Use <strong>Choose Folder &amp; Export</strong> above instead.');
+        setError(result.error || 'No Microsoft connection is set up for the optional automatic sweep.');
         return;
       }
       if (result.status === 'disabled') {

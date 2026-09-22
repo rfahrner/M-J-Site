@@ -120,8 +120,18 @@ console.log('\n3. the dropdown says what it means and offers only real levels');
 
 checkTrue('revenue levels are named', /1 — Kroger Core/.test(ACCOUNTING) && /2 — KR Holiday/.test(ACCOUNTING));
 checkTrue('cost levels are named', /1 — Carrier Core/.test(ACCOUNTING));
-check('level 3 is not offered as a revenue option',
-  /REVENUE_LEVELS = \[\[1[^\]]*\], \[2[^\]]*\], \[4[^\]]*\]\]/.test(ACCOUNTING), true);
+// Assert the RULE, not the literal. This used to pin the exact array shape
+// ([[1..],[2..],[4..]]), so it failed the moment the offered levels changed --
+// even when they changed to something MORE correct. What actually matters is
+// that an unconfigured level is never offered: pricing_settings marks 3 as
+// unconfigured, and calcRoute() answers an unknown level by falling back to
+// level 1, so offering 3 would quietly bill Core rates under a Holiday label.
+const revenueLevelsLiteral = /REVENUE_LEVELS\s*=\s*\[(.*?)\];/s.exec(ACCOUNTING);
+checkTrue('the revenue levels are declared as a named list', !!revenueLevelsLiteral);
+const revenueLevels = revenueLevelsLiteral ? revenueLevelsLiteral[1] : '';
+check('level 3 is not offered as a revenue option', /\[\s*3\s*,/.test(revenueLevels), false);
+checkTrue('levels 1 and 2 are both offered',
+  /\[\s*1\s*,/.test(revenueLevels) && /\[\s*2\s*,/.test(revenueLevels));
 checkTrue('a record defaults to level 1 when it has none', /rec\.revenue_level \?\? 1/.test(ACCOUNTING));
 check('the old bare numeric options are gone', /\[1, 2, 3, 4\]\.map/.test(ACCOUNTING), false);
 
