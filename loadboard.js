@@ -14,6 +14,7 @@
      table — not built yet.
    ============================================================ */
 import { initAccountingPage, getAccountingRecordById } from './accounting.js';
+import { nextShiftDate, nightShiftRows, shortShiftDate, morningShift } from './night-shift.js';
 import { cancellationNotePayload, sortDriverNotes, driverNoteRowHtml } from './driver-profile-notes.js';
 import { sendShiftToAccounting } from './accountingcalc.js';
 import { initHoustonBoardPage } from './houston.js';
@@ -690,6 +691,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     addDriverNestedFromLoad: false,
     driverSort: { key: "rating", dir: "asc" },
     boardSort: { key: "shiftStart", dir: "asc" },
+    nightShift: false,
     driverListTab: "atlanta", // only meaningful on the Driver List page — its 3 tabs
     datesWithData: new Set(), // which days in the browsable range have any loads — for the date dropdown
     hiddenCols: new Set([
@@ -788,7 +790,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (aEmpty && bEmpty) return 0;
     if (aEmpty) return 1;
     if (bEmpty) return -1;
-    const cmp = av - bv;
+    const dateCmp = key === "shiftStart" && nightShiftActive()
+      ? (a.shiftDate || state.activeDate).localeCompare(b.shiftDate || state.activeDate) : 0;
+    const cmp = dateCmp || av - bv;
     return dir === "desc" ? -cmp : cmp;
   }
 
@@ -901,6 +905,21 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   }
   function sheetKey(locationKey, dKey) { return `${locationKey}__${dKey}`; }
 
+  function nightShiftActive() { return state.activeLocation === "atlanta" && state.nightShift; }
+
+  function getVisibleBoardRows() {
+    const rows = state.sheets[sheetKey(state.activeLocation, state.activeDate)] || [];
+    if (!nightShiftActive()) return rows;
+    // Do not create a next-day cache entry before its asynchronous fetch.
+    const morning = state.sheets[sheetKey("atlanta", nextShiftDate(state.activeDate))] || [];
+    const visible = nightShiftRows(rows, morning, parseHHMM);
+    // A realtime echo must not remove a morning row halfway through typing
+    // its new start time. Recheck membership when that field loses focus.
+    const editing = morning.find(row => currentlyEditedField(row.id, null) === "shiftStart");
+    if (editing && !visible.includes(editing)) visible.push(editing);
+    return visible;
+  }
+
   // Sync cache reader — always safe to call, returns [] if not loaded yet.
   function getSheet(locationKey, dKey) {
     const k = sheetKey(locationKey, dKey);
@@ -912,7 +931,17 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // first time it's visited this session, then pads up to 5 rows so there's
   // always something ready to fill in. Cached after that — doesn't re-fetch
   // on every render, only the first time a given day is opened.
+  const pendingSheetLoads = new Map();
   export async function ensureSheetLoaded(locationKey, dKey) {
+    const k = sheetKey(locationKey, dKey);
+    if (pendingSheetLoads.has(k)) return pendingSheetLoads.get(k);
+    const pending = fetchSheet(locationKey, dKey);
+    pendingSheetLoads.set(k, pending);
+    try { return await pending; }
+    finally { pendingSheetLoads.delete(k); }
+  }
+
+  async function fetchSheet(locationKey, dKey) {
     const k = sheetKey(locationKey, dKey);
     if (state.sheets[k]) return;
     if (!supabaseClient) {
@@ -925,8 +954,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     if (shiftErr) {
       console.error("Failed to load shifts:", shiftErr);
       setDriverSyncStatus(`Couldn't load loads for this day (${shiftErr.message}).`, "error");
-      state.sheets[k] = Array.from({ length: 5 }, () => blankRow());
-      return;
+      return false;
     }
     const rows = (shiftRows || []).map(shiftFromDbRow);
     if (shiftRows && shiftRows.length) {
@@ -935,6 +963,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (tripErr) {
         console.error("Failed to load trip details:", tripErr);
         setDriverSyncStatus(`Loaded rows, but couldn't load their trip details (${tripErr.message}).`, "error");
+        return false;
       } else if (tripRows) {
         // Which trips have REAL stop in/out times recorded -- used to flag
         // a completed-but-undocumented trip's pill red (see
@@ -2385,7 +2414,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
           <input class="cell-input small" style="width:46px;" placeholder="Rate" data-row="${row.id}" data-field="rate" value="${escapeHtml(row.rate)}">
       </td>
       <td class="col-cell"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.phone, row.cellSnapshot))}</span></td>
-      <td class="col-shiftStart"${rs}><input class="cell-input small" style="width:46px;" placeholder="--:--" data-row="${row.id}" data-field="shiftStart" value="${escapeHtml(row.shiftStart)}"></td>
+      <td class="col-shiftStart"${rs}>${nightShiftActive() ? `<span class="static-text shift-start-date">${shortShiftDate(row.shiftDate || state.activeDate)}</span>` : ""}<input class="cell-input small" style="width:46px;" placeholder="--:--" data-row="${row.id}" data-field="shiftStart" value="${escapeHtml(row.shiftStart)}"></td>
       <td class="col-etaShiftReport"${rs}><input class="cell-input small" style="width:46px;" placeholder="--:--" data-row="${row.id}" data-field="etaShiftReport" value="${escapeHtml(row.etaShiftReport)}"></td>
       <td class="col-shiftHosLeft"${rs}><input class="cell-input calc" data-row="${row.id}" data-field="shiftHosLeft" value="${escapeHtml(computeShiftLevelHosLeft(row))}" readonly tabindex="-1"></td>
       <td class="col-nextCallTimeCalc"${rs}><input class="cell-input calc" data-row="${row.id}" data-field="nextCallTimeCalc" value="${escapeHtml(nextCallTimeDisplayForRow(row))}" readonly tabindex="-1"></td>
@@ -2438,7 +2467,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     $("#sheet-title").textContent = loc.title;
     const d = keyToDate(state.activeDate);
     const isToday = state.activeDate === dateKey(todayDate());
-    $("#sheet-subtext").textContent = humanDate(d) + (isToday ? " · today" : "");
+    $("#sheet-subtext").textContent = humanDate(d) + (isToday ? " · today" : "") + (nightShiftActive() ? ` · Night Shift through ${shortShiftDate(nextShiftDate(state.activeDate))} 06:00` : "");
+    document.body.classList.toggle("night-shift-active", nightShiftActive());
+    $("#btn-night-shift")?.setAttribute("aria-pressed", String(nightShiftActive()));
     $("#date-input").value = state.activeDate;
     $("#date-input").min = state.minDate;
     $("#date-input").max = state.maxDate;
@@ -2554,7 +2585,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // or once the driver list arrives and driver-linked cells need refreshing).
   function renderBoardTable() {
     if (!$("#board-table")) return; // this page (e.g. Accounting) has no board grid — nothing to redraw
-    const rows = getSheet(state.activeLocation, state.activeDate);
+    const rows = getVisibleBoardRows();
     const sortKey = state.boardSort.key;
     const displayRows = [...rows].sort((a, b) => {
       const completeDiff = (a.shiftComplete ? 1 : 0) - (b.shiftComplete ? 1 : 0); // completed shifts always sink to the bottom
@@ -2623,8 +2654,16 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   async function loadAndRenderBoard() {
     renderBoardChrome();
     const myToken = ++boardRenderToken;
-    await ensureSheetLoaded(state.activeLocation, state.activeDate);
+    const dayLoaded = await ensureSheetLoaded(state.activeLocation, state.activeDate);
     if (myToken !== boardRenderToken) return; // superseded by a newer navigation
+    if (dayLoaded === false) { renderBoardTable(); return; }
+    if (nightShiftActive()) {
+      const morningLoaded = await ensureSheetLoaded("atlanta", nextShiftDate(state.activeDate));
+      if (myToken !== boardRenderToken) return;
+      if (morningLoaded === false) {
+        setDriverSyncStatus("Night Shift is incomplete: couldn't load the next morning. Toggle Night Shift off and on to retry.", "error");
+      }
+    }
     renderBoardTable();
     refreshAvailableSection();
   }
@@ -2743,8 +2782,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       state.datesWithData.add(dbRow.shift_date);
     }
     const locationKey = dbRow.location || state.activeLocation;
-    if (dbRow.shift_date !== state.activeDate) return; // not the day currently being viewed
-    const rows = state.sheets[sheetKey(locationKey, state.activeDate)];
+    const rows = state.sheets[sheetKey(locationKey, dbRow.shift_date)];
     if (!rows) return; // this day isn't loaded in this tab yet — nothing to merge into
 
     const existing = rows.find((r) => r.dbId === dbRow.id);
@@ -3538,7 +3576,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // Local-only, not persisted to Supabase — this is a per-user selection
   // state for a bulk-action feature that hasn't been designed yet.
   function updateBulkActionButtonsVisibility() {
-    const anySelected = getSheet(state.activeLocation, state.activeDate).some((r) => r.selected);
+    const anySelected = getVisibleBoardRows().some((r) => r.selected);
     if ($("#btn-complete-selected")) $("#btn-complete-selected").classList.toggle("hidden", !anySelected);
     if ($("#btn-text-selected")) $("#btn-text-selected").classList.toggle("hidden", !anySelected);
   }
@@ -3546,7 +3584,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   function updateBoardSelectCount() {
     const el = $("#board-select-count");
     if (!el) return;
-    const rows = getSheet(state.activeLocation, state.activeDate);
+    const rows = getVisibleBoardRows();
     const selectedCount = rows.filter((r) => r.selected).length;
     el.textContent = `Count ${rows.length} (${selectedCount} selected)`;
   }
@@ -3562,7 +3600,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   }
 
   function selectAllRows(checked) {
-    const rows = getSheet(state.activeLocation, state.activeDate);
+    const rows = getVisibleBoardRows();
     rows.forEach((row) => {
       row.selected = checked;
       const tr = document.getElementById(row.id);
@@ -3707,7 +3745,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   }
 
   async function completeSelectedRows() {
-    const rows = getSheet(state.activeLocation, state.activeDate).filter((r) => r.selected && !r.shiftComplete);
+    const rows = getVisibleBoardRows().filter((r) => r.selected && !r.shiftComplete);
     if (!rows.length) { setDriverSyncStatus("No selected loads need completing — either nothing's checked, or they're already complete.", "error"); return; }
 
     const rowsWithOpenTrips = rows.filter((r) => openTripsForRow(r).length);
@@ -3729,7 +3767,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   }
 
   function openTextSelectedModal() {
-    const rows = getSheet(state.activeLocation, state.activeDate).filter((r) => r.selected);
+    const rows = getVisibleBoardRows().filter((r) => r.selected);
     if (!rows.length) { setDriverSyncStatus("Nothing's checked yet — select some loads first.", "error"); return; }
     const modal = $("#modal-text-group");
     if (!modal) return;
@@ -3749,7 +3787,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const message = $("#tg-message").value.trim();
     const errEl = $("#tg-error");
     if (!message) { errEl.textContent = "Write a message first."; errEl.classList.remove("hidden"); return; }
-    const rows = getSheet(state.activeLocation, state.activeDate).filter((r) => r.selected);
+    const rows = getVisibleBoardRows().filter((r) => r.selected);
     const members = rows.map((r) => {
       const drv = r.driverId ? findDriver(r.driverId) : null;
       return drv
@@ -3951,7 +3989,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // not always — so this just flags it rather than blocking the
   // assignment. Scoped to the current location + day, not across boards.
   function warnIfDriverAlreadyScheduled(row, driverId) {
-    const sheet = getSheet(state.activeLocation, state.activeDate);
+    const sheet = getSheet(row.location || state.activeLocation, row.shiftDate || state.activeDate);
     const conflict = sheet.find((r) => r.id !== row.id && r.driverId && String(r.driverId) === String(driverId));
     if (!conflict) return;
     const drv = findDriver(driverId);
@@ -3985,7 +4023,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
     logChange(row.dbId, label, "deleted", "active", "deleted"); // logged before the row goes, in case the FK doesn't outlive it
 
-    const rows = getSheet(state.activeLocation, state.activeDate);
+    const rows = getSheet(row.location || state.activeLocation, row.shiftDate || state.activeDate);
     const idx = rows.findIndex((r) => r.id === rowId);
     if (idx !== -1) rows.splice(idx, 1);
     forgetDirtyFields(rowId, (row.trips || []).map((t) => t.id));
@@ -7044,7 +7082,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       state.todayKey = newToday;
       state.maxDate = dateKey(addDays(todayDate(), FUTURE_DAYS));
       state.minDate = dateKey(addDays(todayDate(), -HISTORY_DAYS));
-      if (wasOnToday) setActiveDate(newToday);
+      if (wasOnToday && !nightShiftActive()) setActiveDate(newToday);
     }
   }
 
@@ -7225,6 +7263,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
   function initBoardPage(info) {
     state.activeLocation = info.key;
+    if (info.key === "atlanta" && $("#btn-night-shift")) {
+      $("#btn-night-shift").addEventListener("click", () => {
+        state.nightShift = !state.nightShift;
+        loadAndRenderBoard();
+      });
+    }
     loadAndRenderBoard();
     setupRealtimeSync(info.key);
     loadDatesWithData(info.key).catch((e) => console.error("loadDatesWithData() failed:", e));
@@ -7430,6 +7474,16 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       const field = t.dataset && t.dataset.field;
       const rowId = t.dataset && t.dataset.row;
       const tripId = t.dataset && t.dataset.trip;
+      if (field === "shiftStart" && nightShiftActive()) {
+        setTimeout(() => {
+          const row = findRowAnywhere(rowId)?.row;
+          if (!nightShiftActive() || !row || row.shiftDate !== nextShiftDate(state.activeDate) ||
+              morningShift(row, parseHHMM) || currentlyEditedField(rowId, null) === "shiftStart") return;
+          const restore = captureFocusForRerender();
+          renderBoardTable();
+          restore();
+        }, 0);
+      }
 
       // Trip-level route_id / trailer_out — tracked separately since they're
       // keyed by trip, not just row.
