@@ -275,6 +275,30 @@ mileage band is not ready without its bands. `calcLoadRateBreakdown()` returns
 rate must check `breakdown.notReady` and do nothing**: `recomputeRowRate()`,
 `daily-rate-hierarchy`, `delaware-rate-tiers`, `daily-rate-modal-sync`.
 
+## Tabs left open across a deploy
+
+Dispatchers leave the board up overnight, and ES modules are fetched once, so
+after a deploy the site runs in two versions at the same time on the same data.
+That is what turned a rate disagreement into an hour of churn: an old tab and a
+new one each wrote their own answer, twice a second. The tab doing the damage
+is by definition the one nobody is sitting at, so "everyone refresh" is not a
+control.
+
+`site-version-watch.js` compares the ETag (or Last-Modified) that GitHub Pages
+serves for `loadboard.js` against the one the tab started with -- no build step
+and nothing to bump by hand. On a change the tab, in this order:
+
+1. stops making automatic calculated writes (`setAutomaticWritesBlocked` in the
+   rate limiter). **Manual saves keep working** -- losing what someone typed
+   because a deploy landed mid-shift would be worse than the bug this prevents;
+2. shows a banner with a Reload button;
+3. reloads itself if it is hidden, or visible but untouched for two minutes,
+   with nothing focused and no `.overlay` open.
+
+It is imported through `loadboard-toolbar-controls.js` and must not import
+`loadboard.js` -- that chain runs while `loadboard.js` is still evaluating.
+`scripts/stale-tab-writes.test.mjs` pins it.
+
 Separately, `rate-write-limiter.js` stops this client rewriting one load's
 calculated rate after a dozen times in a minute, because two clients that
 disagree write at each other forever and neither can win. A rate the

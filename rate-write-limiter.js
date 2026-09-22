@@ -27,6 +27,27 @@ const WINDOW_MS = 60 * 1000;
 
 const writes = new Map(); // key -> { count, windowStartedAt, stopped }
 
+/*
+ * A blanket stop, used when this whole tab has no business making calculated
+ * writes any more -- currently only when site-version-watch.js finds the site
+ * has been redeployed under it. An old tab left running overnight is the one
+ * that starts these fights, and it is the one nobody is sitting at to refresh.
+ *
+ * Only automatic writes are blocked. A rate the dispatcher types goes straight
+ * to the database as it always did; losing someone's typing because a deploy
+ * landed mid-shift would be a worse bug than the one this prevents.
+ */
+let blockedReason = null;
+
+export function setAutomaticWritesBlocked(blocked, reason) {
+  blockedReason = blocked ? (reason || 'this tab is out of date') : null;
+  if (blockedReason) {
+    console.warn(`[rate-write-limiter] Calculated rate writes are off: ${blockedReason}.`);
+  }
+}
+
+export function automaticWritesBlocked() { return blockedReason; }
+
 function bucket(key) {
   const now = Date.now();
   const seen = writes.get(key);
@@ -44,6 +65,7 @@ function bucket(key) {
  * caller must not write.
  */
 export function allowRateWrite(key, describe) {
+  if (blockedReason) return false;
   if (key == null) return true;
   const id = String(key);
   const seen = bucket(id);
