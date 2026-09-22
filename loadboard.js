@@ -14,6 +14,7 @@
      table — not built yet.
    ============================================================ */
 import { initAccountingPage, getAccountingRecordById } from './accounting.js';
+import { atlantaMileageTier, atlantaTierLabel } from './carrier-mileage-tiers.js';
 import { nextShiftDate, nightShiftRows, shortShiftDate, morningShift } from './night-shift.js';
 import { cancellationNotePayload, sortDriverNotes, driverNoteRowHtml } from './driver-profile-notes.js';
 import { sendShiftToAccounting } from './accountingcalc.js';
@@ -3873,7 +3874,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     return `
       <div class="subtext" style="margin-bottom:10px;">These are the Atlanta board's shared default rates — a load or driver with its own override still wins over these.</div>
       <div class="rate-tier-grid" style="grid-template-columns: repeat(2, 1fr);">
-        ${tiers.map((t) => box(`${t.min}-${t.max}MI`, `<input type="number" step="0.01" data-atlanta-tier-id="${t.id}" value="${t.rate}">`)).join("")}
+        ${tiers.map((t) => box(atlantaTierLabel(tiers, t), `<input type="number" step="0.01" data-atlanta-tier-id="${t.id}" value="${t.rate}">`)).join("")}
         ${box("Over-tier ($/mi)", `<input type="number" step="0.01" data-atlanta-setting-key="over_tier_per_mile" value="${settings.over_tier_per_mile ?? 2.4}">`)}
         ${box("Free stops", `<input type="number" step="1" data-atlanta-setting-key="stop_charge_free_stops" value="${settings.stop_charge_free_stops ?? 2}">`)}
         ${box("$/extra stop", `<input type="number" step="0.01" data-atlanta-setting-key="stop_charge_per_stop" value="${settings.stop_charge_per_stop ?? 20}">`)}
@@ -5024,7 +5025,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       if (!String(t.routeId || t.tripId || "").trim()) return;
       const miles = parseFloat(t.routeMiles);
       if (isNaN(miles) || miles <= 0) return;
-      const tier = tiers.find((tr) => miles >= tr.min && miles <= tr.max);
+      const tier = locationKey === "atlanta" ? atlantaMileageTier(tiers, miles) : tiers.find((tr) => miles >= tr.min && miles <= tr.max);
       if (tier) used.push(tier);
     });
     return used;
@@ -5083,7 +5084,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       defaultsHtml = `
         <div class="rate-tier-grid">
           ${tiers.map((t) => rateTierBox(
-            `${t.min}-${t.max}MI`,
+            atlantaTierLabel(tiers, t),
             `<input type="number" step="0.01" data-rate-tier-id="${t.id}" value="${effectiveTierRate(row, t)}">`,
             isTierOverridden(row, t.id) || isDriverTierOverridden(row, t.id)
           )).join("")}
@@ -5798,7 +5799,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const box = (label, inputHtml) => `<fieldset class="rate-tier-box"><legend>${label}</legend>${inputHtml}</fieldset>`;
     return `
       <div class="rate-tier-grid" style="grid-template-columns: repeat(2, 1fr);">
-        ${tiers.map((t) => box(`${t.min}-${t.max}MI`, `<input type="number" step="0.01" data-dr-tier-id="${t.id}" value="${ov.tiers[t.id] ?? ""}" placeholder="default">`)).join("")}
+        ${tiers.map((t) => box(atlantaTierLabel(tiers, t), `<input type="number" step="0.01" data-dr-tier-id="${t.id}" value="${ov.tiers[t.id] ?? ""}" placeholder="default">`)).join("")}
         ${box(`Over ${overMax}MI ($/mi)`, `<input type="number" step="0.01" data-dr-setting-key="over_tier_per_mile" value="${ov.settings.over_tier_per_mile ?? ""}" placeholder="default">`)}
         ${box("Stops", `<input type="number" step="1" data-dr-setting-key="stop_charge_free_stops" value="${ov.settings.stop_charge_free_stops ?? ""}" placeholder="default">`)}
         ${box("$/extra stop", `<input type="number" step="0.01" data-dr-setting-key="stop_charge_per_stop" value="${ov.settings.stop_charge_per_stop ?? ""}" placeholder="default">`)}
