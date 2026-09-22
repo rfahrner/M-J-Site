@@ -58,6 +58,7 @@ async function recalcAll() {
     if (row.rateManual) continue;
     // The board's priority logic, not the tier engine -- see loadboard.js.
     const breakdown = lb.getEffectiveRateInfo(row);
+    if (breakdown.notReady) continue; // no rate tables, no answer -- see boardrates.js
     const numericRate = Number(breakdown.total) || 0;
     const next = numericRate ? String(Math.round(numericRate * 100) / 100) : '';
     row.rate = next;

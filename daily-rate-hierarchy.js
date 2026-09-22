@@ -7,6 +7,7 @@
 */
 
 import { carrierTierLabel } from './carrier-mileage-tiers.js';
+import { allowRateWrite } from './rate-write-limiter.js';
 
 const PAGE_LOCATION = {
   "": "atlanta",
@@ -133,9 +134,15 @@ function recalcStandardRow(row) {
   // Through the board's own priority logic, not the tier engine directly:
   // see getEffectiveRateInfo() in loadboard.js.
   const breakdown = lb.getEffectiveRateInfo(row);
+  // No rate tables, no answer. The engine's per-mile fallback is a real number
+  // that is not this load's rate, and saving it reprices the load downward.
+  if (breakdown.notReady) return;
   const numericRate = Number(breakdown.total) || 0;
   const next = numericRate ? String(Math.round(numericRate * 100) / 100) : "";
   if (row.rate !== next) {
+    // Two clients that disagree write at each other forever. Stop rather than
+    // take part -- see rate-write-limiter.js.
+    if (!allowRateWrite(row.dbId, `PRO# ${row.proNumber || row.driverNameText || row.dbId}`)) return;
     row.rate = next;
     scheduleStandardDbRateSave(row, numericRate);
   }
