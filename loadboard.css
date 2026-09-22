@@ -1734,3 +1734,32 @@ fieldset.rate-tier-box.is-overridden {
 .image-viewer-footer {
   flex: 0 0 auto;
 }
+
+/* The skipped / shared-number / DNU notes used to stack above the send buttons
+   and push them off the bottom of a long batch. They fold into one summary
+   that starts closed -- worth keeping, since who was skipped and why is what
+   gets asked afterwards, but not worth the height every time. */
+.text-modal-details { margin-top: 8px; }
+.text-modal-details > summary {
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--slate-100);
+  color: var(--slate-500);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  user-select: none;
+}
+.text-modal-details > summary::-webkit-details-marker { display: none; }
+.text-modal-details > summary::before { content: "\25B8"; font-size: 10px; }
+.text-modal-details[open] > summary::before { content: "\25BE"; }
+.text-modal-details > summary:hover { border-color: var(--slate-500); }
+.text-modal-details > .calc-note { margin-top: 6px; }

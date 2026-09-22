@@ -241,11 +241,18 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-ghost" id="tg-cancel">Cancel</button>
-        <button class="btn" id="tg-start">Start</button>
-        <button class="btn hidden" id="tg-send-now">Send Now</button>
-        <button class="btn btn-ghost hidden" id="tg-open-batch">Open in Outlook Instead</button>
+        <!-- The Outlook pair appears only once an automatic send has failed, so
+             the resting footer is Cancel and Send Now. DOM order is what puts
+             them left of Send Now when they do show. -->
+        <button class="btn btn-ghost hidden" id="tg-open-web">Open in Outlook Web</button>
+        <button class="btn btn-ghost hidden" id="tg-open-batch">Open in Outlook</button>
+        <button class="btn" id="tg-send-now">Send Now</button>
         <button class="btn hidden" id="tg-confirm-sent">Sent — Next Batch</button>
         <button class="btn hidden" id="tg-finish">Done</button>
+        <!-- Kept, hidden, deliberately: each page binds its own starter to this
+             (driver-list groups, board selection, Houston selection). Send Now
+             triggers it so the dispatcher presses one button, not two. -->
+        <button class="btn hidden" id="tg-start" aria-hidden="true" tabindex="-1">Start</button>
       </div>
     </div>
   </div>
@@ -312,11 +319,12 @@
           <textarea class="cell-input" id="send-text-message" rows="5" style="width:100%;" placeholder="Type your message..."></textarea>
           <div class="subtext" id="send-text-counter" style="margin-top:4px;">0 characters — 1 text</div>
         </div>
+        <div id="send-text-details"></div>
         <div class="subtext" id="send-text-status" style="margin-top:8px;"></div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-ghost" id="send-text-cancel">Cancel</button>
-        <button class="btn" id="send-text-submit">Send</button>
+        <button class="btn" id="send-text-submit">Send Now</button>
       </div>
     </div>
   </div>

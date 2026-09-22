@@ -4295,9 +4295,18 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     };
     $("#send-text-phone-display").textContent = deduped.map((r) => r.name || r.phone).join(", ");
     $("#send-text-message").value = prefilledMessage || "";
-    $("#send-text-status").textContent = filtered.blocked.length
-      ? `${filtered.blocked.length} DNU recipient${filtered.blocked.length === 1 ? " was" : "s were"} removed.`
+    // Blocked recipients belong under the collapsed summary; the status line
+    // is for what just happened.
+    const blockedNote = filtered.blocked.length
+      ? `<div class="calc-note">${filtered.blocked.length} DNU recipient${filtered.blocked.length === 1 ? " was" : "s were"} removed: ${escapeHtml(filtered.blocked.map((r) => r.name || r.phone).join(", "))}</div>`
       : "";
+    const detailsEl = $("#send-text-details");
+    if (detailsEl) {
+      detailsEl.innerHTML = blockedNote
+        ? `<details class="text-modal-details"><summary>Details</summary>${blockedNote}</details>`
+        : "";
+    }
+    $("#send-text-status").textContent = "";
     resetSendTextActions();
     updateSendTextCounter();
     $("#modal-send-text").classList.remove("hidden");
@@ -4649,6 +4658,53 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     beginTextBatchFlow(applyPhoneMode(members), label, message, { allowDnu: groupKey === "DNU" });
   }
 
+  // Every footer state in one place. The modal shows Cancel and Send Now and
+  // nothing else until something needs deciding: the Outlook pair appears only
+  // after a send has failed, and "Sent - Next Batch" only after a draft has
+  // been taken into Outlook by hand.
+  const GROUP_FOOTER_BUTTONS = ["tg-send-now", "tg-open-web", "tg-open-batch", "tg-confirm-sent", "tg-finish"];
+  function setGroupFooter(...visible) {
+    const wanted = new Set(visible);
+    GROUP_FOOTER_BUTTONS.forEach((id) => {
+      const el = $(`#${id}`);
+      if (el) el.classList.toggle("hidden", !wanted.has(id));
+    });
+  }
+
+  // Send Now in the setup step has to do what Start used to. Each page binds
+  // its own starter to the now-hidden #tg-start -- driver-list groups, board
+  // selection, Houston selection -- so the click goes to whichever one this
+  // page wired, and this flag tells the progress render to carry on into the
+  // send rather than waiting for a second press.
+  let autoSendAfterStart = false;
+  export function groupSendNowPressed() {
+    const progress = $("#tg-progress-step");
+    const inSetup = !progress || progress.classList.contains("hidden");
+    if (inSetup) {
+      autoSendAfterStart = true;
+      const starter = $("#tg-start");
+      if (starter) starter.click();
+      else autoSendAfterStart = false;
+      return;
+    }
+    void sendCurrentGroupBatchDirect();
+  }
+
+  // Revealed only once an automatic send has actually failed.
+  function showGroupOutlookFallback() {
+    if (groupTextState) setGroupFooter("tg-open-web", "tg-open-batch");
+  }
+
+  export function openCurrentGroupBatchInWeb() {
+    const s = groupTextState;
+    if (!s) return;
+    const batch = s.batches[s.batchIndex] || [];
+    const addresses = batch.map((d) => formatTextAddress(d.phone)).filter(Boolean);
+    if (!addresses.length) return;
+    openOutlookWebDraft(addresses, s.message);
+    setGroupFooter("tg-confirm-sent");
+  }
+
   function renderGroupTextProgress() {
     const s = groupTextState;
     if (!s) return;
@@ -4663,43 +4719,36 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       ? `<div class="calc-note" style="margin-top:4px;">${s.blocked.length} DNU recipient(s) were blocked: ${escapeHtml(s.blocked.map((d) => d.name).join(", "))}</div>`
       : "";
 
+    // Three stacked yellow notes pushed the buttons off the bottom of a long
+    // batch. They are worth keeping -- who was skipped and why is exactly what
+    // gets asked afterwards -- so they fold into one summary that starts shut.
+    const detailNotes = [skipNote, dedupedNote, blockedNote].filter(Boolean).join("");
+    const details = detailNotes
+      ? `<details class="text-modal-details"><summary>Details</summary>${detailNotes}</details>`
+      : "";
+
     if (isDone) {
       $("#tg-progress-body").innerHTML = `
         <div class="subtext" style="font-weight:700; font-size:14px;">All done — ${s.totalSent} driver(s) in ${escapeHtml(s.groupKey)} texted across ${s.batches.length} batch(es).</div>
-        ${skipNote}${dedupedNote}${blockedNote}`;
-      $("#tg-send-now").classList.add("hidden");
-      $("#tg-open-batch").classList.add("hidden");
-      $("#tg-confirm-sent").classList.add("hidden");
-      $("#tg-finish").classList.remove("hidden");
+        ${details}`;
+      setGroupFooter("tg-finish");
       return;
     }
     const batch = s.batches[s.batchIndex];
     $("#tg-progress-body").innerHTML = `
       <div class="subtext" style="font-weight:700;">Batch ${s.batchIndex + 1} of ${s.batches.length} — ${batch.length} recipient(s)</div>
       <div class="subtext" style="margin-top:6px;">${escapeHtml(batch.map((d) => d.name).join(", "))}</div>
-      ${skipNote}${dedupedNote}${blockedNote}
-      <div class="calc-note" style="margin-top:10px;" id="tg-batch-status">Click "Send Now" to send this batch automatically, or take it into Outlook by hand.</div>
-      <div id="tg-batch-draft"></div>
+      ${details}
+      <div class="calc-note hidden" style="margin-top:10px;" id="tg-batch-status"></div>
     `;
-    $("#tg-send-now").classList.remove("hidden");
     $("#tg-send-now").disabled = false;
-    $("#tg-open-batch").classList.remove("hidden");
-    $("#tg-confirm-sent").classList.add("hidden");
-    $("#tg-finish").classList.add("hidden");
+    setGroupFooter("tg-send-now");
 
-    // The same draft, in a form that does not care which Outlook Windows
-    // opens. No Done button here -- the group flow's own "Sent - Next Batch"
-    // is the step that advances the batch.
-    const draftEl = $("#tg-batch-draft");
-    if (draftEl) {
-      const addresses = batch.map((d) => formatTextAddress(d.phone)).filter(Boolean);
-      draftEl.innerHTML = textDraftControlsHtml("tg-draft");
-      wireTextDraftControls("tg-draft", addresses, s.message, {
-        onOpened: () => {
-          $("#tg-open-batch").classList.add("hidden");
-          $("#tg-confirm-sent").classList.remove("hidden");
-        },
-      });
+    // One press: Send Now in the setup step ran this page's starter, which
+    // lands here. Carry on into the send rather than asking again.
+    if (autoSendAfterStart) {
+      autoSendAfterStart = false;
+      void sendCurrentGroupBatchDirect();
     }
   }
 
@@ -4733,8 +4782,12 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       renderGroupTextProgress();
     } catch (e) {
       console.error("Group batch direct-send failed:", e);
-      if (statusEl) statusEl.innerHTML = `Couldn't send automatically (${escapeHtml(String(e.message || e))}) — use "Open in Outlook Instead" below.`;
+      if (statusEl) {
+        statusEl.textContent = `Couldn't send automatically (${String(e.message || e)}). Take it into Outlook instead:`;
+        statusEl.classList.remove("hidden");
+      }
       btn.disabled = false;
+      showGroupOutlookFallback();
     }
   }
 
@@ -4752,8 +4805,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       return;
     }
     openMailDraft(batch.map((d) => formatTextAddress(d.phone)).filter(Boolean), s.message);
-    $("#tg-open-batch").classList.add("hidden");
-    $("#tg-confirm-sent").classList.remove("hidden");
+    setGroupFooter("tg-confirm-sent");
   }
 
   export function confirmGroupBatchSent() {
@@ -7260,8 +7312,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       on("tg-close", "click", () => $("#modal-text-group").classList.add("hidden"));
       on("tg-cancel", "click", () => $("#modal-text-group").classList.add("hidden"));
       on("tg-start", "click", startTextSelected);
-      on("tg-send-now", "click", sendCurrentGroupBatchDirect);
+      on("tg-send-now", "click", groupSendNowPressed);
       on("tg-open-batch", "click", openCurrentGroupBatch);
+      on("tg-open-web", "click", openCurrentGroupBatchInWeb);
       on("tg-confirm-sent", "click", confirmGroupBatchSent);
       on("tg-finish", "click", () => $("#modal-text-group").classList.add("hidden"));
       $("#modal-text-group").addEventListener("click", (e) => { if (e.target.id === "modal-text-group") $("#modal-text-group").classList.add("hidden"); });
@@ -7779,8 +7832,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
     if ($("#btn-text-group")) $("#btn-text-group").addEventListener("click", openTextGroupModal);
     on("tg-start", "click", startGroupTexting);
-    on("tg-send-now", "click", sendCurrentGroupBatchDirect);
+    on("tg-send-now", "click", groupSendNowPressed);
       on("tg-open-batch", "click", openCurrentGroupBatch);
+      on("tg-open-web", "click", openCurrentGroupBatchInWeb);
     on("tg-confirm-sent", "click", confirmGroupBatchSent);
     const closeTextGroupModal = () => $("#modal-text-group").classList.add("hidden");
     on("tg-finish", "click", closeTextGroupModal);

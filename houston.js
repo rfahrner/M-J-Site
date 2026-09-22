@@ -4,7 +4,7 @@
      split) with entirely different columns. See chat for why this
      isn't just another branch in the existing board code.
      ================================================================ */
-import { state, supabaseClient, uid, findDriver, driversForLocation, setDriverSyncStatus, SAVE_DEBOUNCE_MS, escapeHtml, $, $all, addDays, keyToDate, dateKey, on, refreshDriverDatalist, renderBoardChrome, beginTextBatchFlow, textDriverPhone, openAddDriverModal, openAddLoadModal, closeAddLoadModal, closeDateDropdown, renderCalendarGrid, closeContextMenu, sendCurrentGroupBatchDirect, openCurrentGroupBatch, confirmGroupBatchSent, pick, handleRealtimeDriverChange, initAvailableSection, resetCalendarViewMonth, resetGroupTextState, refreshAvailableSection, openDriverAutocomplete, updateDriverAutocomplete, closeDriverAutocomplete, captureFocusForRerender, handleRowAwareTab, openEditDriverModal, BOARD_IMAGE_BUCKET, rowImageDropzoneHtml, wireRowImageDropzone, batchSignImageUrls, openLocationNotesModal, closeLocationNotesModal, saveLocationNotes } from './loadboard.js';
+import { state, supabaseClient, uid, findDriver, driversForLocation, setDriverSyncStatus, SAVE_DEBOUNCE_MS, escapeHtml, $, $all, addDays, keyToDate, dateKey, on, refreshDriverDatalist, renderBoardChrome, beginTextBatchFlow, textDriverPhone, openAddDriverModal, openAddLoadModal, closeAddLoadModal, closeDateDropdown, renderCalendarGrid, closeContextMenu, sendCurrentGroupBatchDirect, groupSendNowPressed, openCurrentGroupBatch, openCurrentGroupBatchInWeb, confirmGroupBatchSent, pick, handleRealtimeDriverChange, initAvailableSection, resetCalendarViewMonth, resetGroupTextState, refreshAvailableSection, openDriverAutocomplete, updateDriverAutocomplete, closeDriverAutocomplete, captureFocusForRerender, handleRowAwareTab, openEditDriverModal, BOARD_IMAGE_BUCKET, rowImageDropzoneHtml, wireRowImageDropzone, batchSignImageUrls, openLocationNotesModal, closeLocationNotesModal, saveLocationNotes } from './loadboard.js';
 import { getBoardRateSettings } from './boardrates.js';
 export const HOUSTON_TABLE = "loads_houston";
   export const houstonState = { sheets: {}, datesWithData: new Set() };
@@ -633,8 +633,9 @@ export const HOUSTON_TABLE = "loads_houston";
       on("tg-close", "click", () => $("#modal-text-group").classList.add("hidden"));
       on("tg-cancel", "click", () => $("#modal-text-group").classList.add("hidden"));
       on("tg-start", "click", startTextSelectedHouston);
-      on("tg-send-now", "click", sendCurrentGroupBatchDirect);
+      on("tg-send-now", "click", groupSendNowPressed);
       on("tg-open-batch", "click", openCurrentGroupBatch);
+      on("tg-open-web", "click", openCurrentGroupBatchInWeb);
       on("tg-confirm-sent", "click", confirmGroupBatchSent);
       on("tg-finish", "click", () => $("#modal-text-group").classList.add("hidden"));
       $("#modal-text-group").addEventListener("click", (e) => { if (e.target.id === "modal-text-group") $("#modal-text-group").classList.add("hidden"); });
