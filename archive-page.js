@@ -1,3 +1,5 @@
+import { ARCHIVE_FORMAT_VERSION, exportRouteDocuments, archivedDocumentsPresent } from './archive-documents.js';
+
 const SUPABASE_URL = "https://ygsapysqzwrpcimgvaqx.supabase.co";
 const SUPABASE_KEY = "sb_publishable_8b8bSIiYm5TzLTw0WG1pAw_5ZWW5ZPL";
 const ROUTE_IMAGE_BUCKET = "mondelez-routes";
@@ -310,6 +312,7 @@ async function writeBlob(dir, name, blob) {
   const writable = await handle.createWritable();
   await writable.write(blob);
   await writable.close();
+  if ((await handle.getFile()).size !== blob.size) throw new Error(`Incomplete document write: ${name}`);
 }
 
 async function downloadStorageObject(bucket, objectPath) {
@@ -413,7 +416,7 @@ async function findCompletedArchive(rootArchiveDir, item) {
     manifest.source_table === item.source &&
     Number(manifest.source_id) === Number(item.record.id) &&
     String(manifest.shift_date) === String(item.record.shift_date);
-  if (!matches) return null;
+  if (!matches || !(await archivedDocumentsPresent(loadDir, manifest))) return null;
 
   return {
     dayDir,
@@ -443,12 +446,10 @@ async function loadHoustonPackage(row) {
   return { accounting, accountingRoutes };
 }
 
-async function writeRouteImage(docsDir, objectPath, prefix = "Route Image") {
-  if (!objectPath) return [];
-  const blob = await downloadStorageObject(ROUTE_IMAGE_BUCKET, objectPath);
-  const name = `${prefix} - ${safeName(objectPath.split("/").pop())}`;
-  await writeBlob(docsDir, name, blob);
-  return [{ bucket: ROUTE_IMAGE_BUCKET, path: objectPath, file: name }];
+async function writeRouteImage(docsDir, objectPath) {
+  return exportRouteDocuments(docsDir, objectPath, {
+    bucket: ROUTE_IMAGE_BUCKET, download: downloadStorageObject, write: writeBlob, safeName,
+  });
 }
 
 async function archiveInternal(rootArchiveDir, item, cutoff) {
@@ -457,6 +458,7 @@ async function archiveInternal(rootArchiveDir, item, cutoff) {
   const dayDir = await archiveDateDir(rootArchiveDir, item);
   const loadDir = await getOrCreateDir(dayDir, `Load ${loadNumberFor(item)} - ${driverNameFor(item)}`);
   const docsDir = await getOrCreateDir(loadDir, "Documents");
+  await writeFile(loadDir, "Archive Manifest.json", JSON.stringify({ archive_format_version: ARCHIVE_FORMAT_VERSION, status: "incomplete" }));
 
   const loadDetails = { ...shift, driver_name_archive: driverNameFor(item) };
   await writeFile(loadDir, "Load Details.json", JSON.stringify(loadDetails, null, 2) + "\n");
@@ -469,21 +471,17 @@ async function archiveInternal(rootArchiveDir, item, cutoff) {
   await writeFile(loadDir, "Accounting Routes.csv", toCsv(pkg.accountingRoutes));
   await writeFile(loadDir, "Attachments.csv", toCsv(pkg.attachments));
 
-  const documentResults = [];
-  const routeImagePaths = [...new Set([shift.route_image_path, ...pkg.trips.map((t) => t.route_image_path)].filter(Boolean))];
-  for (const objectPath of routeImagePaths) {
-    const result = await writeRouteImage(docsDir, objectPath);
-    documentResults.push(...result);
-  }
+  const documentResults = await writeRouteImage(docsDir, [shift.route_image_path, ...pkg.trips.map((t) => t.route_image_path)]);
   for (const attachment of pkg.attachments) {
     if (!attachment.file_path) continue;
     const blob = await downloadStorageObject(TRIP_SHEET_BUCKET, attachment.file_path);
-    const name = safeName(attachment.file_name || attachment.file_path.split("/").pop());
+    const name = safeName(`Attachment ${attachment.id} - ${attachment.file_name || attachment.file_path.split("/").pop()}`);
     await writeBlob(docsDir, name, blob);
-    documentResults.push({ bucket: TRIP_SHEET_BUCKET, path: attachment.file_path, file: name });
+    documentResults.push({ bucket: TRIP_SHEET_BUCKET, path: attachment.file_path, file: name, size: blob.size });
   }
 
   const manifest = {
+    archive_format_version: ARCHIVE_FORMAT_VERSION,
     exported_at: new Date().toISOString(), cutoff, source_table: item.source, source_id: shift.id,
     customer: item.customer, location: item.location, location_label: locationLabel(item),
     shift_date: shift.shift_date, load_number: loadNumberFor(item), driver_name: driverNameFor(item),
@@ -500,6 +498,7 @@ async function archiveHouston(rootArchiveDir, item, cutoff) {
   const dayDir = await archiveDateDir(rootArchiveDir, item);
   const loadDir = await getOrCreateDir(dayDir, `Load ${loadNumberFor(item)} - ${driverNameFor(item)}`);
   const docsDir = await getOrCreateDir(loadDir, "Documents");
+  await writeFile(loadDir, "Archive Manifest.json", JSON.stringify({ archive_format_version: ARCHIVE_FORMAT_VERSION, status: "incomplete" }));
 
   const loadDetails = { ...row, driver_name_archive: driverNameFor(item) };
   await writeFile(loadDir, "Load Details.json", JSON.stringify(loadDetails, null, 2) + "\n");
@@ -509,6 +508,7 @@ async function archiveHouston(rootArchiveDir, item, cutoff) {
 
   const documents = await writeRouteImage(docsDir, row.route_image_path);
   const manifest = {
+    archive_format_version: ARCHIVE_FORMAT_VERSION,
     exported_at: new Date().toISOString(), cutoff, source_table: item.source, source_id: row.id,
     customer: item.customer, location: item.location, location_label: locationLabel(item),
     shift_date: row.shift_date, load_number: loadNumberFor(item), driver_name: driverNameFor(item),
@@ -524,6 +524,7 @@ async function archiveMondelez(rootArchiveDir, item, cutoff) {
   const dayDir = await archiveDateDir(rootArchiveDir, item);
   const loadDir = await getOrCreateDir(dayDir, `Load ${loadNumberFor(item)} - ${driverNameFor(item)}`);
   const docsDir = await getOrCreateDir(loadDir, "Documents");
+  await writeFile(loadDir, "Archive Manifest.json", JSON.stringify({ archive_format_version: ARCHIVE_FORMAT_VERSION, status: "incomplete" }));
 
   const loadDetails = { ...row, driver_name_archive: driverNameFor(item) };
   await writeFile(loadDir, "Load Details.json", JSON.stringify(loadDetails, null, 2) + "\n");
@@ -531,6 +532,7 @@ async function archiveMondelez(rootArchiveDir, item, cutoff) {
 
   const documents = await writeRouteImage(docsDir, row.route_image_path);
   const manifest = {
+    archive_format_version: ARCHIVE_FORMAT_VERSION,
     exported_at: new Date().toISOString(), cutoff, source_table: item.source, source_id: row.id,
     customer: item.customer, location: item.location, location_label: locationLabel(item),
     shift_date: row.shift_date, load_number: loadNumberFor(item), driver_name: driverNameFor(item),
