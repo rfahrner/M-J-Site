@@ -1,3 +1,5 @@
+import { carrierTierLabel } from './carrier-mileage-tiers.js';
+
 /* Delaware mileage-tier rate UI.
    Delaware now follows the same rate-card shape as Atlanta: editable mileage
    bands, date-specific overrides, and an over-tier per-mile value. */
@@ -89,7 +91,7 @@ function todayTierMarkup(date) {
   return tiers().map((tier) => {
     const override = card.tiers[String(tier.id)];
     return fieldBox(
-      `${tier.min}-${tier.max}MI`,
+      carrierTierLabel(tiers(), tier),
       `<input type="number" step="0.01" data-de-daily-tier="${tier.id}" value="${override != null ? esc(override) : ''}" placeholder="Base ${esc(tier.rate)}">`,
       `Permanent base: ${tier.rate}`,
       override != null
@@ -99,7 +101,7 @@ function todayTierMarkup(date) {
 
 function baseTierMarkup() {
   return tiers().map((tier) => fieldBox(
-    `${tier.min}-${tier.max}MI`,
+    carrierTierLabel(tiers(), tier),
     `<input type="number" step="0.01" data-de-base-tier="${tier.id}" value="${esc(tier.rate)}">`
   )).join('');
 }
@@ -109,7 +111,7 @@ function overTierTodayMarkup(date) {
   const base = rates.getBaseSetting('delaware', 'over_tier_per_mile', 4);
   const override = card.settings.over_tier_per_mile;
   return fieldBox(
-    'Over 250MI ($/mi)',
+    '251+ MI ($/mi)',
     `<input type="number" step="0.01" data-de-daily-over value="${override != null ? esc(override) : ''}" placeholder="Base ${esc(base)}">`,
     `Permanent base: ${base}`,
     override != null
@@ -118,7 +120,7 @@ function overTierTodayMarkup(date) {
 
 function overTierBaseMarkup() {
   const base = rates.getBaseSetting('delaware', 'over_tier_per_mile', 4);
-  return fieldBox('Over 250MI ($/mi)', `<input type="number" step="0.01" data-de-base-over value="${esc(base)}">`);
+  return fieldBox('251+ MI ($/mi)', `<input type="number" step="0.01" data-de-base-over value="${esc(base)}">`);
 }
 
 function openDelawareRateSettings() {
@@ -136,7 +138,7 @@ function openDelawareRateSettings() {
       </div>
       <div class="modal-body">
         <div class="calc-note" style="margin-bottom:14px;">
-          Delaware pays by mileage tier: 0–25, 26–75, 76–150, 151–200, and 201–250 miles. Anything over 250 miles is paid per mile.
+          Delaware pays by mileage tier: 0–25.9, 26–75.9, 76–150.9, 151–200.9, and 201–250.9 miles. Mileage is rounded down to select a tier. At 251 miles and above, actual mileage is paid per mile.
           A manual Rate-cell entry still overrides the automatic calculation.
         </div>
         <h4 style="margin:0 0 8px;">Today's Delaware rate</h4>
@@ -210,13 +212,13 @@ function decorateLoadDetails() {
     const overridden = card.tiers[String(tier.id)] != null;
     const value = rates.getDailyTierValue('delaware', date, tier);
     return fieldBox(
-      `${tier.min}-${tier.max}MI`,
+      carrierTierLabel(tiers(), tier),
       `<input type="number" step="0.01" data-rate-tier-id="${tier.id}" value="${esc(value)}">`,
       '',
       overridden
     );
   }).join('') + fieldBox(
-    'Over 250MI ($/mi)',
+    '251+ MI ($/mi)',
     `<input type="number" step="0.01" data-rate-setting-key="over_tier_per_mile" value="${esc(rates.getDailySettingValue('delaware', date, 'over_tier_per_mile', 4))}">`,
     '',
     card.settings.over_tier_per_mile != null
@@ -224,7 +226,7 @@ function decorateLoadDetails() {
   grid.dataset.delawareTierSignature = signature;
 
   const explanation = section.querySelector(':scope > .subtext');
-  if (explanation) explanation.textContent = `Delaware rate card for ${date}. Mileage selects the tier; over 250 miles pays the configured per-mile rate. A manual total overrides the calculation.`;
+  if (explanation) explanation.textContent = `Delaware rate card for ${date}. Mileage selects the tier; 251 miles and above pays the configured per-mile rate. A manual total overrides the calculation.`;
 }
 
 function installStyles() {

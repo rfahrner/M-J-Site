@@ -64,7 +64,7 @@ jobs:
       - name: Test Atlanta Night Shift
         run: node --test scripts/night-shift.test.mjs
 
-      - name: Test Atlanta fractional mileage tiers
+      - name: Test Atlanta and Delaware rounded-down mileage tiers
         run: node --test scripts/carrier-mileage-tiers.test.mjs
 
       - name: Test archive documents and Outlook fallback
