@@ -31,6 +31,8 @@
 
 import { chromium } from 'playwright';
 import { readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { extname, join, normalize } from 'node:path';
 
 const EXECUTABLE = process.env.CHROMIUM_PATH || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
 const read = (n) => readFileSync(new URL('../' + n, import.meta.url), 'utf8');
@@ -55,7 +57,29 @@ const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
 page.on('pageerror', (e) => { failures++; console.log('  FAIL page error:', String(e).slice(0, 300)); });
 page.on('console', (m) => { if (m.type() === 'error') console.log('  [console.error]', m.text().slice(0, 200)); });
 
-await page.setContent(`<!doctype html><html><head><meta charset="utf-8"></head><body>${bodyInner}</body></html>`);
+// archive-page.js imports its own siblings now, so the page has to be served
+// rather than injected: a module given to setContent/addScriptTag has no base
+// URL, and "./archive-documents.js" cannot resolve from one.
+const repoRoot = new URL('../', import.meta.url).pathname;
+const server = createServer((req, res) => {
+  const rel = normalize(decodeURIComponent(req.url.split('?')[0])).replace(/^(\.\.[/\\])+/, '');
+  if (rel === '/' || rel === '/index') {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(`<!doctype html><html><head><meta charset="utf-8"></head><body>${bodyInner}</body></html>`);
+    return;
+  }
+  try {
+    const body = readFileSync(join(repoRoot, rel));
+    const type = extname(rel) === '.js' ? 'text/javascript' : 'text/plain';
+    res.writeHead(200, { 'Content-Type': type });
+    res.end(body);
+  } catch {
+    res.writeHead(404).end('not found');
+  }
+});
+await new Promise((r) => server.listen(0, '127.0.0.1', r));
+const origin = `http://127.0.0.1:${server.address().port}`;
+await page.goto(origin + '/');
 
 // ---- stubs: Supabase client + folder picker ----
 await page.evaluate(() => {
@@ -185,7 +209,7 @@ await page.evaluate(() => {
 });
 
 // ---- run the real module ----
-await page.addScriptTag({ content: MODULE, type: 'module' });
+await page.addScriptTag({ url: origin + '/archive-page.js', type: 'module' });
 await page.waitForFunction(() => document.querySelector('#archive-loads').textContent !== '—', null, { timeout: 15000 });
 
 // ---- 1. counting is one RPC, and it fills the page ----
@@ -245,7 +269,14 @@ const out = await page.evaluate(() => ({
   tree: window.__tree(),
   downloads: window.__calls.downloads,
   manifest: window.__fileText('Archive/Kroger/Atlanta/2025-02-03/Load 884512 - Marcus Whitfield/Archive Manifest.json'),
-  routeImage: window.__fileText('Archive/Kroger/Atlanta/2025-02-03/Load 884512 - Marcus Whitfield/Documents/Route Image - route.png'),
+  // Exported documents are numbered now, so route.png lands as
+  // "Route Image 0001 - route.png". Find it by the source filename rather than
+  // pinning the counter, which is presentation and may well change again.
+  routeImage: (() => {
+    const dir = 'Archive/Kroger/Atlanta/2025-02-03/Load 884512 - Marcus Whitfield/Documents/';
+    const hit = window.__tree().find((p) => p.startsWith(dir) && p.endsWith('route.png'));
+    return hit ? window.__fileText(hit) : null;
+  })(),
   status: document.querySelector('#archive-status').textContent,
 }));
 const has = (p) => out.tree.includes(p);
@@ -263,5 +294,6 @@ check('the image bytes actually landed on disk', out.routeImage, 'fake-bytes-for
 check('manifest records nothing was deleted', /"supabase_deleted": false/.test(out.manifest || ''), true);
 
 await browser.close();
+server.close();
 console.log(failures ? `\n  ${failures} check(s) FAILED\n` : '\n  All checks passed.\n');
 process.exit(failures ? 1 : 0);
