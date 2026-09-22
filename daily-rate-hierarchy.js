@@ -6,6 +6,8 @@
    imports back into loadboard.js here would create an avoidable module cycle.
 */
 
+import { atlantaTierLabel } from './carrier-mileage-tiers.js';
+
 const PAGE_LOCATION = {
   "": "atlanta",
   "index.html": "atlanta",
@@ -221,7 +223,7 @@ function dailyTiersMarkup(date) {
   const card = rates.getDailyRateCard("atlanta", date);
   return tiers.map((tier) => {
     const override = card.tiers[String(tier.id)];
-    return fieldBox(`${tier.min}-${tier.max}MI`,
+    return fieldBox(atlantaTierLabel(tiers, tier),
       `<input type="number" step="0.01" data-daily-tier="${tier.id}" value="${override != null ? esc(override) : ""}" placeholder="Base ${esc(tier.rate)}">`,
       `Permanent base: ${tier.rate}`
     );
@@ -231,7 +233,7 @@ function dailyTiersMarkup(date) {
 function baseTiersMarkup() {
   if (activeLocation !== "atlanta") return "";
   const tiers = rates.getBoardRateTiers()?.atlanta || [];
-  return tiers.map((tier) => fieldBox(`${tier.min}-${tier.max}MI`,
+  return tiers.map((tier) => fieldBox(atlantaTierLabel(tiers, tier),
     `<input type="number" step="0.01" data-base-tier="${tier.id}" value="${esc(tier.rate)}">`
   )).join("");
 }
