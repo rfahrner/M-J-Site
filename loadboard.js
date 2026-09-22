@@ -928,13 +928,22 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   }
   function sheetKey(locationKey, dKey) { return `${locationKey}__${dKey}`; }
 
-  function nightShiftActive() { return state.activeLocation === "atlanta" && state.nightShift; }
+  // Night Shift is not an Atlanta feature -- every board has dispatchers whose
+  // shift runs past midnight. It applies to the boards rendered by this file;
+  // Houston and Mondelez have their own renderers and their own copies.
+  const STANDARD_BOARD_LOCATIONS = new Set(
+    Object.values(PAGE_MAP).filter((p) => p.type === "board").map((p) => p.key),
+  );
+
+  function nightShiftActive() {
+    return !!state.nightShift && STANDARD_BOARD_LOCATIONS.has(state.activeLocation);
+  }
 
   function getVisibleBoardRows() {
     const rows = state.sheets[sheetKey(state.activeLocation, state.activeDate)] || [];
     if (!nightShiftActive()) return rows;
     // Do not create a next-day cache entry before its asynchronous fetch.
-    const morning = state.sheets[sheetKey("atlanta", nextShiftDate(state.activeDate))] || [];
+    const morning = state.sheets[sheetKey(state.activeLocation, nextShiftDate(state.activeDate))] || [];
     const visible = nightShiftRows(rows, morning, parseHHMM);
     // A realtime echo must not remove a morning row halfway through typing
     // its new start time. Recheck membership when that field loses focus.
@@ -2536,11 +2545,14 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     $("#sheet-title").textContent = loc.title;
     const d = keyToDate(state.activeDate);
     const isToday = state.activeDate === dateKey(todayDate());
-    $("#sheet-subtext").textContent = humanDate(d) + (isToday ? " · today" : "") + (nightShiftActive() ? ` · Night Shift through ${shortShiftDate(nextShiftDate(state.activeDate))} 06:00` : "");
+    // state.nightShift, not nightShiftActive(): the chrome is shared with
+    // Houston and Mondelez, which render their own rows but toggle the same
+    // flag, and the button has to look pressed on those boards too.
+    $("#sheet-subtext").textContent = humanDate(d) + (isToday ? " · today" : "") + (state.nightShift ? ` · Night Shift through ${shortShiftDate(nextShiftDate(state.activeDate))} 06:00` : "");
     // Night Shift changes the date window, never the board theme (including
     // when an older stylesheet is still cached in the browser).
     document.body.classList.remove("night-shift-active");
-    $("#btn-night-shift")?.setAttribute("aria-pressed", String(nightShiftActive()));
+    $("#btn-night-shift")?.setAttribute("aria-pressed", String(!!state.nightShift));
     $("#date-input").value = state.activeDate;
     $("#date-input").min = state.minDate;
     $("#date-input").max = state.maxDate;
@@ -2736,7 +2748,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     if (myToken !== boardRenderToken) return; // superseded by a newer navigation
     if (dayLoaded === false) { renderBoardTable(); return; }
     if (nightShiftActive()) {
-      const morningLoaded = await ensureSheetLoaded("atlanta", nextShiftDate(state.activeDate));
+      const morningLoaded = await ensureSheetLoaded(state.activeLocation, nextShiftDate(state.activeDate));
       if (myToken !== boardRenderToken) return;
       if (morningLoaded === false) {
         setDriverSyncStatus("Night Shift is incomplete: couldn't load the next morning. Toggle Night Shift off and on to retry.", "error");
@@ -7367,7 +7379,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
 
   function initBoardPage(info) {
     state.activeLocation = info.key;
-    if (info.key === "atlanta" && $("#btn-night-shift")) {
+    if ($("#btn-night-shift")) {
       $("#btn-night-shift").addEventListener("click", () => {
         state.nightShift = !state.nightShift;
         loadAndRenderBoard();

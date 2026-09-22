@@ -4,10 +4,31 @@
      split) with entirely different columns. See chat for why this
      isn't just another branch in the existing board code.
      ================================================================ */
-import { state, supabaseClient, uid, findDriver, driversForLocation, setDriverSyncStatus, SAVE_DEBOUNCE_MS, escapeHtml, $, $all, addDays, keyToDate, dateKey, on, refreshDriverDatalist, renderBoardChrome, beginTextBatchFlow, textDriverPhone, openAddDriverModal, openAddLoadModal, closeAddLoadModal, closeDateDropdown, renderCalendarGrid, closeContextMenu, sendCurrentGroupBatchDirect, groupSendNowPressed, openCurrentGroupBatch, openCurrentGroupBatchInWeb, confirmGroupBatchSent, pick, handleRealtimeDriverChange, initAvailableSection, resetCalendarViewMonth, resetGroupTextState, refreshAvailableSection, openDriverAutocomplete, updateDriverAutocomplete, closeDriverAutocomplete, captureFocusForRerender, handleRowAwareTab, openEditDriverModal, BOARD_IMAGE_BUCKET, rowImageDropzoneHtml, wireRowImageDropzone, batchSignImageUrls, openLocationNotesModal, closeLocationNotesModal, saveLocationNotes } from './loadboard.js';
+import { state, parseHHMM, supabaseClient, uid, findDriver, driversForLocation, setDriverSyncStatus, SAVE_DEBOUNCE_MS, escapeHtml, $, $all, addDays, keyToDate, dateKey, on, refreshDriverDatalist, renderBoardChrome, beginTextBatchFlow, textDriverPhone, openAddDriverModal, openAddLoadModal, closeAddLoadModal, closeDateDropdown, renderCalendarGrid, closeContextMenu, sendCurrentGroupBatchDirect, groupSendNowPressed, openCurrentGroupBatch, openCurrentGroupBatchInWeb, confirmGroupBatchSent, pick, handleRealtimeDriverChange, initAvailableSection, resetCalendarViewMonth, resetGroupTextState, refreshAvailableSection, openDriverAutocomplete, updateDriverAutocomplete, closeDriverAutocomplete, captureFocusForRerender, handleRowAwareTab, openEditDriverModal, BOARD_IMAGE_BUCKET, rowImageDropzoneHtml, wireRowImageDropzone, batchSignImageUrls, openLocationNotesModal, closeLocationNotesModal, saveLocationNotes } from './loadboard.js';
 import { getBoardRateSettings } from './boardrates.js';
+import { nextShiftDate, nightShiftRows, shortShiftDate, morningShift } from './night-shift.js';
 export const HOUSTON_TABLE = "loads_houston";
   export const houstonState = { sheets: {}, datesWithData: new Set() };
+
+  /*
+   * Night Shift, same rule as every other board: keep the day on screen and add
+   * the next morning's starts up to 06:00, so one operating night reads as one
+   * board. Houston's start-time field is `time`, not `shiftStart`.
+   *
+   * These are the canonical row objects out of the next day's cache, never
+   * copies -- a carried-over row must keep saving under its own shift_date.
+   */
+  // state.nightShift is the one toggle every board shares, so the button and
+  // the "Night Shift through ..." subtext in renderBoardChrome() stay correct
+  // here without Houston having to re-render any of the chrome itself.
+  export function houstonNightShiftActive() { return !!state.nightShift; }
+
+  export function visibleHoustonRows() {
+    const rows = getHoustonSheet(state.activeDate);
+    if (!houstonNightShiftActive()) return rows;
+    const morning = houstonState.sheets[nextShiftDate(state.activeDate)] || [];
+    return nightShiftRows(rows, morning, parseHHMM, "time");
+  }
 
   // Houston has no per-route breakdown (flat table, no trips concept), so
   // unlike the other three locations, this is just a starting default —
@@ -151,7 +172,7 @@ export const HOUSTON_TABLE = "loads_houston";
       <td class="col-hou-carrier"><span class="static-text">${escapeHtml(pick(drv && drv.carrier, row.carrier))}</span></td>
       <td class="col-mc"><span class="static-text">${escapeHtml(pick(drv && drv.mc, row.mc))}</span></td>
       <td class="col-rating"><span class="static-text">${escapeHtml(pick(drv && drv.rating, row.rating))}</span></td>
-      <td class="col-shiftStart"><input class="cell-input small" style="width:46px;" placeholder="--:--" data-row="${row.id}" data-field="time" value="${escapeHtml(row.time)}"></td>
+      <td class="col-shiftStart">${houstonNightShiftActive() ? `<span class="static-text shift-start-date">${shortShiftDate(row.shiftDate || state.activeDate)}</span>` : ""}<input class="cell-input small" style="width:46px;" placeholder="--:--" data-row="${row.id}" data-field="time" value="${escapeHtml(row.time)}"></td>
       <td class="col-hou-ttc"><input class="cell-input small" style="width:46px;" data-row="${row.id}" data-field="ttc" value="${escapeHtml(row.ttc)}"></td>
       <td class="col-hou-ttt"><input class="cell-input small" style="width:46px;" data-row="${row.id}" data-field="ttt" value="${escapeHtml(row.ttt)}"></td>
       <td class="col-hou-comments"><input class="cell-input" data-row="${row.id}" data-field="comments" value="${escapeHtml(row.comments)}"></td>
@@ -161,7 +182,7 @@ export const HOUSTON_TABLE = "loads_houston";
   }
 
   export function renderHoustonBoardTable() {
-    const rows = getHoustonSheet(state.activeDate);
+    const rows = visibleHoustonRows();
     const displayRows = [...rows].sort((a, b) => (a.shiftComplete ? 1 : 0) - (b.shiftComplete ? 1 : 0));
     const thead = `<thead><tr>
       <th class="pin pin-select"><div id="houston-select-count" class="board-select-count"></div><input type="checkbox" class="chk" id="select-all-rows" title="Select all"></th>
@@ -197,13 +218,14 @@ export const HOUSTON_TABLE = "loads_houston";
   function updateHoustonSelectCount() {
     const el = $("#houston-select-count");
     if (!el) return;
-    const rows = getHoustonSheet(state.activeDate);
+    const rows = visibleHoustonRows();
     const selectedCount = rows.filter((r) => r.selected).length;
     el.textContent = `Count ${rows.length} (${selectedCount} selected)`;
   }
 
   export async function loadAndRenderHoustonBoard() {
     await ensureHoustonSheetLoaded(state.activeDate);
+    if (houstonNightShiftActive()) await ensureHoustonSheetLoaded(nextShiftDate(state.activeDate));
     renderBoardChrome();
     renderHoustonBoardTable();
     refreshAvailableSection();
@@ -239,7 +261,7 @@ export const HOUSTON_TABLE = "loads_houston";
   }
 
   export function selectAllHoustonRows(checked) {
-    const rows = getHoustonSheet(state.activeDate);
+    const rows = visibleHoustonRows();
     rows.forEach((row) => {
       row.selected = checked;
       const tr = document.getElementById(row.id);
@@ -253,14 +275,14 @@ export const HOUSTON_TABLE = "loads_houston";
   }
 
   export function completeSelectedHoustonRows() {
-    const rows = getHoustonSheet(state.activeDate).filter((r) => r.selected && !r.shiftComplete);
+    const rows = visibleHoustonRows().filter((r) => r.selected && !r.shiftComplete);
     if (!rows.length) { setDriverSyncStatus("No selected loads need completing — either nothing's checked, or they're already complete.", "error"); return; }
     rows.forEach((row) => { row.shiftComplete = true; saveHoustonRowNow(row); });
     renderHoustonBoardTable();
   }
 
   export function openTextSelectedHoustonModal() {
-    const rows = getHoustonSheet(state.activeDate).filter((r) => r.selected);
+    const rows = visibleHoustonRows().filter((r) => r.selected);
     if (!rows.length) { setDriverSyncStatus("Nothing's checked yet — select some loads first.", "error"); return; }
     const modal = $("#modal-text-group");
     if (!modal) return;
@@ -277,7 +299,7 @@ export const HOUSTON_TABLE = "loads_houston";
     const message = $("#tg-message").value.trim();
     const errEl = $("#tg-error");
     if (!message) { errEl.textContent = "Write a message first."; errEl.classList.remove("hidden"); return; }
-    const rows = getHoustonSheet(state.activeDate).filter((r) => r.selected);
+    const rows = visibleHoustonRows().filter((r) => r.selected);
     const members = rows.map((r) => {
       const drv = r.driverId ? findDriver(r.driverId) : null;
       return drv ? { ...drv } : { name: r.driverName || "Unnamed", phone: r.driverPhone };
@@ -359,7 +381,9 @@ export const HOUSTON_TABLE = "loads_houston";
     const label = [row.aljexNumber, drv ? drv.name : row.driverName].filter(Boolean).join(" — ") || "this load";
     if (!confirm(`Delete ${label}? This can't be undone.`)) return;
 
-    const rows = getHoustonSheet(state.activeDate);
+    // Not necessarily today's sheet: under Night Shift the row on screen may
+    // belong to the next morning.
+    const rows = houstonState.sheets[found.row.shiftDate] || getHoustonSheet(state.activeDate);
     const idx = rows.findIndex((r) => r.id === rowId);
     if (idx !== -1) rows.splice(idx, 1);
     renderHoustonBoardTable();
@@ -530,8 +554,12 @@ export const HOUSTON_TABLE = "loads_houston";
     if (dbRow.shift_date >= state.minDate && dbRow.shift_date <= state.maxDate) {
       houstonState.datesWithData.add(dbRow.shift_date);
     }
-    if (dbRow.shift_date !== state.activeDate) return;
-    const rows = houstonState.sheets[state.activeDate];
+    // Under Night Shift the board also shows the next morning, so a payload
+    // for that day has to merge too or a carried-over row goes stale.
+    const onScreen = dbRow.shift_date === state.activeDate
+      || (houstonNightShiftActive() && dbRow.shift_date === nextShiftDate(state.activeDate));
+    if (!onScreen) return;
+    const rows = houstonState.sheets[dbRow.shift_date];
     if (!rows) return;
     const existing = rows.find((r) => r.dbId === dbRow.id);
     const wasComplete = existing ? existing.shiftComplete : null;
@@ -595,6 +623,12 @@ export const HOUSTON_TABLE = "loads_houston";
 
   export function initHoustonBoardPage(info) {
     state.activeLocation = "houston";
+    if ($("#btn-night-shift")) {
+      $("#btn-night-shift").addEventListener("click", () => {
+        state.nightShift = !state.nightShift;
+        loadAndRenderHoustonBoard();
+      });
+    }
     loadAndRenderHoustonBoard();
     setupHoustonRealtimeSync();
     loadHoustonDatesWithData().catch((e) => console.error("loadHoustonDatesWithData() failed:", e));

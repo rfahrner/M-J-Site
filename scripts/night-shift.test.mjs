@@ -73,17 +73,101 @@ test('saving an overnight row keeps its original calendar date', () => {
 });
 
 test('toggling Night Shift never enables a body theme, including with cached CSS', () => {
-  let active = true;
   const removed = [], pressed = [];
-  const state = { activeLocation: 'atlanta', activeDate: '2026-09-22', minDate: '2026-01-01', maxDate: '2027-01-01' };
+  // The chrome reads state.nightShift, not nightShiftActive(): it draws the
+  // header for Houston and Mondelez too, which render their own rows but
+  // toggle the same flag, and the button has to look pressed there as well.
+  const state = { nightShift: true, activeLocation: 'atlanta', activeDate: '2026-09-22', minDate: '2026-01-01', maxDate: '2027-01-01' };
   const chrome = vm.runInNewContext(`(${board.match(/function renderBoardChrome\(\) \{[\s\S]*?\n  \}/)[0]})`, {
     state, LOCATIONS: [{ key: 'atlanta', title: 'Atlanta' }], nextShiftDate, shortShiftDate,
     keyToDate: value => value, dateKey: value => value, todayDate: () => state.activeDate, humanDate: value => value,
-    nightShiftActive: () => active,
+    nightShiftActive: () => state.nightShift,
     document: { body: { classList: { remove: value => removed.push(value), toggle() { throw new Error('Must not enable a theme'); } } } },
     $: () => ({ setAttribute: (name, value) => pressed.push([name, value]) }),
   });
-  chrome(); active = false; chrome();
+  chrome(); state.nightShift = false; chrome();
   assert.deepEqual(removed, ['night-shift-active', 'night-shift-active']);
   assert.deepEqual(pressed, [['aria-pressed','true'], ['aria-pressed','false']]);
+});
+
+/* ---------------------------------------------------------------------------
+ * Night Shift is on every board, not just Atlanta.
+ *
+ * The three standard boards share one renderer, so they share one code path.
+ * Houston and Mondelez have their own renderers and their own tables, and they
+ * do not agree with the standard boards -- or each other -- about what the
+ * start-time field is called: shiftStart, time, startTime. Same 06:00 cutoff
+ * everywhere, deliberately: a dispatcher who works two boards should not have
+ * to remember two rules.
+ * ------------------------------------------------------------------------ */
+
+const houston = readFileSync(new URL('../houston.js', import.meta.url), 'utf8');
+const mondelez = readFileSync(new URL('../mondelez.js', import.meta.url), 'utf8');
+
+test('the cutoff is declared once and is 06:00', async () => {
+  const { NIGHT_SHIFT_END_MINUTES } = await import(`data:text/javascript;base64,${Buffer.from(helper).toString('base64')}`);
+  assert.equal(NIGHT_SHIFT_END_MINUTES, 360);
+  // No board re-states the cutoff as a number of minutes of its own.
+  for (const [name, src] of [['houston.js', houston], ['mondelez.js', mondelez], ['loadboard.js', board]]) {
+    const code = src.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '');
+    assert.equal(/(<=|>=|===|<|>)\s*360\b/.test(code), false,
+      `${name} should take the cutoff from night-shift.js, not repeat it`);
+  }
+});
+
+test('each board carries rows over on its own start-time field', () => {
+  const day = [{ id: 'd1' }];
+  const morning = (field) => ['00:15', '05:59', '06:00', '07:30', ''].map((v, i) => ({ id: `m${i}`, [field]: v }));
+  for (const field of ['shiftStart', 'time', 'startTime']) {
+    const rows = nightShiftRows(day, morning(field), parseHHMM, field);
+    assert.deepEqual(rows.map(r => r.id), ['d1', 'm0', 'm1', 'm2'], `field ${field}`);
+  }
+  // A board asking with the wrong field name carries nothing over, rather than
+  // silently treating every row as a 00:00 start.
+  assert.deepEqual(nightShiftRows(day, morning('time'), parseHHMM, 'shiftStart').map(r => r.id), ['d1']);
+});
+
+test('the standard renderer is no longer hard-coded to Atlanta', () => {
+  const active = board.match(/function nightShiftActive\(\)[\s\S]*?\n  \}/)[0];
+  assert.equal(/"atlanta"/.test(active), false, 'nightShiftActive still names Atlanta');
+  assert.match(active, /STANDARD_BOARD_LOCATIONS/);
+  // The locations come from PAGE_MAP, so adding a board cannot forget this.
+  assert.match(board, /STANDARD_BOARD_LOCATIONS = new Set\(\s*\n\s*Object\.values\(PAGE_MAP\)/);
+  // The next morning is loaded and read for the board being looked at.
+  assert.match(board, /sheetKey\(state\.activeLocation, nextShiftDate\(state\.activeDate\)\)/);
+  assert.match(board, /ensureSheetLoaded\(state\.activeLocation, nextShiftDate\(state\.activeDate\)\)/);
+  // And the button is wired on every board page, not only Atlanta's.
+  assert.equal(/info\.key === "atlanta" && \$\("#btn-night-shift"\)/.test(board), false);
+});
+
+test('Houston and Mondelez load and show the next morning too', () => {
+  for (const [name, src, loader] of [
+    ['houston.js', houston, /await ensureHoustonSheetLoaded\(nextShiftDate\(state\.activeDate\)\)/],
+    ['mondelez.js', mondelez, /await ensureMondelezDateLoaded\(nextShiftDate\(state\.activeDate\)\)/],
+  ]) {
+    assert.match(src, loader, `${name} does not load the next morning`);
+    // Reading it without loading it would show an empty night.
+    assert.match(src, /nightShiftRows\(/, `${name} does not merge the two days`);
+    // A realtime payload for the carried day has to merge, or those rows go
+    // stale while they are on screen.
+    assert.match(src, /nextShiftDate\(state\.activeDate\)[\s\S]{0,120}return;/, `${name} ignores next-day echoes`);
+  }
+});
+
+test('every board page has the button', () => {
+  for (const page of ['index.html', 'dalaware.html', 'buildingc.html', 'houston.html', 'mondelez.html']) {
+    const html = readFileSync(new URL(`../${page}`, import.meta.url), 'utf8');
+    const hits = html.match(/id="btn-night-shift"/g) || [];
+    assert.equal(hits.length, 1, `${page} should have exactly one Night Shift button`);
+    assert.match(html, /aria-pressed="false"/);
+  }
+});
+
+test('one toggle, shared, so the chrome is right on every board', () => {
+  // renderBoardChrome lives in loadboard.js and draws the header for Houston
+  // too, so it reads the shared flag rather than the standard-board gate.
+  assert.match(board, /\$\("#btn-night-shift"\)\?\.setAttribute\("aria-pressed", String\(!!state\.nightShift\)\)/);
+  assert.match(houston, /state\.nightShift = !state\.nightShift/);
+  assert.match(mondelez, /state\.nightShift = !state\.nightShift/);
+  assert.equal(/houstonState\.nightShift/.test(houston), false, 'Houston should not keep a second flag');
 });

@@ -94,6 +94,36 @@ Current intent:
 - Prior-day shifts should only remain visible while genuinely running; once complete or outside the 12-hour window they disappear from current carryover.
 - For an existing location/day table, early-AM/overnight operational rows should merge into the same day's table instead of rendering as a separate duplicate table/block. A small EARLY AM / OVERNIGHT badge is fine to retain context.
 
+## Night Shift is on every board
+
+A night dispatcher's shift runs past midnight, so their work is split across
+two `shift_date` values. Night Shift keeps the selected day on screen and adds
+the next morning's starts, up to **06:00 on every board** -- one rule, because
+dispatchers work more than one board.
+
+`night-shift.js` is a leaf holding the cutoff and the merge. The boards do not
+agree on what the start-time field is called, so it is a parameter:
+`shiftStart` on the standard boards, `time` on Houston, `startTime` on
+Mondelez. Do not re-state 360 minutes anywhere else.
+
+The three standard boards (Atlanta, Delaware, Building C) share one renderer
+and one code path; `nightShiftActive()` gates on `STANDARD_BOARD_LOCATIONS`,
+derived from `PAGE_MAP`, so adding a board cannot forget it. Houston and
+Mondelez have their own renderers and their own tables and carry their own
+copies of the carry-over.
+
+`state.nightShift` is the single toggle all five share, because
+`renderBoardChrome()` in `loadboard.js` draws the header for Houston too --
+that is what keeps the button's pressed state and the "Night Shift through
+MM/DD 06:00" subtext right everywhere. Do not give a board a second flag.
+
+Two things to keep true when touching any of this: the rows handed to a
+renderer are the **canonical row objects** out of each day's cache, never
+copies, so a carried-over row still saves under its own date; and each board's
+realtime handler must accept payloads for the carried day as well as the
+active one, or rows go stale while they are on screen.
+`scripts/night-shift.test.mjs` pins it.
+
 ## Images / archival work
 
 Images currently live in Supabase Storage buckets including:
