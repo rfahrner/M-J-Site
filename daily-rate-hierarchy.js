@@ -130,7 +130,9 @@ function recalcStandardRow(row) {
   if (!row || row.rateManual) return;
   const locationKey = row.location || activeLocation;
   if (!locationKey || locationKey === "houston") return;
-  const breakdown = rates.calcLoadRateBreakdown(locationKey, row);
+  // Through the board's own priority logic, not the tier engine directly:
+  // see getEffectiveRateInfo() in loadboard.js.
+  const breakdown = lb.getEffectiveRateInfo(row);
   const numericRate = Number(breakdown.total) || 0;
   const next = numericRate ? String(Math.round(numericRate * 100) / 100) : "";
   if (row.rate !== next) {
@@ -374,7 +376,9 @@ function decorateLoadDetailsRatePanel() {
       explanation.textContent = RATE_PANEL_EXPLANATION;
     }
 
-    const breakdown = rates.calcLoadRateBreakdown(row.location || activeLocation, row);
+    // Same source as the board's own Rate column -- calling the tier engine
+    // directly here is what made the panel and the board fight.
+    const breakdown = lb.getEffectiveRateInfo(row);
     if (!row.rateManual) {
       const total = Number(breakdown.total) || 0;
       const next = total ? String(Math.round(total * 100) / 100) : "";

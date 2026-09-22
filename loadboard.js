@@ -2212,7 +2212,13 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // tier/flat engine. This is the one place that priority gets decided,
   // so recomputeRowRate() and the Rate panel's live breakdown can't
   // drift from each other.
-  function getEffectiveRateInfo(row) {
+  // Exported because it is the ONLY place the rate priority is decided, and
+  // several modules recompute row.rate after the board has drawn. Calling
+  // calcLoadRateBreakdown() directly instead skips the driver's-usual-rate
+  // branch below, so those modules disagreed with the board about any load
+  // whose driver has a flat rate -- each redraw wrote one number and the
+  // decorator wrote the other, which is what made a rate visibly flash.
+  export function getEffectiveRateInfo(row) {
     const locationKey = row.location || state.activeLocation || "atlanta";
     // A cancelled load carries no money at all -- not the tier rate, not a
     // driver's usual rate, and explicitly not TONU. This sits ahead of

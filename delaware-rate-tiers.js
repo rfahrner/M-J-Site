@@ -56,7 +56,8 @@ async function recalcAll() {
   if (!lb || !rates) return;
   for (const row of activeRows()) {
     if (row.rateManual) continue;
-    const breakdown = rates.calcLoadRateBreakdown('delaware', row);
+    // The board's priority logic, not the tier engine -- see loadboard.js.
+    const breakdown = lb.getEffectiveRateInfo(row);
     const numericRate = Number(breakdown.total) || 0;
     const next = numericRate ? String(Math.round(numericRate * 100) / 100) : '';
     row.rate = next;
