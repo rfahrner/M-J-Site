@@ -877,6 +877,10 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     return [...pool].sort((a, b) => compareForSort(a, b, key, dir));
   }
 
+  // Five routes is what the board has always been willing to show on one load
+  // (the realtime merge used to express the same limit as `idx > 4`).
+  const MAX_TRIPS_PER_LOAD = 5;
+
   function blankTrip() {
     return {
       id: uid("trip"), dbId: null, routeId: "", tripId: "", trailerOut: "", routeMiles: "", stopCount: "", dispatchTime: "", salvage: false, backhaul: false, minimized: false, complete: false, driverId: null, notes: "",
@@ -2865,10 +2869,41 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
       ? (parentRow.trips || []).find((t) => t.dbId != null && String(t.dbId) === String(dbTrip.id))
       : null;
     if (!localTrip) {
-      const idx = dbTrip.trip_number - 1;
-      if (idx < 0 || idx > 4) return;
-      while (parentRow.trips.length <= idx) parentRow.trips.push(blankTrip());
-      localTrip = parentRow.trips[idx];
+      // A route this tab has never seen -- someone else added it, or this tab
+      // lost track of one. Reaching for parentRow.trips[trip_number - 1] here
+      // was the same position/identity confusion the comment above describes,
+      // and this is the branch where it actually bites: it only runs when the
+      // numbers and the positions have already diverged.
+      //
+      // Padding the array with blankTrip()s to reach that index left the load
+      // carrying phantom routes that have no dbId. They render as an empty
+      // row under the real one, and saveTripNow() INSERTs anything without a
+      // dbId -- so the next save wrote a SECOND copy of a real route, taking
+      // whatever trip_number was free. Every duplicated route on this board
+      // has that signature: identical Trip ID, and a number lower than the
+      // original's because it filled a gap left by a delete.
+      //
+      // The payload describes the route completely, so adopt it as its own
+      // route rather than guessing which slot it belongs in.
+      if (dbTrip.id == null) return;
+      // Before adopting it as new: a route here that has LOST its id is the
+      // same route, and Trip ID identifies it -- it is unique within a shift,
+      // unlike route_id, which is free text and repeats ("FRGT" twice on one
+      // load). Reuniting it with its id is what stops the next save inserting
+      // a second copy; appending would leave the id-less one behind to do
+      // exactly that.
+      const tripIdText = String(dbTrip.trip_id || "").trim();
+      if (tripIdText) {
+        localTrip = (parentRow.trips || []).find(
+          (t) => t.dbId == null && String(t.tripId || "").trim() === tripIdText) || null;
+      }
+      if (localTrip) {
+        localTrip.dbId = dbTrip.id;
+      } else {
+        if ((parentRow.trips || []).length >= MAX_TRIPS_PER_LOAD) return;
+        localTrip = tripFromDbRow(dbTrip);
+        parentRow.trips.push(localTrip);
+      }
     }
 
     const domField = currentlyEditedField(parentRow.id, localTrip.id);
