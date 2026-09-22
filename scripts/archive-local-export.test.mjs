@@ -261,9 +261,17 @@ check('counters followed the new date', afterChange.loads, '1');
 // ---- 3. export writes records and images into the chosen folder ----
 console.log('\n3. export writes the tree, including images');
 await page.evaluate(() => document.querySelector('#archive-export').click());
+// Wait for the LAST thing the export writes, not the first. A load's manifest
+// appears well before the run is over, and waiting on it read the tree while
+// the day's summary was still being written -- the assertions below then
+// failed about one run in five.
 await page.waitForFunction(
-  () => /Archive complete|archive export|complete/i.test(document.querySelector('#archive-status').textContent)
-     || window.__tree().some((p) => p.includes('Archive Manifest.json')),
+  () => {
+    const tree = window.__tree();
+    if (!tree.some((p) => p.endsWith('Daily Summary.csv'))) return false;
+    const manifest = tree.find((p) => p.endsWith('Archive Manifest.json'));
+    return !!manifest && /"supabase_deleted"/.test(window.__fileText(manifest) || '');
+  },
   null, { timeout: 20000 });
 const out = await page.evaluate(() => ({
   tree: window.__tree(),

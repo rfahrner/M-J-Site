@@ -55,6 +55,13 @@ const dom = new JSDOM(`<!doctype html><body>
 </body>`, { url: 'https://example.test/' });
 const { window } = dom;
 global.window = window; global.document = window.document;
+// jsdom is not running scripts, so window.Function is Node's Function and the
+// module's globals resolve against Node's, not the window's. Without these the
+// module's MutationObserver lookup throws from inside an event handler, where
+// the failure is swallowed and only shows up as "the class did not get added".
+global.MutationObserver = window.MutationObserver;
+global.requestAnimationFrame = (fn) => setTimeout(fn, 0);
+global.setTimeout = setTimeout;
 window.CSS = { escape: (s) => s };
 
 // Run the real module. Its own bootstrap defers to DOMContentLoaded, which
@@ -143,14 +150,34 @@ console.log('\n7. leaving the table clears it');
 move('r3-route', null);
 check('nothing lit', lit(), '');
 
-console.log('\n8. the row selector distributes over every table, not just the last');
+console.log('\n8. the highlight survives a board redraw');
+// A redraw throws away the <tr> under the pointer, and no further mouseover
+// arrives until the pointer MOVES -- the row went dark and came back when the
+// dispatcher twitched the mouse, which reads as blinking.
+const tbody = window.document.querySelector('tbody');
+const REDRAWN = tbody.innerHTML;
+move(null, 'r3-route');
+check('row 3 lit before the redraw', lit(), 'r3');
+// jsdom has no layout, so elementFromPoint is stubbed to answer with the cell
+// standing in for "under the pointer" -- resolved lazily, because the whole
+// point is that the element it returns is a NEW one after the rebuild.
+window.document.elementFromPoint = () => window.document.getElementById('r3-route');
+// What a redraw really does: every row is thrown away and rebuilt, so the
+// class is gone and the row the pointer is over is a different element.
+tbody.innerHTML = REDRAWN;
+check('the rebuilt rows start with no highlight at all', lit(), '');
+await new Promise((r) => setTimeout(r, 5));
+check('and it is put back without the pointer moving', lit(), 'r3');
+delete window.document.elementFromPoint;
+
+console.log('\n9. the row selector distributes over every table, not just the last');
 const cell = $('r1-route');
 check('closest() finds a <tr>, not the <table>', cell.closest(ROW_SELECTOR)?.tagName, 'TR');
 for (const table of ['table.board', 'table.driverlist', 'table.available-table']) {
   check(`${table} gets its own ' tbody tr'`, ROW_SELECTOR.includes(`${table} tbody tr`), true);
 }
 
-console.log('\n9. board hover is not driven by native :hover any more');
+console.log('\n10. board hover is not driven by native :hover any more');
 // Native :hover cannot express "this load"; it follows the DOM row, which is
 // precisely what walks the highlight onto route 1 inside the pinned columns.
 const CSS_SRC = readFileSync(new URL('../loadboard.css', import.meta.url), 'utf8');
@@ -167,6 +194,26 @@ for (const rule of [
 }
 // The other two tables have no rowspanned cells and keep the cheap native rule.
 check('driverlist keeps native :hover', CSS_SRC.includes('table.driverlist tbody tr:hover > td'), true);
+
+console.log('\n11. every page busts the stylesheet cache on the same token');
+// The hover rules moved from :hover to a class in the stylesheet while the
+// class itself is applied by script. A browser holding the OLD stylesheet
+// against the NEW script gets no board hover from either, so this rewrite is
+// only safe if the stylesheet URL changed with it. index.html already had a
+// ?v= token and the rest had none at all.
+const { readdirSync } = await import('node:fs');
+const pages = readdirSync(new URL('../', import.meta.url))
+  .filter((name) => name.endsWith('.html'))
+  .map((name) => [name, readFileSync(new URL(`../${name}`, import.meta.url), 'utf8')])
+  .filter(([, html]) => html.includes('loadboard.css'));
+check('found the pages that load the stylesheet', pages.length > 5, true);
+const tokens = new Set();
+for (const [name, html] of pages) {
+  const m = /loadboard\.css\?v=([^"']+)/.exec(html);
+  check(`${name} carries a version token`, !!m, true);
+  if (m) tokens.add(m[1]);
+}
+check('and they all carry the same one', tokens.size, 1);
 
 console.log(failures ? `\n  ${failures} check(s) FAILED\n` : '\n  All checks passed.\n');
 process.exit(failures ? 1 : 0);
