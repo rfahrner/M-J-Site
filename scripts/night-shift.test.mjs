@@ -71,3 +71,19 @@ test('saving an overnight row keeps its original calendar date', () => {
   assert.equal(payload.shift_date, '2026-09-23');
   assert.equal(payload.notes, 'Updated overnight');
 });
+
+test('toggling Night Shift never enables a body theme, including with cached CSS', () => {
+  let active = true;
+  const removed = [], pressed = [];
+  const state = { activeLocation: 'atlanta', activeDate: '2026-09-22', minDate: '2026-01-01', maxDate: '2027-01-01' };
+  const chrome = vm.runInNewContext(`(${board.match(/function renderBoardChrome\(\) \{[\s\S]*?\n  \}/)[0]})`, {
+    state, LOCATIONS: [{ key: 'atlanta', title: 'Atlanta' }], nextShiftDate, shortShiftDate,
+    keyToDate: value => value, dateKey: value => value, todayDate: () => state.activeDate, humanDate: value => value,
+    nightShiftActive: () => active,
+    document: { body: { classList: { remove: value => removed.push(value), toggle() { throw new Error('Must not enable a theme'); } } } },
+    $: () => ({ setAttribute: (name, value) => pressed.push([name, value]) }),
+  });
+  chrome(); active = false; chrome();
+  assert.deepEqual(removed, ['night-shift-active', 'night-shift-active']);
+  assert.deepEqual(pressed, [['aria-pressed','true'], ['aria-pressed','false']]);
+});

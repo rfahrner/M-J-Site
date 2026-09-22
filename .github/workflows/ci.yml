@@ -64,6 +64,9 @@ jobs:
       - name: Test Atlanta Night Shift
         run: node --test scripts/night-shift.test.mjs
 
+      - name: Test archive documents and Outlook fallback
+        run: node --test scripts/archive-documents.test.mjs scripts/text-outlook-fallback.test.mjs
+
       - name: Verify driver PWA is published by the build
         run: |
           test -f dist/driver/index.html

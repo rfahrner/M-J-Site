@@ -2468,7 +2468,9 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     const d = keyToDate(state.activeDate);
     const isToday = state.activeDate === dateKey(todayDate());
     $("#sheet-subtext").textContent = humanDate(d) + (isToday ? " · today" : "") + (nightShiftActive() ? ` · Night Shift through ${shortShiftDate(nextShiftDate(state.activeDate))} 06:00` : "");
-    document.body.classList.toggle("night-shift-active", nightShiftActive());
+    // Night Shift changes the date window, never the board theme (including
+    // when an older stylesheet is still cached in the browser).
+    document.body.classList.remove("night-shift-active");
     $("#btn-night-shift")?.setAttribute("aria-pressed", String(nightShiftActive()));
     $("#date-input").value = state.activeDate;
     $("#date-input").min = state.minDate;
@@ -4098,19 +4100,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
   // migrated to new Outlook while the account still only exists in classic
   // Outlook, the draft opens in an app that cannot send it, and a web page has
   // no way to pick between the two. Nothing here can fix that; what it can do
-  // is offer the same draft in a form that does not depend on the default app
-  // at all, which is copy and paste.
-  //
-  // The mailto keeps comma-separated addresses -- that is what the mailto spec
-  // requires, and it is working for everyone whose default app is correct. The
-  // CLIPBOARD copy uses semicolons instead, because that text is pasted into
-  // Outlook's own To: field, where the semicolon is the native separator in
-  // both Outlooks (classic only accepts commas if "Commas can be used to
-  // separate multiple recipients" has been switched on, and it is off by
-  // default).
-  const TEXT_DRAFT_HINT =
-    "Open in Outlook uses whichever mail app Windows treats as the default, which is not always the one your mail is in. If no draft appears, or it opens somewhere you are not signed in, use Outlook Web — or copy the addresses and message and paste them into the Outlook you actually use.";
-
+  // is offer the same draft through Outlook Web as an alternative.
   function openMailDraft(addresses, message) {
     const a = document.createElement("a");
     a.href = `mailto:${addresses.join(",")}?body=${encodeURIComponent(message)}`;
@@ -4122,7 +4112,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     a.remove();
   }
 
-  // A third route that does not touch Windows at all. The mailto above depends
+  // An alternative that does not touch Windows at all. The mailto above depends
   // on which app Windows has registered as the default mail client, and that
   // has now failed two different ways on two different machines -- once
   // opening an Outlook the mailbox was not signed into, once producing no
@@ -4137,79 +4127,28 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     window.open(url, "_blank", "noopener");
   }
 
-  async function copyToClipboard(text) {
-    try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(text);
-        return true;
-      }
-    } catch (e) {
-      console.error("Clipboard write failed, trying the older path:", e);
-    }
-    try {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.setAttribute("readonly", "");
-      ta.style.position = "fixed";
-      ta.style.top = "-1000px";
-      document.body.appendChild(ta);
-      ta.select();
-      const ok = document.execCommand("copy");
-      ta.remove();
-      return ok;
-    } catch (e) {
-      console.error("Clipboard fallback failed:", e);
-      return false;
-    }
+  function textDraftControlsHtml(idPrefix) {
+    return `<button type="button" class="btn btn-ghost" id="${idPrefix}-open-web">Open in Outlook Web</button>
+      <button type="button" class="btn btn-ghost" id="${idPrefix}-open">Open in Outlook</button>`;
   }
 
-  // idPrefix keeps the two callers' buttons apart; withDone adds an explicit
-  // "mark as sent" for the single-recipient modal, which otherwise has no way
-  // to finish once the dispatcher has taken the message into Outlook by hand.
-  // The group flow already has its own "Sent - Next Batch" step.
-  function textDraftControlsHtml(idPrefix, { withDone = false } = {}) {
-    return `<div style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px; align-items:center;">
-      <button type="button" class="btn btn-ghost" id="${idPrefix}-open">Open in Outlook</button>
-      <button type="button" class="btn btn-ghost" id="${idPrefix}-open-web">Open in Outlook Web</button>
-      <button type="button" class="btn btn-ghost" id="${idPrefix}-copy-addrs">Copy Addresses</button>
-      <button type="button" class="btn btn-ghost" id="${idPrefix}-copy-msg">Copy Message</button>
-      ${withDone ? `<button type="button" class="btn btn-ghost" id="${idPrefix}-done">Done \u2014 mark as sent</button>` : ""}
-      <span class="subtext" id="${idPrefix}-copied"></span>
-    </div>
-    <div class="subtext" style="margin-top:4px;">${escapeHtml(TEXT_DRAFT_HINT)}</div>`;
+  function wireTextDraftControls(idPrefix, addresses, message, { onOpened } = {}) {
+    const open = (web) => {
+      const draftMessage = typeof message === "function" ? message() : message;
+      if (!draftMessage.trim()) return;
+      if (web) openOutlookWebDraft(addresses, draftMessage);
+      else openMailDraft(addresses, draftMessage);
+      if (typeof onOpened === "function") onOpened();
+    };
+    $(`#${idPrefix}-open-web`)?.addEventListener("click", () => open(true));
+    $(`#${idPrefix}-open`)?.addEventListener("click", () => open(false));
   }
 
-  function wireTextDraftControls(idPrefix, addresses, message, { onOpened, onDone } = {}) {
-    const say = (text) => {
-      const el = $(`#${idPrefix}-copied`);
-      if (el) el.textContent = text;
-    };
-    const on = (id, handler) => {
-      const el = $(`#${idPrefix}-${id}`);
-      if (el) el.addEventListener("click", handler);
-    };
-    on("open", () => {
-      openMailDraft(addresses, message);
-      if (typeof onOpened === "function") onOpened();
-    });
-    on("open-web", () => {
-      openOutlookWebDraft(addresses, message);
-      if (typeof onOpened === "function") onOpened();
-    });
-    on("copy-addrs", async () => {
-      // Semicolons: see TEXT_DRAFT_HINT above.
-      say(await copyToClipboard(addresses.join("; "))
-        ? `${addresses.length} address${addresses.length === 1 ? "" : "es"} copied \u2014 paste into To:`
-        : "Couldn't copy \u2014 select the addresses manually.");
-    });
-    on("copy-msg", async () => {
-      say(await copyToClipboard(message)
-        ? "Message copied \u2014 paste into the email body."
-        : "Couldn't copy \u2014 select the message manually.");
-    });
-    on("done", () => {
-      if (typeof onDone === "function") onDone();
-    });
+  function resetSendTextActions() {
+    $("#send-text-draft-open-web")?.remove();
+    $("#send-text-draft-open")?.remove();
+    const send = $("#send-text-submit");
+    if (send) { send.classList.remove("hidden"); send.disabled = false; }
   }
 
   // DNU is a hard recipient block, not just a Driver List filter. Keep the
@@ -4345,6 +4284,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
     $("#send-text-status").textContent = filtered.blocked.length
       ? `${filtered.blocked.length} DNU recipient${filtered.blocked.length === 1 ? " was" : "s were"} removed.`
       : "";
+    resetSendTextActions();
     updateSendTextCounter();
     $("#modal-send-text").classList.remove("hidden");
     $("#send-text-message").focus();
@@ -4396,6 +4336,7 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
 
   async function submitSendTextModal() {
     if (!sendTextModalState) return;
+    const requestState = sendTextModalState;
     const message = $("#send-text-message").value.trim();
     if (!message) { $("#send-text-status").textContent = "Type a message first."; return; }
     const filtered = filterNeverTextRecipients(sendTextModalState.recipients, { allowDnu: sendTextModalState.allowDnu });
@@ -4414,12 +4355,14 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         body: JSON.stringify({ phones: sendTextModalState.recipients.map((r) => r.phone), message }),
       });
       const result = await res.json();
+      if (sendTextModalState !== requestState) return;
       if (!res.ok) throw new Error(result.error || `Send failed (${res.status})`);
       if (sendTextModalState.markShiftIdsOnSent) await markPreShiftTextSent(sendTextModalState.markShiftIdsOnSent);
       finishSendTextModalAsSent();
       setDriverSyncStatus("Text sent.", "success");
     } catch (e) {
       console.error("send-text failed, falling back to email client:", e);
+      if (sendTextModalState !== requestState) return;
       const filteredFallback = filterNeverTextRecipients(sendTextModalState.recipients, { allowDnu: sendTextModalState.allowDnu });
       sendTextModalState.recipients = filteredFallback.allowed;
       if (!sendTextModalState.recipients.length) {
@@ -4427,18 +4370,16 @@ import { loadBoardRateData, getBoardRateTiers, getBoardRateSettings, calcLoadRat
         return;
       }
       const addresses = sendTextModalState.recipients.map((r) => formatTextAddress(r.phone)).filter(Boolean);
-      $("#send-text-status").innerHTML =
-        `Couldn't send automatically (${escapeHtml(String(e.message || e))}). Send it by hand:`
-        + textDraftControlsHtml("send-text-draft", { withDone: true });
-      // Taking the message into Outlook counts as "sent" for tracking: the
-      // dispatcher still has to press send over there, and there is no way to
-      // observe that from here. Opening the draft marks it, and so does Done,
-      // which is how someone who copied and pasted instead closes this out.
+      $("#send-text-status").textContent = `Couldn't send automatically (${String(e.message || e)}). Choose Outlook below to finish sending.`;
+      resetSendTextActions();
+      sendBtn.classList.add("hidden");
+      // The existing Cancel button stays first in the footer.
+      sendBtn.insertAdjacentHTML("beforebegin", textDraftControlsHtml("send-text-draft"));
       const markSent = async () => {
         if (sendTextModalState.markShiftIdsOnSent) await markPreShiftTextSent(sendTextModalState.markShiftIdsOnSent);
         finishSendTextModalAsSent();
       };
-      wireTextDraftControls("send-text-draft", addresses, message, { onOpened: markSent, onDone: markSent });
+      wireTextDraftControls("send-text-draft", addresses, () => $("#send-text-message").value.trim(), { onOpened: markSent });
     } finally {
       sendBtn.disabled = false;
     }
