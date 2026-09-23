@@ -625,8 +625,7 @@ import './paperwork-load-integration.js';
         { label: "Location Analytics", href: "location-analytics.html", visible: () => isAdminUser() },
       ],
     },
-    // Archive belongs to the shared navigation, after Analytics. The reminder
-    // only displays its due banner and never inserts another navigation link.
+    // Archive is rendered once by shared navigation and aligned beside Log Out.
     { label: "Archive", href: "archive.html", visible: () => isAdminUser() },
   ];
 
@@ -735,8 +734,8 @@ import './paperwork-load-integration.js';
         return `<a class="tab-btn${isActiveParent ? " active" : ""}" href="${escapeHtml(first.href)}" data-nav-dropdown-idx="${idx}">${escapeHtml(item.label)}</a>`;
       }
 
-      return `<a class="tab-btn${item.href === cur ? " active" : ""}" href="${escapeHtml(item.href)}">${escapeHtml(item.label)}</a>`;
-    }).join("") + `<button type="button" class="tab-btn" id="nav-logout" style="margin-left:auto;">Log Out</button>`;
+      return `<a class="tab-btn${item.href === cur ? " active" : ""}" href="${escapeHtml(item.href)}"${item.href === "archive.html" ? ' style="margin-left:auto;"' : ""}>${escapeHtml(item.label)}</a>`;
+    }).join("") + `<button type="button" class="tab-btn" id="nav-logout" style="margin-left:${isAdminUser() ? "0" : "auto"};">Log Out</button>`;
 
     tabsEl.querySelectorAll("[data-nav-dropdown-idx]").forEach((el) => {
       const item = NAV_STRUCTURE[Number(el.dataset.navDropdownIdx)];
