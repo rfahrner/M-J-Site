@@ -1798,6 +1798,10 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     const row = found.row;
     const trip = row.trips.find((t) => t.id === tripId);
     if (!trip) return;
+    // The placeholder openTripsFor() creates cannot be collapsed: the load has
+    // no other open route, so the very next render would put it straight back.
+    // That round trip is what made loads change height on every redraw.
+    if (trip.autoRoutePlaceholder && isBlankRoute(trip)) return;
     // Collapsing an empty slot means the dispatcher is done with it. Keeping it
     // is what left loads carrying identity-less routes, so it goes -- here and
     // in the database -- rather than being saved as a route. No confirmation:
@@ -2364,13 +2368,27 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   
   /* ---------------- rendering: board ---------------- */
 
+  // Which routes of a load get an editable row. Called from the render path,
+  // so it must settle on the same answer every time it runs for an unchanged
+  // load -- rendering is not allowed to keep changing how tall a load is.
+  //
+  // It used to push a NEW blank route every time it found them all minimized,
+  // and minimizeTrip() discards a blank route, whose render then found them
+  // all minimized again. Add a row, drop a row, add a row: the load's height
+  // changed on every redraw, and redraws come from every debounced save and
+  // every realtime echo. Loads further down the board slid up and back down
+  // while the dispatcher was typing -- which reads as the board re-sorting
+  // itself, though the order never actually changed.
+  //
+  // So: reuse the placeholder this load already has. One per load, ever.
   function openTripsFor(row) {
     const open = row.trips.filter((t) => !t.minimized);
     if (open.length) return open;
     // Every trip is minimized/collapsed — rather than showing nothing
-    // (which would leave no way to add another route), start a genuinely
-    // new blank one. This is a real, not-minimized trip, unlike the old
-    // behavior that just displayed a completed trip as if it were open.
+    // (which would leave no way to add another route), give the load a blank
+    // one to type into.
+    const existing = row.trips.find((t) => t.autoRoutePlaceholder);
+    if (existing) { existing.minimized = false; return [existing]; }
     const fresh = blankTrip();
     fresh.autoRoutePlaceholder = true;
     row.trips.push(fresh);
