@@ -183,7 +183,9 @@ function buildSelectedRanges(mode, years, subUnits) {
 
 async function fetchRangeData(startDate, endDate, location) {
   const shifts = await fetchAllRows(
-    SHIFTS_TABLE, 'id, shift_date, driver_id, tonu',
+    // driver_name_text, load_cancelled and called_off are all needed to count
+    // drivers the way the business does -- see countDrivers().
+    SHIFTS_TABLE, 'id, shift_date, driver_id, driver_name_text, tonu, load_cancelled, called_off',
     (q) => q.eq('location', location).gte('shift_date', startDate).lte('shift_date', endDate)
   );
   const shiftIds = shifts.map((s) => s.id);
@@ -206,9 +208,40 @@ async function fetchRangeData(startDate, endDate, location) {
 // Computes every metric from whatever subset of rows it's given — reused
 // for a single day, a week, a quarter, or the overall aggregate, just
 // called with different scopes.
+/*
+ * How many drivers a period had, which is the denominator under REV/DRIVER,
+ * MARGIN/DRIVER and TURN. Three rules, none of them obvious from the column:
+ *
+ *   - A driver who was there counts whether or not the load made money. TONU
+ *     counts. Turning up and not running counts.
+ *   - A load we cancelled, or that the driver called off, does NOT count. The
+ *     board already treats those two the same way and CLAUDE.md says both mean
+ *     the load is no longer running.
+ *   - A driver typed by name rather than picked from the list is still a
+ *     driver. Counting only driver_id dropped five real drivers out of one
+ *     Atlanta week ("Rodney Reid- Reids Trans - c" and the like, none of which
+ *     match a driver profile), which quietly inflated revenue per driver.
+ *
+ * A shift with no driver_id AND no name is an empty board row, not a driver --
+ * there were 19 of those in that same week. Those stay out.
+ *
+ * Keys are kept in one space so the same person cannot be counted twice: a
+ * driver_id when there is one, otherwise the normalised name.
+ */
+function countDrivers(shiftsInScope) {
+  const keys = new Set();
+  for (const s of shiftsInScope) {
+    if (s.load_cancelled || s.called_off) continue;
+    if (s.driver_id != null) { keys.add(`id:${s.driver_id}`); continue; }
+    const name = String(s.driver_name_text || '').trim().replace(/\s+/g, ' ').toLowerCase();
+    if (name) keys.add(`name:${name}`);
+  }
+  return keys.size;
+}
+
 function computeMetricsFromRows(shiftsInScope, tripsInScope, accountingInScope) {
   const realTrips = tripsInScope.filter((t) => (t.route_id && String(t.route_id).trim()) || (t.trip_id && String(t.trip_id).trim()));
-  const distinctDrivers = new Set(shiftsInScope.filter((s) => s.driver_id != null).map((s) => s.driver_id)).size;
+  const distinctDrivers = countDrivers(shiftsInScope);
   const mileage = realTrips.reduce((sum, t) => sum + (Number(t.route_miles) || 0), 0);
   const routes = realTrips.length;
   const stops = realTrips.reduce((sum, t) => sum + (Number(t.stop_count) || 0), 0);
