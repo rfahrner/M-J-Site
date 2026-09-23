@@ -142,7 +142,16 @@ import './paperwork-load-integration.js';
     const preShiftTextNeeded = []; // collected across all shifts, then grouped by shift time below
     const preShiftEscalations = []; // stage 3, grouped the same way -- see below
     for (const s of shifts) {
-      if (s.shift_complete) continue; // finished loads don't need attention
+      // Nothing here is worth chasing on a load that is not going to run.
+      // Every rule below prompts an action on a live shift -- text the driver,
+      // call for an ETA, ask where the paperwork is, chase an overdue return.
+      // A TONU means the truck was ordered and not used: the driver is owed
+      // their money and there is no route to track. Called off and cancelled
+      // are the same case from the other direction. Complete means it already
+      // ran. In all four, the alert has nobody to prompt and nothing to ask
+      // for -- and six of today's seven Atlanta loads are TONU, which is the
+      // entire alert panel shouting about loads that are settled.
+      if (s.shift_complete || s.tonu || s.called_off || s.load_cancelled) continue;
       const rowTrips = (tripsByShift[s.id] || []).sort((a, b) => a.trip_number - b.trip_number);
       const hasRealTrip = rowTrips.some((t) => (t.route_id || "").trim() || (t.trip_id || "").trim());
       const label = s.pro_number || s.driver_name_text || `Load on ${s.location}`;
