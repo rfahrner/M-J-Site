@@ -34,6 +34,50 @@ async function saveAccountingCheckbox(rec, patch, label) {
     renderAccountingTable();
   }
 }
+/*
+ * Money cells on the Accounting sheet, and why they go through here.
+ *
+ * These three used to save with
+ *   supabaseClient.from(...).update({...}).eq("id", rec.id).catch(...)
+ *
+ * A PostgREST query builder is a thenable, NOT a Promise: it has `then` and no
+ * `catch`. So that line threw "catch is not a function" inside a bare
+ * setTimeout -- and because nothing ever awaited the builder, the request was
+ * never sent at all. The value sat on screen looking saved, the database never
+ * heard about it, and the next page load showed the old number. Nothing
+ * surfaced, because the throw had no handler.
+ *
+ * scripts/accounting-save.test.mjs already asserted `.catch` is undefined on a
+ * real builder; that is exactly why saveAccountingFields() exists. These three
+ * cells simply never got moved onto it. saveAccountingFields also re-reads the
+ * row and compares, so a write blocked by row permissions is reported instead
+ * of being assumed.
+ */
+const ACCOUNTING_MONEY_FIELDS = {
+  "acct-carrier-pay": { column: "total_carrier_pay", label: "carrier pay" },
+  "acct-customer-rate": { column: "total_revenue", label: "customer rate" },
+};
+
+// Number("1,250.00") is NaN and JSON.stringify turns NaN into null, which
+// SUCCEEDS while blanking a real figure -- the same trap numOrNull() exists for
+// on the board. undefined means "not a number yet", not "clear the column".
+function numOrUndefined(raw) {
+  const cleaned = String(raw).replace(/[$,\s]/g, "");
+  if (cleaned === "") return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+async function saveAccountingMoneyField(rec, field, value) {
+  try {
+    const saved = await saveAccountingFields(supabaseClient, rec.id, { [field.column]: value });
+    const current = getAccountingRecordById(rec.id);
+    if (current) current[field.column] = saved[field.column];
+  } catch (err) {
+    setDriverSyncStatus(`Couldn't save ${field.label} (${err.message || err}).`, "error");
+  }
+}
+
 let accountingRecords = [];
   let accountingDriverSort = 0;
   function compareAccountingDriverNames(a, b) {
@@ -589,34 +633,24 @@ export function renderDriverStatsTable() {
           const rec = accountingRecords.find((r) => r.id == t.dataset.id);
           if (!rec) return;
           rec.day_type = t.value;
-          supabaseClient.from(ACCOUNTING_TABLE).update({ day_type: t.value }).eq("id", rec.id)
-            .catch((err) => setDriverSyncStatus(`Couldn't save day type (${err.message || err}).`, "error"));
+          void saveAccountingMoneyField(rec, { column: "day_type", label: "day type" }, t.value);
         }
       });
       table.addEventListener("input", (e) => {
         const t = e.target;
-        if (t.dataset.action === "acct-carrier-pay") {
-          const rec = accountingRecords.find((r) => r.id == t.dataset.id);
-          if (!rec) return;
-          const val = t.value === "" ? null : Number(t.value);
-          rec.total_carrier_pay = val;
-          clearTimeout(t._saveTimer);
-          t._saveTimer = setTimeout(() => {
-            supabaseClient.from(ACCOUNTING_TABLE).update({ total_carrier_pay: val }).eq("id", rec.id)
-              .catch((err) => setDriverSyncStatus(`Couldn't save carrier pay (${err.message || err}).`, "error"));
-          }, SAVE_DEBOUNCE_MS);
-        }
-        if (t.dataset.action === "acct-customer-rate") {
-          const rec = accountingRecords.find((r) => r.id == t.dataset.id);
-          if (!rec) return;
-          const val = t.value === "" ? null : Number(t.value);
-          rec.total_revenue = val;
-          clearTimeout(t._saveTimer);
-          t._saveTimer = setTimeout(() => {
-            supabaseClient.from(ACCOUNTING_TABLE).update({ total_revenue: val }).eq("id", rec.id)
-              .catch((err) => setDriverSyncStatus(`Couldn't save customer rate (${err.message || err}).`, "error"));
-          }, SAVE_DEBOUNCE_MS);
-        }
+        const field = ACCOUNTING_MONEY_FIELDS[t.dataset.action];
+        if (!field) return;
+        const rec = accountingRecords.find((r) => r.id == t.dataset.id);
+        if (!rec) return;
+        const raw = String(t.value).trim();
+        const val = raw === "" ? null : numOrUndefined(raw);
+        // Halfway through typing "1,2" there is no number yet. Writing NaN
+        // would blank the column; leaving the old value alone until the field
+        // parses is the same rule the board's cells follow.
+        if (val === undefined) return;
+        rec[field.column] = val;
+        clearTimeout(t._saveTimer);
+        t._saveTimer = setTimeout(() => void saveAccountingMoneyField(rec, field, val), SAVE_DEBOUNCE_MS);
       });
         table.addEventListener("focusout", (e) => {
         const t = e.target;
@@ -710,6 +744,21 @@ export function renderDriverStatsTable() {
         const { data: shiftRows } = await supabaseClient.from(SHIFTS_TABLE).select("shift_complete").eq("id", payload.new.source_shift_id);
         if (shiftRows && shiftRows[0]) acctShiftCompleteById[payload.new.source_shift_id] = !!shiftRows[0].shift_complete;
       }
+      renderAccountingTable();
+    });
+    // Route rows change without the parent accounting row changing: editing a
+    // route's miles or stops on the board fires trg_sync_accounting_after_trip_change,
+    // which rewrites loads_accounting_routes only. Without this the Routes
+    // column, the per-route miles/stops breakdown and anything recalculated
+    // from them kept showing the figures fetched when the page loaded.
+    channel.on("postgres_changes", { event: "*", schema: "public", table: ACCOUNTING_ROUTES_TABLE }, async (payload) => {
+      const accountingId = payload.new?.accounting_id ?? payload.old?.accounting_id;
+      if (accountingId == null) return;
+      // Re-read the whole set for that load rather than patching one row: a
+      // delete has to remove it, and route_number ordering has to hold.
+      const { data: routes } = await supabaseClient.from(ACCOUNTING_ROUTES_TABLE).select("*").eq("accounting_id", accountingId);
+      if (routes) acctRoutesByAccountingId[accountingId] = routes.sort((a, b) => (a.route_number || 0) - (b.route_number || 0));
+      else delete acctRoutesByAccountingId[accountingId];
       renderAccountingTable();
     });
     channel.subscribe();
