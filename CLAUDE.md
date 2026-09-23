@@ -329,6 +329,30 @@ It is imported through `loadboard-toolbar-controls.js` and must not import
 `loadboard.js` -- that chain runs while `loadboard.js` is still evaluating.
 `scripts/stale-tab-writes.test.mjs` pins it.
 
+### Idle tabs
+
+`idle-session.js` is the other half of the same problem: a board left up with
+nobody at it. Two stages, because "away twenty minutes" and "gone home" want
+different answers.
+
+- **30 minutes idle** -- pause. Automatic writes stop (the same
+  `setAutomaticWritesBlocked` switch), `removeAllChannels()` drops every
+  realtime subscription on whatever page this is, and a panel dims the board
+  while leaving it readable. Resuming **reloads**: a paused tab missed
+  everything, and five renderers each cache their own days, so a reload is the
+  only reconciliation that is certainly right. While paused, stray events do
+  not un-pause -- the panel is the only way back, or a disconnected tab could
+  quietly start writing again.
+- **12 hours idle** -- sign out and go to `login.html`, so a dispatch board is
+  not left authenticated on a shared machine overnight.
+
+It reaches `loadboard.js` by **dynamic** import, because it loads through the
+toolbar chain while `loadboard.js` is still evaluating.
+`scripts/idle-session.test.mjs` pins it.
+
+This does not address rate flicker and was not built to: both tabs in that
+incident were in active use and neither would ever have gone idle.
+
 Separately, `rate-write-limiter.js` stops this client rewriting one load's
 calculated rate after a dozen times in a minute, because two clients that
 disagree write at each other forever and neither can win. A rate the

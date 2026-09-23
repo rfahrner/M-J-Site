@@ -13,6 +13,7 @@ import './load-details-image-draft-guard.js';
 import './load-overview-timesheet-image-click-fix.js';
 import './route-completion-integrity.js';
 import './site-version-watch.js';
+import './idle-session.js';
 
 const BOARD_LOCATION_BY_FILE = {
   "": "atlanta",
