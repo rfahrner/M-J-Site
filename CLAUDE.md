@@ -381,6 +381,43 @@ dispatcher types clears the count. Keep it a leaf module -- it is imported by
 `loadboard.js` and by the decorators that load after it.
 `scripts/rate-not-ready.test.mjs` pins all of this.
 
+## A PostgREST builder has `then`, not `catch`
+
+`supabaseClient.from(...).update({...}).eq("id", id).catch(...)` does not save
+anything. The builder is a thenable with no `catch`, so that line throws
+"catch is not a function" -- and because nothing ever awaits the builder, the
+request is never sent. In a bare `setTimeout` the throw has no handler, so the
+value sits on screen looking saved while the database never hears about it.
+
+That is exactly how manually typed Accounting rates were being lost:
+`total_carrier_pay`, `total_revenue` and `day_type` all saved that way. Every
+edit on that page now goes through `saveAccountingFields()`, which awaits,
+re-reads the row and compares, so a write blocked by row permissions is
+reported rather than assumed. `scripts/accounting-manual-rates.test.mjs` fails
+if a builder is handed a `.catch` again, and its check strips comments first --
+the note explaining the bug quotes the line it warns about.
+
+Free-text money cells go through `numOrUndefined()` for the same reason
+`numOrNull()` exists on the board: `Number("1,250.00")` is NaN, `JSON.stringify`
+turns NaN into null, and the request then SUCCEEDS while blanking a real figure.
+
+## loads_accounting realtime
+
+`setupAccountingRealtimeSync()` has subscribed to `loads_accounting` since the
+page was written, but the table was not in the `supabase_realtime` publication,
+so that handler had never fired. The database half already worked --
+`trg_sync_accounting_carrier_from_shift_v2` copies `carrier_rate` onto the
+accounting row whenever it changes -- but nothing told the open page, so a rate
+changed in Load Details did not appear on the sheet until a reload. Both
+`loads_accounting` and `loads_accounting_routes` are published now (migration
+`publish_loads_accounting_to_realtime`), and the page subscribes to the route
+rows as well, since editing a route's miles or stops rewrites only those.
+
+**Still open:** that trigger overwrites `total_carrier_pay` and `total_cost`
+unconditionally, so a rate typed on the Accounting sheet is clobbered the next
+time the board recalculates that shift's `carrier_rate`. Deciding which one
+wins is a billing decision and has not been made.
+
 ## Accounting revenue levels
 
 Customer billing comes from `pricing_tiers`: `revenue_1` is Kroger Core
