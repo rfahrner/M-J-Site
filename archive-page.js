@@ -1,10 +1,12 @@
 import { ARCHIVE_FORMAT_VERSION, exportRouteDocuments, archivedDocumentsPresent } from './archive-documents.js';
+import { beginLongTask, endLongTask } from './long-task-guard.js';
 
 const SUPABASE_URL = "https://ygsapysqzwrpcimgvaqx.supabase.co";
 const SUPABASE_KEY = "sb_publishable_8b8bSIiYm5TzLTw0WG1pAw_5ZWW5ZPL";
 const ROUTE_IMAGE_BUCKET = "mondelez-routes";
 const TRIP_SHEET_BUCKET = "trip-sheets";
 const PAGE_SIZE = 1000;
+const ID_CHUNK_SIZE = 150;
 
 const KROGER_LOCATION_LABELS = {
   atlanta: "Atlanta",
@@ -105,13 +107,57 @@ async function fetchAll(table, select = "*", apply = null) {
 async function fetchByIds(table, column, ids, select = "*") {
   if (!ids.length) return [];
   const out = [];
-  for (let i = 0; i < ids.length; i += 150) {
-    const { data, error } = await client.from(table).select(select).in(column, ids.slice(i, i + 150));
-    if (error) throw new Error(`${table}: ${error.message}`);
-    out.push(...(data || []));
+  const unique = [...new Set(ids)];
+  for (let i = 0; i < unique.length; i += ID_CHUNK_SIZE) {
+    const slice = unique.slice(i, i + ID_CHUNK_SIZE);
+    // Page inside the chunk. PostgREST caps a response at PAGE_SIZE rows and
+    // says nothing about it, so a chunk of ids whose children happen to exceed
+    // that would come back silently short -- an archive missing routes, with
+    // every count in the manifest agreeing with the truncated list.
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data, error } = await client.from(table).select(select)
+        .in(column, slice).range(from, from + PAGE_SIZE - 1);
+      if (error) throw new Error(`${table}: ${error.message}`);
+      out.push(...(data || []));
+      if (!data || data.length < PAGE_SIZE) break;
+    }
   }
   return out;
 }
+
+function indexBy(rows, column) {
+  const map = new Map();
+  for (const row of rows) {
+    const key = Number(row[column]);
+    if (!Number.isFinite(key)) continue;
+    const bucket = map.get(key);
+    if (bucket) bucket.push(row); else map.set(key, [row]);
+  }
+  return map;
+}
+
+// Matches what the per-load queries used to ask Postgres for: ascending, nulls
+// last, ties broken by id so the same rows always land in the same order.
+function sortedBy(rows, column) {
+  return rows.sort((a, b) => {
+    const av = a[column];
+    const bv = b[column];
+    if (av == null && bv == null) return Number(a.id) - Number(b.id);
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === "number" && typeof bv === "number") return (av - bv) || (Number(a.id) - Number(b.id));
+    return String(av).localeCompare(String(bv)) || Number(a.id) - Number(b.id);
+  });
+}
+
+function group(rows, column, orderBy) {
+  const map = indexBy(rows, column);
+  for (const bucket of map.values()) sortedBy(bucket, orderBy);
+  return map;
+}
+
+const EMPTY = [];
+const take = (map, id) => map.get(Number(id)) || EMPTY;
 
 async function getCurrentRole() {
   const { data: sessionData, error: sessionError } = await client.auth.getSession();
@@ -230,16 +276,40 @@ async function refreshCounts(cutoff) {
   return counts;
 }
 
-// The full record set, fetched only when an export actually starts.
-async function loadFullRecords(cutoff) {
+// Everything the export writes, fetched once, before the first file.
+//
+// This used to be a thin preview, and each load then went back to the database
+// for its own routes, stops, notes, history, attachments, accounting and
+// accounting routes -- six round trips per Kroger load, two per Houston load.
+// Across ~14,700 eligible loads that is roughly 90,000 sequential requests, or
+// about two hours of pure network latency before the disk is touched, which is
+// why a run had to be left unattended long enough to be killed by something
+// else. The whole of it is 38 MB: fetched in bulk it is a few hundred paged
+// requests and about a minute, and every load is then assembled in memory.
+//
+// The files written are byte-for-byte what the per-load version produced, so an
+// Archive folder from an earlier run still resumes.
+async function loadFullRecords(cutoff, report = () => {}) {
+  report("Listing every eligible load\u2026");
   const eligible = await getEligibleRecords(cutoff);
-  const shiftIds = eligible.krogerRows.map((s) => s.id);
-  const houstonIds = eligible.houstonRows.map((s) => s.id);
-  const [trips, attachments, shiftAccounting, houstonAccounting] = await Promise.all([
-    fetchByIds("loads_trips", "shift_id", shiftIds, "id,shift_id,route_id,trip_id,route_miles,stop_count"),
-    fetchByIds("load_attachments", "shift_id", shiftIds, "id,shift_id,file_name,file_path"),
-    fetchByIds("loads_accounting", "source_shift_id", shiftIds, "id,source_shift_id,total_cost,total_revenue"),
-    fetchByIds("loads_accounting", "source_houston_id", houstonIds, "id,source_houston_id,total_cost,total_revenue"),
+  const shiftIds = eligible.krogerRows.map((row) => row.id);
+  const houstonIds = eligible.houstonRows.map((row) => row.id);
+
+  report(`Loading routes and accounting for ${(eligible.items.length).toLocaleString()} loads\u2026`);
+  const [trips, notes, changes, attachments, shiftAccounting, houstonAccounting] = await Promise.all([
+    fetchByIds("loads_trips", "shift_id", shiftIds),
+    fetchByIds("load_notes", "shift_id", shiftIds),
+    fetchByIds("load_change_history", "shift_id", shiftIds),
+    fetchByIds("load_attachments", "shift_id", shiftIds),
+    fetchByIds("loads_accounting", "source_shift_id", shiftIds),
+    fetchByIds("loads_accounting", "source_houston_id", houstonIds),
+  ]);
+
+  const accounting = [...shiftAccounting, ...houstonAccounting];
+  report(`Loading stops and accounting routes\u2026`);
+  const [stops, accountingRoutes] = await Promise.all([
+    fetchByIds("trip_stops", "trip_id", trips.map((row) => row.id)),
+    fetchByIds("loads_accounting_routes", "accounting_id", accounting.map((row) => row.id)),
   ]);
 
   currentPreview = {
@@ -247,7 +317,17 @@ async function loadFullRecords(cutoff) {
     ...eligible,
     trips,
     attachments,
-    accounting: [...shiftAccounting, ...houstonAccounting],
+    accounting,
+    byShift: {
+      trips: group(trips, "shift_id", "trip_number"),
+      notes: group(notes, "shift_id", "created_at"),
+      changes: group(changes, "shift_id", "changed_at"),
+      attachments: group(attachments, "shift_id", "uploaded_at"),
+      accounting: group(shiftAccounting, "source_shift_id", "id"),
+    },
+    byHouston: { accounting: group(houstonAccounting, "source_houston_id", "id") },
+    stopsByTrip: group(stops, "trip_id", "id"),
+    routesByAccounting: group(accountingRoutes, "accounting_id", "id"),
   };
   return currentPreview;
 }
@@ -346,18 +426,19 @@ function driverNameFor(item) {
   return item.record.driver_name || `Driver ${item.record.driver_id || "Unassigned"}`;
 }
 
+// Used for the Daily Summary row of a load that was already archived and is
+// being skipped. A linear filter over 13,500 trips per skipped load turns a
+// resume into its own O(n^2) crawl, so it reads the same index the export does.
 function previewPackageFor(item) {
-  if (!currentPreview) return {};
+  if (!currentPreview?.byShift) return {};
   if (item.source === "loads_shifts") {
     return {
-      trips: currentPreview.trips.filter((row) => Number(row.shift_id) === Number(item.record.id)),
-      accounting: currentPreview.accounting.filter((row) => Number(row.source_shift_id) === Number(item.record.id)),
+      trips: take(currentPreview.byShift.trips, item.record.id),
+      accounting: take(currentPreview.byShift.accounting, item.record.id),
     };
   }
   if (item.source === "loads_houston") {
-    return {
-      accounting: currentPreview.accounting.filter((row) => Number(row.source_houston_id) === Number(item.record.id)),
-    };
+    return { accounting: take(currentPreview.byHouston.accounting, item.record.id) };
   }
   return {};
 }
@@ -426,24 +507,28 @@ async function findCompletedArchive(rootArchiveDir, item) {
   };
 }
 
-async function loadInternalPackage(shift) {
-  const trips = await fetchAll("loads_trips", "*", (q) => q.eq("shift_id", shift.id).order("trip_number", { ascending: true }));
-  const tripIds = trips.map((t) => t.id);
-  const [stops, notes, changes, attachments, accounting] = await Promise.all([
-    fetchByIds("trip_stops", "trip_id", tripIds),
-    fetchAll("load_notes", "*", (q) => q.eq("shift_id", shift.id).order("created_at", { ascending: true })),
-    fetchAll("load_change_history", "*", (q) => q.eq("shift_id", shift.id).order("changed_at", { ascending: true })),
-    fetchAll("load_attachments", "*", (q) => q.eq("shift_id", shift.id).order("uploaded_at", { ascending: true })),
-    fetchAll("loads_accounting", "*", (q) => q.eq("source_shift_id", shift.id).order("id", { ascending: true })),
-  ]);
-  const accountingRoutes = await fetchByIds("loads_accounting_routes", "accounting_id", accounting.map((a) => a.id));
-  return { trips, stops, notes, changes, attachments, accounting, accountingRoutes };
+function accountingRoutesFor(accounting) {
+  return accounting.flatMap((row) => take(currentPreview.routesByAccounting, row.id));
 }
 
-async function loadHoustonPackage(row) {
-  const accounting = await fetchAll("loads_accounting", "*", (q) => q.eq("source_houston_id", row.id).order("id", { ascending: true }));
-  const accountingRoutes = await fetchByIds("loads_accounting_routes", "accounting_id", accounting.map((a) => a.id));
-  return { accounting, accountingRoutes };
+function loadInternalPackage(shift) {
+  const byShift = currentPreview.byShift;
+  const trips = take(byShift.trips, shift.id);
+  const accounting = take(byShift.accounting, shift.id);
+  return {
+    trips,
+    stops: trips.flatMap((trip) => take(currentPreview.stopsByTrip, trip.id)),
+    notes: take(byShift.notes, shift.id),
+    changes: take(byShift.changes, shift.id),
+    attachments: take(byShift.attachments, shift.id),
+    accounting,
+    accountingRoutes: accountingRoutesFor(accounting),
+  };
+}
+
+function loadHoustonPackage(row) {
+  const accounting = take(currentPreview.byHouston.accounting, row.id);
+  return { accounting, accountingRoutes: accountingRoutesFor(accounting) };
 }
 
 async function writeRouteImage(docsDir, objectPath) {
@@ -454,7 +539,7 @@ async function writeRouteImage(docsDir, objectPath) {
 
 async function archiveInternal(rootArchiveDir, item, cutoff) {
   const shift = item.record;
-  const pkg = await loadInternalPackage(shift);
+  const pkg = loadInternalPackage(shift);
   const dayDir = await archiveDateDir(rootArchiveDir, item);
   const loadDir = await getOrCreateDir(dayDir, `Load ${loadNumberFor(item)} - ${driverNameFor(item)}`);
   const docsDir = await getOrCreateDir(loadDir, "Documents");
@@ -494,7 +579,7 @@ async function archiveInternal(rootArchiveDir, item, cutoff) {
 
 async function archiveHouston(rootArchiveDir, item, cutoff) {
   const row = item.record;
-  const pkg = await loadHoustonPackage(row);
+  const pkg = loadHoustonPackage(row);
   const dayDir = await archiveDateDir(rootArchiveDir, item);
   const loadDir = await getOrCreateDir(dayDir, `Load ${loadNumberFor(item)} - ${driverNameFor(item)}`);
   const docsDir = await getOrCreateDir(loadDir, "Documents");
@@ -562,22 +647,30 @@ async function runExport() {
 
   // The counts came from the server; the rows themselves are pulled now, once,
   // for the export that is actually about to run.
+  // From here until the finally block this tab is working, not idle. Without
+  // this, idle-session.js pauses it after 30 minutes and site-version-watch.js
+  // reloads it outright once it is hidden -- which is how the run of
+  // 2026-09-23 was killed partway through.
+  const longTask = beginLongTask("The archive export");
+
   if (!currentPreview || currentPreview.cutoff !== cutoff) {
-    statusEl.textContent =
-      `Loading the ${currentCounts.loads.toLocaleString()} load records to export\u2026 this part takes a minute.`;
     try {
-      await loadFullRecords(cutoff);
+      await loadFullRecords(cutoff, (message) => {
+        statusEl.textContent = `${message} (${currentCounts.loads.toLocaleString()} loads; nothing is written yet.)`;
+      });
     } catch (error) {
       console.error(error);
       statusEl.textContent = `Could not load the records to export: ${error.message || error}`;
       previewBtn.disabled = false;
       exportBtn.disabled = false;
+      endLongTask(longTask);
       return;
     }
   }
   if (!currentPreview?.items?.length) {
     statusEl.textContent = "Nothing to export for that date.";
     previewBtn.disabled = false;
+    endLongTask(longTask);
     return;
   }
 
@@ -712,6 +805,10 @@ async function runExport() {
       }
     }
   } finally {
+    // Ends the task in every exit: complete, cancelled, failed. The idle clock
+    // restarts from now rather than from the last keystroke hours ago, so a
+    // tab left open after a long run still pauses on the normal schedule.
+    endLongTask(longTask);
     progressEl.classList.add("hidden");
     previewBtn.disabled = false;
     exportBtn.disabled = !(currentCounts?.loads);

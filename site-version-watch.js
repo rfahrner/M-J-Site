@@ -33,17 +33,23 @@
  */
 
 import { setAutomaticWritesBlocked } from './rate-write-limiter.js';
+import { longTaskRunning } from './long-task-guard.js';
 
 const WATCHED = 'loadboard.js';
 const POLL_MS = 5 * 60 * 1000;
 // Comfortably longer than the 700ms save debounce and than anyone's pause
 // between keystrokes, so an idle tab really is idle.
 const IDLE_MS = 2 * 60 * 1000;
+// After hours of work the tab is holding a result somebody has to see -- the
+// archive export leaves the purge confirmation on screen. Reloading it away
+// 30 seconds after the run ends would be its own kind of losing the work.
+const RECENT_WORK_MS = 10 * 60 * 1000;
 const BANNER_ID = 'site-version-stale-banner';
 
 let deployedVersion = null;
 let stale = false;
 let lastActivityAt = Date.now();
+let lastLongTaskEndedAt = 0;
 
 async function currentVersion() {
   try {
@@ -71,7 +77,8 @@ function showBanner() {
   ].join(';');
   bar.innerHTML =
     '<span>This board has been updated. This tab is still running the older version, '
-    + 'so it has stopped saving calculated rates. Reload to pick up the update.</span>';
+    + 'so it has stopped saving calculated rates. Reload to pick up the update '
+    + '\u2014 anything long-running in this tab, such as an archive export, finishes first.</span>';
   const button = document.createElement('button');
   button.type = 'button';
   button.textContent = 'Reload now';
@@ -84,6 +91,11 @@ function showBanner() {
 // Reloading under someone's hands loses what they are typing and closes what
 // they have open, so every one of these has to be true.
 function safeToReloadUnattended() {
+  // A hidden tab is normally the safest one to reload. A hidden tab running an
+  // archive export is the most dangerous: hours of work, and nobody watching
+  // to notice it restarted. Work outranks hidden.
+  if (longTaskRunning()) return false;
+  if (Date.now() - lastLongTaskEndedAt < RECENT_WORK_MS) return false;
   if (document.visibilityState === 'hidden') return true;
   if (Date.now() - lastActivityAt < IDLE_MS) return false;
   const active = document.activeElement;
@@ -120,6 +132,7 @@ export async function initSiteVersionWatch() {
   ['pointerdown', 'keydown', 'wheel', 'focusin'].forEach((type) => {
     document.addEventListener(type, markActivity, { passive: true, capture: true });
   });
+  document.addEventListener('mj:long-task-ended', () => { lastLongTaskEndedAt = Date.now(); });
   await checkForNewDeploy();
   setInterval(checkForNewDeploy, POLL_MS);
   // A tab brought back to the front after hours asleep should find out now
@@ -131,8 +144,9 @@ export async function initSiteVersionWatch() {
 }
 
 // Test seam.
+export const __safeToReloadUnattended = safeToReloadUnattended;
 export function __state() {
-  return { deployedVersion, stale, lastActivityAt };
+  return { deployedVersion, stale, lastActivityAt, lastLongTaskEndedAt };
 }
 
 if (document.readyState === 'loading') {

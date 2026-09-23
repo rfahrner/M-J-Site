@@ -34,8 +34,13 @@ function check(label, actual, expected) {
 // No package.json, so a bare .js is CommonJS to node; copy both out as .mjs.
 const dir = mkdtempSync(join(tmpdir(), 'mj-stale-'));
 writeFileSync(join(dir, 'rate-write-limiter.mjs'), read('rate-write-limiter.js'));
-writeFileSync(join(dir, 'site-version-watch.mjs'),
-  read('site-version-watch.js').replace("'./rate-write-limiter.js'", "'./rate-write-limiter.mjs'"));
+writeFileSync(join(dir, 'long-task-guard.mjs'), read('long-task-guard.js'));
+// The watcher now asks whether the tab is busy before reloading it. Copied out
+// alongside, because a leaf it imports has to resolve from the same tmpdir.
+const asWatcher = (name) => writeFileSync(join(dir, name), read('site-version-watch.js')
+  .replace("'./rate-write-limiter.js'", "'./rate-write-limiter.mjs'")
+  .replace("'./long-task-guard.js'", "'./long-task-guard.mjs'"));
+asWatcher('site-version-watch.mjs');
 
 const dom = new JSDOM(`<!doctype html><body>
   <div class="overlay hidden" id="modal-load-details"></div>
@@ -115,8 +120,7 @@ global.document = dom2.window.document;
 let reloads2 = 0;
 global.window = { location: { reload: () => { reloads2 += 1; } } };
 etag = '"v1"';
-writeFileSync(join(dir, 'watch2.mjs'),
-  read('site-version-watch.js').replace("'./rate-write-limiter.js'", "'./rate-write-limiter.mjs'"));
+asWatcher('watch2.mjs');
 console.warn = () => {};
 const watcher2 = await import(join(dir, 'watch2.mjs'));
 await new Promise((r) => setTimeout(r, 10));
@@ -131,8 +135,7 @@ global.document = dom3.window.document;
 let reloads3 = 0;
 global.window = { location: { reload: () => { reloads3 += 1; } } };
 etag = '"v1"';
-writeFileSync(join(dir, 'watch3.mjs'),
-  read('site-version-watch.js').replace("'./rate-write-limiter.js'", "'./rate-write-limiter.mjs'"));
+asWatcher('watch3.mjs');
 console.warn = () => {};
 const watcher3 = await import(join(dir, 'watch3.mjs'));
 await new Promise((r) => setTimeout(r, 10));
