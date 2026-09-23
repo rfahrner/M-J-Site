@@ -305,6 +305,27 @@ mileage band is not ready without its bands. `calcLoadRateBreakdown()` returns
 rate must check `breakdown.notReady` and do nothing**: `recomputeRowRate()`,
 `daily-rate-hierarchy`, `delaware-rate-tiers`, `daily-rate-modal-sync`.
 
+## The board's Rate column is hidden, and that is all
+
+`state.hiddenCols` carries `"rate"` by default. The cell is still rendered and
+still editable; only the stylesheet hides it, and `rate` is in
+`DRIVER_INFO_COLS`, so a dispatcher can tick it back on in the Columns panel.
+`hiddenCols` is not persisted, so the default applies again on the next load.
+
+**The calculation and the save are deliberately untouched.**
+`loads_shifts.carrier_rate` is what Accounting bills from --
+`auto_send_shifts_to_accounting()` prices every load off it and
+`accounting-pricing-v2.js` reads it back -- so `recomputeRowRate()` still
+computes and still saves, with the `notReady` gate and the write limiter
+still in front of it. Hiding a column is cosmetic; stopping the calculation
+would change what customers are charged. Do not "finish the job" by removing
+the write path without dealing with the accounting trigger first.
+`scripts/rate-column-hidden.test.mjs` pins the distinction.
+
+Atlanta's separate read-only **Carrier Rate** column (the driver's 61-140.9 MI
+card rate) stays visible. It is a static reference off the driver profile,
+never calculated or saved from the board.
+
 ## Tabs left open across a deploy
 
 Dispatchers leave the board up overnight, and ES modules are fetched once, so
@@ -328,6 +349,30 @@ and nothing to bump by hand. On a change the tab, in this order:
 It is imported through `loadboard-toolbar-controls.js` and must not import
 `loadboard.js` -- that chain runs while `loadboard.js` is still evaluating.
 `scripts/stale-tab-writes.test.mjs` pins it.
+
+### Idle tabs
+
+`idle-session.js` is the other half of the same problem: a board left up with
+nobody at it. Two stages, because "away twenty minutes" and "gone home" want
+different answers.
+
+- **30 minutes idle** -- pause. Automatic writes stop (the same
+  `setAutomaticWritesBlocked` switch), `removeAllChannels()` drops every
+  realtime subscription on whatever page this is, and a panel dims the board
+  while leaving it readable. Resuming **reloads**: a paused tab missed
+  everything, and five renderers each cache their own days, so a reload is the
+  only reconciliation that is certainly right. While paused, stray events do
+  not un-pause -- the panel is the only way back, or a disconnected tab could
+  quietly start writing again.
+- **12 hours idle** -- sign out and go to `login.html`, so a dispatch board is
+  not left authenticated on a shared machine overnight.
+
+It reaches `loadboard.js` by **dynamic** import, because it loads through the
+toolbar chain while `loadboard.js` is still evaluating.
+`scripts/idle-session.test.mjs` pins it.
+
+This does not address rate flicker and was not built to: both tabs in that
+incident were in active use and neither would ever have gone idle.
 
 Separately, `rate-write-limiter.js` stops this client rewriting one load's
 calculated rate after a dozen times in a minute, because two clients that
