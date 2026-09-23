@@ -21,6 +21,11 @@ const ROW_SELECTOR = TABLE_SELECTOR.split(',')
   .join(', ');
 const HOVER_CLASS = 'site-row-hover-current';
 const PARENT_CLASS = 'site-row-hover-parent';
+// One tint and one edge colour, declared once. Three different blues were in
+// play before (#d7e8ff for the row, #f0f5ff and #eaf1ff elsewhere), which is
+// part of why the highlight never looked like one deliberate thing.
+const HOVER_TINT = 'rgba(37, 99, 235, 0.13)';
+const HOVER_EDGE = 'rgba(37, 99, 235, 0.55)';
 
 function installStyles() {
   if (document.getElementById('board-row-hover-enhancement-styles')) return;
@@ -44,34 +49,45 @@ function installStyles() {
       background: var(--butter-yellow) !important;
     }
 
-    /* One consistent hover color across all primary operational tables.
-       !important is deliberate: hover should temporarily win over status,
-       zebra, completion, alert, and other background colors so the entire
-       row reads as a single horizontal line. */
+    /* Hover as a TINT over the cell, not a repaint of it.
+       An opaque fill had to win over status, zebra, completion and the column
+       colours, so passing the pointer down the board wiped Shift Start's pea
+       flower, Next Call Time's butter yellow and the pistachio route block out
+       of every row in turn -- the colour coding blinking off and on is what
+       made it read as mushy. A linear-gradient sits in background-IMAGE, which
+       composites over whatever background-color the cell already has, so the
+       column keeps its colour and simply gets cooler under the pointer.
+       !important because several of those rules set the background
+       shorthand with !important, which would otherwise reset the image. */
     table.board tbody tr.${HOVER_CLASS} > td,
     table.driverlist tbody tr.${HOVER_CLASS} > td,
     table.available-table tbody tr.${HOVER_CLASS} > td {
-      background: #d7e8ff !important;
+      background-image: linear-gradient(${HOVER_TINT}, ${HOVER_TINT}) !important;
+    }
+
+    /* The edges are what make it crisp. A 1px inset line on the top and bottom
+       of every cell draws one continuous rule across the full width of the
+       row, so the band has a definite start and end instead of fading into
+       the rows above and below. */
+    table.board tbody tr.${HOVER_CLASS} > td,
+    table.driverlist tbody tr.${HOVER_CLASS} > td,
+    table.available-table tbody tr.${HOVER_CLASS} > td {
+      box-shadow: inset 0 1px 0 0 ${HOVER_EDGE}, inset 0 -1px 0 0 ${HOVER_EDGE};
     }
 
     /* When hovering route 2+, the shift/driver cells are rowspanned from the
        first DOM row. Highlight only those shared pinned cells on the parent;
-       do not light up route 1's route-level cells. */
+       do not light up route 1's route-level cells. The parent gets the tint
+       but NOT the top/bottom edges -- it is a different DOM row, so drawing
+       its own band would put a stray line across the middle of the load. */
     table.board tbody tr.${PARENT_CLASS} > td.pin {
-      background: #d7e8ff !important;
+      background-image: linear-gradient(${HOVER_TINT}, ${HOVER_TINT}) !important;
     }
 
-    /* The PRO# cell carries the completion / fully-documented tints and is
-       itself a pinned cell, so without these it would turn blue whenever a
-       later route of the same load is hovered and lose the green that says
-       the shift is done. Match what the hovered row's own PRO# cell does. */
-    table.board tbody tr.${PARENT_CLASS} > td.pin-pro.shift-complete-tint {
-      background: rgba(34, 197, 94, 0.28) !important;
-    }
-
-    table.board tbody tr.${PARENT_CLASS} > td.pin-pro.pro-fully-documented {
-      background: rgba(21, 128, 61, 0.42) !important;
-    }
+    /* The completion / fully-documented tints on the PRO# cell need no
+       hover variants any more. They set background-color; the hover tint
+       is a background-image over it, so the green stays green and simply
+       cools, instead of each state needing its own hand-picked blue. */
   `;
   document.head.appendChild(style);
 }

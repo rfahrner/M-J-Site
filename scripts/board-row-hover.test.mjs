@@ -185,12 +185,31 @@ const nativeBoardHover = CSS_SRC
   .split('\n')
   .filter((line) => /table\.board tbody tr[^{]*:hover/.test(line) && !line.trim().startsWith('*'));
 check('no table.board row :hover rules remain', nativeBoardHover.join(' | '), '');
+// The hover treatment itself lives in this module's injected styles, beside
+// the script that decides which logical row is hovered; the stylesheet keeps
+// the rules that are about a row's STATE rather than the pointer. Look in
+// both, or this only pins where the CSS happens to sit today.
+const MODULE_SRC = readFileSync(new URL('../board-row-hover-enhancements.js', import.meta.url), 'utf8');
+const styledAnywhere = (rule) => CSS_SRC.includes(rule)
+  || MODULE_SRC.includes(rule.replace('site-row-hover-current', '${HOVER_CLASS}'));
 for (const rule of [
   'table.board tbody tr.site-row-hover-current > td',
-  'table.board tbody tr.site-row-hover-current td.pin',
   'table.board tbody tr.is-load-cancelled.site-row-hover-current',
 ]) {
-  check(`replaced by ${rule}`, CSS_SRC.includes(rule), true);
+  check(`replaced by ${rule}`, styledAnywhere(rule), true);
+}
+// Hover is a tint laid OVER the cell, not a repaint of it: an opaque fill wiped
+// out the column colours (Shift Start's pea flower, Next Call Time's butter
+// yellow, the pistachio route block) for whichever row the pointer was on. A
+// gradient in background-image composites over the cell's own background-color.
+check('the hover fill is a tint, not an opaque colour',
+  /background-image: linear-gradient\(\$\{HOVER_TINT\}, \$\{HOVER_TINT\}\) !important;/.test(MODULE_SRC), true);
+check('and the row has a defined top and bottom edge',
+  /inset 0 1px 0 0 \$\{HOVER_EDGE\}, inset 0 -1px 0 0 \$\{HOVER_EDGE\}/.test(MODULE_SRC), true);
+// Three different blues were in play for one state, which is most of why it
+// never looked deliberate.
+for (const deadBlue of ['#d7e8ff', '#eaf1ff', '#f0f5ff']) {
+  check(`the old hover blue ${deadBlue} is gone from the stylesheet`, CSS_SRC.includes(deadBlue), false);
 }
 // The other two tables have no rowspanned cells and keep the cheap native rule.
 check('driverlist keeps native :hover', CSS_SRC.includes('table.driverlist tbody tr:hover > td'), true);

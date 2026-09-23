@@ -408,7 +408,11 @@ table.board tbody tr.is-being-edited td.pin-select {
    enters the pinned Driver/PRO# columns and reassigns it back on the way out
    -- the highlight flickering between two rows for one continuous move. The
    script decides which logical row the pointer is on and marks it. */
-table.board tbody tr.site-row-hover-current td { background: #f0f5ff; }
+/* The hover tint itself lives in board-row-hover-enhancements.js, which
+   owns this class. It is a background-IMAGE gradient plus inset top and
+   bottom edges, so the column colours below survive under it rather than
+   being repainted -- see the note there. Nothing here should set an
+   opaque background for the hovered row again. */
 /* Column highlights, per request: Shift Start in pea flower, Next Call
    Time in butter yellow, the whole Route ID -> Ppwk Rec'd range in
    pistachio. Full column, header through every data row. */
@@ -424,11 +428,13 @@ table.board td.col-pistachio { background: var(--pistachio) !important; }
 table.board tbody tr.is-row-pinned > td {
   background: rgba(234, 179, 8, 0.22) !important;
 }
-table.board tbody tr.site-row-hover-current > td,
-table.board tbody tr.is-row-pinned.site-row-hover-current > td,
+/* The other two tables keep a native :hover fill -- neither has rowspanned
+   cells, so there is nothing for the script to reconcile -- but they use the
+   same tint-over-colour treatment so hover reads identically site-wide. */
 table.driverlist tbody tr:hover > td,
 table.available-table tbody tr:hover > td {
-  background: #d7e8ff !important;
+  background-image: linear-gradient(rgba(37, 99, 235, 0.13), rgba(37, 99, 235, 0.13));
+  box-shadow: inset 0 1px 0 0 rgba(37, 99, 235, 0.55), inset 0 -1px 0 0 rgba(37, 99, 235, 0.55);
 }
 /* pinned/sticky left columns */
 .pin {
@@ -457,13 +463,11 @@ table.available-table tbody tr:hover > td {
 table.board tbody tr:nth-child(even) td.pin { background: #fbfcfe; }
 table.board tbody tr.is-row-pinned td.pin { background: rgba(234, 179, 8, 0.22) !important; }
 table.board tbody tr.is-row-selected td.pin { background: rgba(59, 130, 246, 0.22); }
-table.board tbody tr.site-row-hover-current td.pin { background: #eaf1ff; }
 table.board thead th.pin { z-index: 6; }
 /* Shift Complete — green tint specifically on the PRO# cell */
 td.pin-pro.shift-complete-tint {
   background: rgba(34, 197, 94, 0.18) !important;
 }
-table.board tbody tr.site-row-hover-current td.pin-pro.shift-complete-tint { background: rgba(34, 197, 94, 0.28) !important; }
 /* Fully documented — every trip clean (no red pill) AND the time sheet is
    in. A stricter, more saturated green than the basic completion tint
    above, since a shift can be "complete" while a trip is still missing
@@ -472,7 +476,6 @@ td.pin-pro.pro-fully-documented {
   background: rgba(21, 128, 61, 0.32) !important;
   border-color: #15803d !important;
 }
-table.board tbody tr.site-row-hover-current td.pin-pro.pro-fully-documented { background: rgba(21, 128, 61, 0.42) !important; }
 .trip-chip.shift-complete-tint { background: rgba(34, 197, 94, 0.18) !important; }
 @keyframes tripCompletedFlash {
   0% { background: rgba(34, 197, 94, 0.55); }
