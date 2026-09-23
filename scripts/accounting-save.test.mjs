@@ -74,3 +74,13 @@ test('checkbox waits for confirmation and survives realtime record replacement',
   assert.equal(context.accountingRecords[0].sent,true);assert.equal(pending.size,0);
   assert.equal(statuses.at(-1)[1],'error');
 });
+
+
+test('row highlighting persists checked and unchecked on fresh reads',async()=>{
+  const {client}=fixture();
+  for(const highlighted of [true,false]) {
+    await saveAccountingFields(client,42,{highlighted});
+    const {data,error}=await client.from('loads_accounting').select('*').eq('id',42).single();
+    assert.equal(error,null);assert.equal(data.highlighted,highlighted);
+  }
+});
