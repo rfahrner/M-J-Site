@@ -5017,7 +5017,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   // tripDbId isn't available (Atlanta's own Routes column, unlike
   // Delaware's which does have a real trip dbId to work with), this falls
   // back to matching on that text instead.
-  export async function openLoadDetailsFromAccounting(accountingRecordId, tripDbId, routeIdText) {
+  export async function openLoadDetailsFromAccounting(accountingRecordId, tripDbId, routeIdText, initialTab) {
     const acctRec = getAccountingRecordById(accountingRecordId);
     if (!acctRec) return;
     if (!acctRec.source_shift_id) { setDriverSyncStatus("This load doesn't have a linked board record to open (likely a Houston load).", "error"); return; }
@@ -5035,6 +5035,10 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       let targetTrip = tripDbId ? row.trips.find((t) => String(t.dbId) === String(tripDbId)) : null;
       if (!targetTrip && routeIdText) targetTrip = row.trips.find((t) => String(t.routeId || "").trim() === String(routeIdText).trim());
       await openLoadDetailsModal(row.id, targetTrip ? targetTrip.id : null);
+      if (initialTab === 'notes' && loadDetailsState?.rowId === row.id) {
+        loadDetailsState.activeTab = 'notes';
+        renderLoadDetailsTabs();
+      }
     } catch (e) {
       console.error("openLoadDetailsFromAccounting failed:", e);
       setDriverSyncStatus(`Couldn't open this load (${e.message || e}).`, "error");
@@ -6444,7 +6448,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   // permanent log (tagged "modal" instead of "board"), but deliberately
   // never touches row.notes/loads_shifts.notes at all, so a note typed
   // here never shows up back on the board's own Notes field.
-  async function submitLoadNote() {
+  export async function submitLoadNote() {
     if (!loadDetailsState || !supabaseClient) return;
     const found = findRowAnywhere(loadDetailsState.rowId);
     if (!found || !found.row.dbId) return;
