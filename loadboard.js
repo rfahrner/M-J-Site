@@ -697,6 +697,15 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     driverListTab: "atlanta", // only meaningful on the Driver List page — its 3 tabs
     datesWithData: new Set(), // which days in the browsable range have any loads — for the date dropdown
     hiddenCols: new Set([
+      // Rate is hidden by default, not deleted. The board still calculates and
+      // saves carrier_rate exactly as before -- Accounting bills from it -- but
+      // a number that recalculates under the dispatcher's eyes is a distraction
+      // on a screen they are reading for times and routes. Load Details shows
+      // it, with the full breakdown, which is where anyone questioning a rate
+      // was going to end up anyway. Nothing persists hiddenCols, so a
+      // dispatcher who wants the column back ticks it in Columns for their
+      // session and it is gone again on the next load.
+      "rate",
       "email", "dispatcherPhone", "shiftDate", "rating", "driverPreference", "shiftHosLeft", "revLevel", // shift-level, hidden per spec
       "routeEstHours", // trip-level, hidden per spec
       "backhaulType", "etaToFinalStop", "estRouteComplete", "etaNextDispatch", "tripCallTime", // not in the latest spec — kept but hidden, not deleted
@@ -706,6 +715,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
 
   const DRIVER_INFO_COLS = [
     { key: "carrierRate", label: "Carrier Rate", location: "atlanta" },
+    { key: "rate", label: "Rate" },
     { key: "schneider", label: "Schneider", location: "delaware" },
     { key: "cell", label: "Cell" },
     { key: "dispatcherPhone", label: "Dispatcher Phone" },
