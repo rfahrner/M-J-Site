@@ -19,37 +19,6 @@ function prettyDate(dateKey) {
   });
 }
 
-function addArchiveAdminLink() {
-  if (document.getElementById("admin-archive-link")) return true;
-
-  const logout = document.getElementById("nav-logout");
-  const tabs = document.getElementById("tabs");
-  if (!logout || !tabs) return false;
-
-  const link = document.createElement("a");
-  link.id = "admin-archive-link";
-  link.href = "archive.html";
-  link.textContent = "Archive";
-  link.title = "Historical load archive";
-  link.className = "tab-btn";
-  link.style.marginLeft = "auto";
-
-  logout.style.marginLeft = "0";
-  tabs.insertBefore(link, logout);
-  return true;
-}
-
-function waitForNavAndAddArchiveLink() {
-  if (addArchiveAdminLink()) return;
-
-  const startedAt = Date.now();
-  const timer = window.setInterval(() => {
-    if (addArchiveAdminLink() || Date.now() - startedAt > 10000) {
-      window.clearInterval(timer);
-    }
-  }, 100);
-}
-
 function showArchiveDueBanner({ count, oldestDate, cutoff }) {
   const dismissKey = `dl-archive-reminder-dismissed:${cutoff}`;
   if (sessionStorage.getItem(dismissKey) === "1") return;
@@ -132,8 +101,6 @@ async function initArchiveReminder() {
 
   const role = roleRows?.[0]?.role || null;
   if (role !== "admin" && role !== "it") return;
-
-  waitForNavAndAddArchiveLink();
 
   const cutoff = archiveCutoffDate();
   try {
