@@ -64,6 +64,9 @@ jobs:
       - name: Test Atlanta Night Shift
         run: node --test scripts/night-shift.test.mjs
 
+      - name: Test group Outlook session fallback
+        run: node --test scripts/group-outlook-session.test.mjs
+
       - name: Test accounting checkbox persistence
         run: node --test scripts/accounting-save.test.mjs
 
