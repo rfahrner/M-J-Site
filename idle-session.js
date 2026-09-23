@@ -14,6 +14,11 @@
  *                          a shared machine overnight is worth closing, and by
  *                          then nobody is coming back to this tab.
  *
+ * "Idle" means nobody is using the tab, not that nothing is happening in it.
+ * An archive export runs for hours, needs no input, and is started so somebody
+ * can walk away -- and on 2026-09-23 this module paused one partway through.
+ * A tab with a long task open is busy; the clock only starts once it ends.
+ *
  * Resuming reloads the page rather than reconnecting in place. While paused,
  * every change made by everyone else was missed, and five different renderers
  * (three standard boards, Houston, Mondelez) each cache their own days -- a
@@ -32,6 +37,7 @@
  */
 
 import { setAutomaticWritesBlocked } from './rate-write-limiter.js';
+import { longTaskRunning, longTaskName } from './long-task-guard.js';
 
 const MINUTE = 60 * 1000;
 export const IDLE_PAUSE_MS = 30 * MINUTE;
@@ -121,6 +127,13 @@ async function signOut() {
 
 function tick() {
   if (signedOut) return;
+  // Work in progress counts as the tab being in use. Keeping the clock pushed
+  // forward, rather than only skipping the pause, means a task that ends after
+  // four hours does not pause the tab on the very next tick.
+  if (longTaskRunning()) {
+    lastActivityAt = Date.now();
+    return;
+  }
   const away = Date.now() - lastActivityAt;
   if (away >= IDLE_SIGNOUT_MS) { void signOut(); return; }
   if (away >= IDLE_PAUSE_MS) void pause();
@@ -134,6 +147,9 @@ function markActivity() {
 }
 
 export function initIdleSession() {
+  // The task is over, so the idle clock starts now -- not from whenever the
+  // dispatcher last touched the keyboard, which may have been hours ago.
+  document.addEventListener('mj:long-task-ended', () => { lastActivityAt = Date.now(); });
   ACTIVITY_EVENTS.forEach((type) => {
     document.addEventListener(type, markActivity, { passive: true, capture: true });
   });
@@ -148,7 +164,7 @@ export function initIdleSession() {
 
 // Test seam.
 export function __state() {
-  return { lastActivityAt, paused, signedOut, IDLE_PAUSE_MS, IDLE_SIGNOUT_MS };
+  return { lastActivityAt, paused, signedOut, IDLE_PAUSE_MS, IDLE_SIGNOUT_MS, busyWith: longTaskName() };
 }
 export function __setLastActivity(at) { lastActivityAt = at; }
 export const __tick = tick;

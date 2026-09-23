@@ -301,6 +301,42 @@ check('trip sheet downloaded from its own bucket', out.downloads.includes('trip-
 check('the image bytes actually landed on disk', out.routeImage, 'fake-bytes-for:mondelez-routes/atlanta/41/route.png');
 check('manifest records nothing was deleted', /"supabase_deleted": false/.test(out.manifest || ''), true);
 
+// ---- 4. the export fetches in bulk, not per load ----
+console.log('\n4. every table is read once, not once per load');
+// It used to run six queries for each Kroger load and two for each Houston
+// load, on top of the preview. Across ~14,700 eligible loads that is roughly
+// 90,000 sequential requests -- about two hours of network latency before the
+// disk is touched, which is the only reason a run was ever left unattended
+// long enough for the idle pause to kill it. All of it is 38 MB; fetched up
+// front it is a few hundred paged requests.
+const reads = await page.evaluate(() => {
+  const counts = {};
+  for (const entry of window.__calls.select) {
+    const table = entry.split(':')[0];
+    counts[table] = (counts[table] || 0) + 1;
+  }
+  return counts;
+});
+check('routes read once for the whole run', reads.loads_trips, 1);
+check('stops read once', reads.trip_stops, 1);
+check('accounting read once', reads.loads_accounting, 1);
+check('accounting routes read once', reads.loads_accounting_routes, 1);
+check('change history read once', reads.load_change_history, 1);
+check('attachments read once', reads.load_attachments, 1);
+
+// Reading in bulk is only worth anything if the rows still reach the right
+// load. These are assembled in memory now rather than queried per load.
+const csv = await page.evaluate((dir) => ({
+  routes: window.__fileText(dir + '/Routes.csv'),
+  stops: window.__fileText(dir + '/Stops.csv'),
+  acctRoutes: window.__fileText(dir + '/Accounting Routes.csv'),
+  attachments: window.__fileText(dir + '/Attachments.csv'),
+}), LOAD);
+check("the load's route is in its Routes.csv", /(^|,)T-900(,|$)/m.test(csv.routes), true);
+check("its stop is in Stops.csv", /(^|,)5000(,|$)/m.test(csv.stops), true);
+check("its accounting route is in Accounting Routes.csv", /(^|,)700(,|$)/m.test(csv.acctRoutes), true);
+check("its attachment is listed", /trip sheet\.jpg/.test(csv.attachments), true);
+
 await browser.close();
 server.close();
 console.log(failures ? `\n  ${failures} check(s) FAILED\n` : '\n  All checks passed.\n');

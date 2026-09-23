@@ -45,6 +45,11 @@ jobs:
           node --input-type=module --check < daily-rate-modal-sync.js
           node --input-type=module --check < loadboard-toolbar-controls.js
           node --input-type=module --check < archive-image-backup.js
+          node --input-type=module --check < long-task-guard.js
+          node --input-type=module --check < archive-page.js
+          node --input-type=module --check < archive-purge.js
+          node --input-type=module --check < idle-session.js
+          node --input-type=module --check < site-version-watch.js
 
       - name: Test Delaware driver rates
         run: node scripts/delaware-driver-rates.test.mjs

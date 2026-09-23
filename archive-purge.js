@@ -1,3 +1,5 @@
+import { beginLongTask, endLongTask } from './long-task-guard.js';
+
 const PURGE_SUPABASE_URL = "https://ygsapysqzwrpcimgvaqx.supabase.co";
 const PURGE_SUPABASE_KEY = "sb_publishable_8b8bSIiYm5TzLTw0WG1pAw_5ZWW5ZPL";
 const PAGE_SIZE = 1000;
@@ -11,6 +13,7 @@ const purgeClient = window.supabase.createClient(PURGE_SUPABASE_URL, PURGE_SUPAB
 let exportSnapshot = null;
 let selectedRootHandle = null;
 let purgeInProgress = false;
+let purgeLongTask = null;
 
 function byId(id) { return document.getElementById(id); }
 
@@ -143,6 +146,8 @@ function closeModal() {
 function showPurgeError(error) {
   console.error("Archive purge failed:", error);
   purgeInProgress = false;
+  endLongTask(purgeLongTask);
+  purgeLongTask = null;
   const meta = byId("archive-purge-meta");
   if (meta) meta.textContent = `Purge stopped: ${error.message || error}. Records already confirmed by completed chunks remain archived; unprocessed chunks remain in Supabase.`;
   const now = byId("archive-purge-now");
@@ -208,6 +213,9 @@ async function runVerifiedPurge() {
   if (!byId("archive-purge-verified")?.checked || byId("archive-purge-confirm")?.value.trim() !== "PURGE") return;
 
   purgeInProgress = true;
+  // A purge deletes in chunks of 2,000 across several tables. A reload or an
+  // idle pause partway through leaves half the cutoff removed and half not.
+  purgeLongTask = beginLongTask("The archive purge");
   byId("archive-purge-now").disabled = true;
   byId("archive-purge-later").disabled = true;
   const progress = byId("archive-purge-progress");
@@ -278,6 +286,8 @@ async function runVerifiedPurge() {
   receipt.receipt_written_locally = await writePurgeReceipt(receipt);
 
   purgeInProgress = false;
+  endLongTask(purgeLongTask);
+  purgeLongTask = null;
   meta.textContent = receipt.storage_failures
     ? `Purge complete. ${exportSnapshot.records.length.toLocaleString()} operational records were removed. ${receipt.storage_failures} storage object(s) could not be cleaned up; details are in the purge receipt.`
     : `Purge complete. ${exportSnapshot.records.length.toLocaleString()} operational records were removed and storage cleanup completed.`;

@@ -46,8 +46,13 @@ writeFileSync(join(dir, 'loadboard.mjs'), `
   };
 `);
 writeFileSync(join(dir, 'rate-write-limiter.mjs'), read('rate-write-limiter.js'));
+// Pausing now asks whether the tab is busy first -- see
+// scripts/long-task-guard.test.mjs, which covers that side. Here nothing is
+// ever running, so every threshold below is the plain idle case.
+writeFileSync(join(dir, 'long-task-guard.mjs'), read('long-task-guard.js'));
 writeFileSync(join(dir, 'idle-session.mjs'), read('idle-session.js')
   .replace("'./rate-write-limiter.js'", "'./rate-write-limiter.mjs'")
+  .replace("'./long-task-guard.js'", "'./long-task-guard.mjs'")
   .replace("import('./loadboard.js')", "import('./loadboard.mjs')"));
 
 const dom = new JSDOM('<!doctype html><body><input id="cell"></body>',
