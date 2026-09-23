@@ -67,8 +67,8 @@ function ensureRateColumnOrder() {
   if (!headRow || !body) return;
 
   const headers = [...headRow.children];
-  const carrierHeader = headers.find((th) => th.textContent.trim() === 'Carrier Rate');
-  let customerHeader = headers.find((th) => th.textContent.trim() === 'Customer Rate');
+  const carrierHeader = headers.find((th) => ['Carrier Rate', 'Rate Carrier'].includes(th.textContent.trim()));
+  let customerHeader = headers.find((th) => ['Customer Rate', 'Rate Customer'].includes(th.textContent.trim()));
   if (!carrierHeader) return;
 
   if (!customerHeader) {
@@ -78,8 +78,8 @@ function ensureRateColumnOrder() {
   if (customerHeader.nextElementSibling !== carrierHeader) {
     headRow.insertBefore(customerHeader, carrierHeader);
   }
-  const revenueHeader = headers.find(th => th.textContent.trim() === 'Revenue Rate');
-  if (revenueHeader && revenueHeader.nextElementSibling !== customerHeader) headRow.insertBefore(revenueHeader, customerHeader);
+  if (customerHeader.textContent !== 'Rate Customer') customerHeader.textContent = 'Rate Customer';
+  if (carrierHeader.textContent !== 'Rate Carrier') carrierHeader.textContent = 'Rate Carrier';
 
   body.querySelectorAll('tr[id^="acct-"]').forEach((row) => {
     const carrierInput = row.querySelector('[data-action="acct-carrier-pay"]');
@@ -97,9 +97,32 @@ function ensureRateColumnOrder() {
     if (customerCell.nextElementSibling !== carrierCell) {
       row.insertBefore(customerCell, carrierCell);
     }
-    const revenueCell = row.querySelector('[data-action="acct-revenue-level"]')?.closest('td');
-    if (revenueCell && revenueCell.nextElementSibling !== customerCell) row.insertBefore(revenueCell, customerCell);
+
   });
+
+  // Move the header and its corresponding cells together, without rebuilding
+  // inputs or their handlers. Repeated observer runs must not mutate the DOM.
+  const current = [...headRow.children];
+  const order = ['Highlight', 'Date', 'Aljex #', 'Driver', 'MC', 'Applied',
+    'Rate Customer', 'Rate Carrier', 'Trip ID', 'Total Miles', 'Total Stops',
+    'Revenue Rate', 'FSC Payment', 'Sent', 'Released', 'Hidden'];
+  const key = th => {
+    if (th.querySelector('[data-acct-driver-sort]')) return 'Driver';
+    const text = th.textContent.trim();
+    if (text === 'Cost Level') return 'Applied';
+    if (['Routes', 'Route ID'].includes(text)) return 'Trip ID';
+    return text;
+  };
+  const indices = current.map((th, i) => i).sort((a, b) => {
+    const rank = th => { const i = order.indexOf(key(th)); return i < 0 ? order.length : i; };
+    return rank(current[a]) - rank(current[b]);
+  });
+  const move = (row, cells) => indices.forEach((oldIndex, newIndex) => {
+    const cell = cells[oldIndex];
+    if (cell && row.children[newIndex] !== cell) row.insertBefore(cell, row.children[newIndex] || null);
+  });
+  body.querySelectorAll('tr[id^="acct-"]').forEach(row => move(row, [...row.children]));
+  move(headRow, current);
 
   const emptyCell = body.querySelector('tr:not([id^="acct-"]) > td[colspan]');
   if (emptyCell) emptyCell.colSpan = headRow.children.length;
