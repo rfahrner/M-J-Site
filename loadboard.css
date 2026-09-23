@@ -1786,3 +1786,8 @@ fieldset.rate-tier-box.is-overridden {
 .text-modal-details[open] > summary::before { content: "\25BE"; }
 .text-modal-details > summary:hover { border-color: var(--slate-500); }
 .text-modal-details > .calc-note { margin-top: 6px; }
+
+/* Accounting row marks stay visible across all sheet layouts. */
+#accounting-table-body tr.acct-highlighted > td { background-color: #fff2b3; }
+.acct-load-reference { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.acct-load-text { user-select: text; cursor: text; }

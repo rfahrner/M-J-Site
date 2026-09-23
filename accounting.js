@@ -308,6 +308,7 @@ let accountingRecords = [];
       <th>Sent</th>
       <th>Released</th>
       <th>Hidden</th>
+      <th>Highlight</th>
     </tr>`;
   }
   export function accountingRowHtml(rec) {
@@ -350,9 +351,9 @@ let accountingRecords = [];
     const cancelTitle = isCancelled
       ? ` title="Load cancelled — ${escapeHtml(rec.cancelled_reason || "no reason recorded")}"`
       : "";
-    return `<tr id="acct-${rec.id}"${rowStyle}${cancelTitle}>
+    return `<tr id="acct-${rec.id}" class="${rec.highlighted ? "acct-highlighted" : ""}"${rowStyle}${cancelTitle}>
       <td>${escapeHtml(rec.shift_date)}</td>
-      <td>${rec.aljex_load_number ? `<button type="button" class="cell-link-btn" style="width:auto; padding:2px 10px;" data-open-acct-load="${rec.id}">${escapeHtml(rec.aljex_load_number)} ↗</button>` : "—"}</td>
+      <td>${rec.aljex_load_number ? `<span class="acct-load-reference"><span class="acct-load-text">${escapeHtml(rec.aljex_load_number)}</span><button type="button" class="cell-link-btn" style="width:auto; padding:2px 6px;" data-open-acct-load="${rec.id}" aria-label="Open load ${escapeHtml(rec.aljex_load_number)}" title="Open load">↗</button></span>` : "—"}</td>
       <td>${escapeHtml(rec.driver_name_text || "—")}${acctPushStickyHtml(rec)}${isCancelled ? `<div class="subtext" style="text-decoration:none; color:var(--slate-500);">Cancelled — ${escapeHtml(rec.cancelled_reason || "no reason recorded")}</div>` : ""}</td>
       <td>${escapeHtml(rec.mc_dot || "—")}</td>
       ${showLevels ? `
@@ -378,6 +379,7 @@ let accountingRecords = [];
       <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-sent" data-id="${rec.id}" ${pendingAccountingChecks.has(String(rec.id)) ? "disabled" : ""} ${rec.sent ? "checked" : ""} title="Sent"></td>
       <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-released" data-id="${rec.id}" ${pendingAccountingChecks.has(String(rec.id)) ? "disabled" : ""} ${rec.status === "released" ? "checked" : ""} title="Released"></td>
       <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-hidden" data-id="${rec.id}" ${pendingAccountingChecks.has(String(rec.id)) ? "disabled" : ""} ${rec.hidden ? "checked" : ""} title="Hidden"></td>
+      <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-highlighted" data-id="${rec.id}" ${pendingAccountingChecks.has(String(rec.id)) ? "disabled" : ""} ${rec.highlighted ? "checked" : ""} title="Highlight row" aria-label="Highlight row"></td>
     </tr>`;
   }
   export function getFilteredAccountingRecords() {
@@ -413,7 +415,7 @@ let accountingRecords = [];
     const showLevels = LOCATIONS_WITH_LEVELS.includes(loc);
     const showRoutesInstead = LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST.includes(loc);
     const showFsc = !showRoutesInstead && !LOCATIONS_WITHOUT_FSC.includes(loc);
-    const colspan = (showLevels ? (showFsc ? 14 : 13) : (showRoutesInstead ? 10 : (showFsc ? 11 : 10))) + 1;      body.innerHTML = filtered.length
+    const colspan = (showLevels ? (showFsc ? 14 : 13) : (showRoutesInstead ? 10 : (showFsc ? 11 : 10))) + 2;      body.innerHTML = filtered.length
       ? filtered.map(accountingRowHtml).join("")
       : `<tr><td colspan="${colspan}" class="subtext" style="padding:16px;">No completed loads ${state.acctDateFilter ? "for this day" : ""} here yet — mark a shift complete on the ${loc} board and it'll show up here.</td></tr>`;
     renderDriverStatsTable();
@@ -610,6 +612,11 @@ export function renderDriverStatsTable() {
         else if (t.dataset.action === "acct-revenue-level") {
           t.disabled = true;
           changeAccountingRevenueRate(t.dataset.id, Number(t.value));
+        }
+        else if (t.dataset.action === "acct-highlighted") {
+          const rec = accountingRecords.find((r) => r.id == t.dataset.id);
+          if (!rec) return;
+          void saveAccountingCheckbox(rec, { highlighted: t.checked }, 'Highlight');
         }
         else if (t.dataset.action === "acct-hidden") {
           const rec = accountingRecords.find((r) => r.id == t.dataset.id);
