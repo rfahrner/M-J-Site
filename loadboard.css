@@ -1791,3 +1791,7 @@ fieldset.rate-tier-box.is-overridden {
 #accounting-table-body tr.acct-highlighted > td { background-color: #fff2b3; }
 .acct-load-reference { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .acct-load-text { user-select: text; cursor: text; }
+
+.acct-note-button { border: 0; background: transparent; padding: 2px 4px; color: white; cursor: pointer; vertical-align: middle; }
+.acct-note-button.has-notes { color: #facc15; }
+.acct-note-button svg { display: block; }

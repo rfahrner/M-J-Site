@@ -73,7 +73,7 @@ jobs:
         run: node --test scripts/group-outlook-session.test.mjs
 
       - name: Test accounting checkbox persistence
-        run: node --test scripts/accounting-save.test.mjs
+        run: node --test scripts/accounting-save.test.mjs scripts/accounting-note-icon.test.mjs
 
       - name: Test Atlanta and Delaware rounded-down mileage tiers
         run: node --test scripts/carrier-mileage-tiers.test.mjs

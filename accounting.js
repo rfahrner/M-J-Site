@@ -4,7 +4,7 @@ import {
   state, dateKey, addDays, todayDate, keyToDate, openDateDropdown, closeDateDropdown,
   SAVE_DEBOUNCE_MS, closeLoadDetailsModal, loadDetailsState, renderLoadDetailsTabs,
   uploadTripSheetImages, removeTripSheetImage, startLoadDetailsEdit, cancelLoadDetailsEdit,
-  saveLoadDetailsEdit, stopFieldsHtml, openLoadDetailsFromAccounting,
+  saveLoadDetailsEdit, stopFieldsHtml, openLoadDetailsFromAccounting, submitLoadNote,
   commitRateOverride, resetRateToCalculated, changeRouteType, setHostlerHours, commitRateBoxOverride, openEditDriverModal,
   loadLocationNotes, openLocationNotesModal, closeLocationNotesModal, saveLocationNotes,
   showDriverAssignmentWarning, SHIFTS_TABLE,
@@ -108,6 +108,28 @@ async function dismissAccountingPushNote(id) {
 }
 
 let accountingRecords = [];
+const accountingLoadNoteFlags = new Map();
+async function refreshAccountingLoadNotes(ids) {
+  const unique = [...new Set(ids.filter(Boolean).map(String))];
+  for (let offset = 0; offset < unique.length; offset += 100) {
+    const chunk = unique.slice(offset, offset + 100);
+    const withNotes = new Set();
+    let failed = false;
+    for (let page = 0; ; page += 1000) {
+      const { data, error } = await supabaseClient.from('load_notes')
+        .select('id,shift_id,note_text').in('shift_id', chunk).order('id').range(page, page + 999);
+      if (error) { console.error('Could not load accounting note indicators', error); failed = true; break; }
+      for (const note of data || []) if (String(note.note_text || '').trim()) withNotes.add(String(note.shift_id));
+      if (!data || data.length < 1000) break;
+    }
+    if (!failed) for (const id of chunk) accountingLoadNoteFlags.set(id, withNotes.has(id));
+  }
+}
+function accountingNoteButton(rec) {
+  const hasNotes = accountingLoadNoteFlags.get(String(rec.source_shift_id)) === true;
+  return `<button type="button" class="acct-note-button${hasNotes ? ' has-notes' : ''}" data-acct-load-notes="${rec.id}" aria-label="Open load notes" title="${hasNotes ? 'Load has notes' : 'Open load notes'}"><svg width="15" height="17" viewBox="0 0 18 20" aria-hidden="true"><path d="M2 1h10l4 4v14H2z" fill="currentColor" stroke="#64748b"/><path d="M12 1v4h4" fill="none" stroke="#64748b"/></svg></button>`;
+}
+
   let accountingDriverSort = 0;
   function compareAccountingDriverNames(a, b) {
     const left = String(a || "").trim();
@@ -197,6 +219,7 @@ let accountingRecords = [];
         (shiftRows || []).forEach((s) => { acctShiftCompleteById[s.id] = !!s.shift_complete; });
       }
     }
+    await refreshAccountingLoadNotes(allShiftIds);
     const accountingIds = accountingRecords.map((r) => r.id);
     if (accountingIds.length) {
       acctRoutesByAccountingId = {};
@@ -698,6 +721,8 @@ export function renderDriverStatsTable() {
       table.addEventListener("click", (e) => {
         const sticky = e.target.closest("[data-acct-dismiss-push]");
         if (sticky) { void dismissAccountingPushNote(sticky.dataset.acctDismissPush); return; }
+        const noteBtn = e.target.closest('[data-acct-load-notes]');
+        if (noteBtn) { void openLoadDetailsFromAccounting(noteBtn.dataset.acctLoadNotes, null, null, 'notes'); return; }
         const openBtn = e.target.closest("[data-open-acct-load]");
         if (!openBtn) return;
         // Prefer the exact loads_trips id the chip carries. Falling back to
@@ -736,6 +761,13 @@ export function renderDriverStatsTable() {
         if (e.target.dataset.rateSettingKey) commitRateBoxOverride("setting", e.target.dataset.rateSettingKey, e.target.value);
       });
       $("#ld-tab-content").addEventListener("click", (e) => {
+        if (e.target.id === 'ld-note-submit') {
+          void submitLoadNote().then(async () => {
+            await refreshAccountingLoadNotes(accountingRecords.map(r => r.source_shift_id));
+            renderAccountingTable();
+          });
+          return;
+        }
         const rmBtn = e.target.closest("[data-remove-attachment]");
         if (rmBtn) removeTripSheetImage(rmBtn.dataset.removeAttachment);
         const editBtn = e.target.closest("[data-ld-edit]");
@@ -762,6 +794,7 @@ export function renderDriverStatsTable() {
     const channel = supabaseClient.channel("accounting");
     channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_accounting" }, async (payload) => {
       if (payload.eventType === "DELETE") return;
+      if (payload.new.source_shift_id) await refreshAccountingLoadNotes([payload.new.source_shift_id]);
       const idx = accountingRecords.findIndex((r) => r.id === payload.new.id);
       if (idx !== -1) accountingRecords[idx] = payload.new; else accountingRecords.push(payload.new);
       accountingRecords.sort(acctSortCompare);
@@ -797,6 +830,11 @@ export function renderDriverStatsTable() {
       const { data: routes } = await supabaseClient.from(ACCOUNTING_ROUTES_TABLE).select("*").eq("accounting_id", accountingId);
       if (routes) acctRoutesByAccountingId[accountingId] = routes.sort((a, b) => (a.route_number || 0) - (b.route_number || 0));
       else delete acctRoutesByAccountingId[accountingId];
+      renderAccountingTable();
+    });
+    channel.on("postgres_changes", { event: "*", schema: "public", table: "load_notes" }, async (payload) => {
+      const ids = [payload.new?.shift_id, payload.old?.shift_id].filter(Boolean);
+      await refreshAccountingLoadNotes(ids.length ? ids : accountingRecords.map(r => r.source_shift_id));
       renderAccountingTable();
     });
     channel.subscribe();

@@ -1,0 +1,1 @@
+do $$ begin if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='load_notes') then alter publication supabase_realtime add table public.load_notes; end if; end $$;
