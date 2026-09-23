@@ -616,13 +616,8 @@ import './paperwork-load-integration.js';
         { label: "Location Analytics", href: "location-analytics.html", visible: () => isAdminUser() },
       ],
     },
-    // Removed in 881a93c (2026-09-08) as a "stray top-level nav item". That left
-    // the Archive tab reachable only from paperwork.html's own hardcoded nav and
-    // from archive-reminder.js, which injects it imperatively and gives up for
-    // good after polling 10 s for #nav-logout -- so on a slow load it never
-    // appeared at all. Declarative and role-gated here is the reliable place for
-    // it. isAdminUser() is the right gate: role-auth-compat.js maps the "it"
-    // role onto "admin", which matches archive-page.js's own admin-or-it check.
+    // Archive belongs to the shared navigation, after Analytics. The reminder
+    // only displays its due banner and never inserts another navigation link.
     { label: "Archive", href: "archive.html", visible: () => isAdminUser() },
   ];
 
