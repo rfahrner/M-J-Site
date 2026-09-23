@@ -4807,7 +4807,10 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
 
   // Revealed only once an automatic send has actually failed.
   function showGroupOutlookFallback() {
-    if (groupTextState) setGroupFooter("tg-open-web", "tg-open-batch");
+    if (groupTextState) {
+      groupTextState.outlookOnly = true;
+      setGroupFooter("tg-open-web", "tg-open-batch");
+    }
   }
 
   export function openCurrentGroupBatchInWeb() {
@@ -4857,6 +4860,11 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       <div class="calc-note hidden" style="margin-top:10px;" id="tg-batch-status"></div>
     `;
     $("#tg-send-now").disabled = false;
+    if (s.outlookOnly) {
+      autoSendAfterStart = false;
+      showGroupOutlookFallback();
+      return;
+    }
     setGroupFooter("tg-send-now");
 
     // One press: Send Now in the setup step ran this page's starter, which
@@ -4870,6 +4878,8 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   export async function sendCurrentGroupBatchDirect() {
     const s = groupTextState;
     if (!s) return;
+    if (s.outlookOnly) { showGroupOutlookFallback(); return; }
+    if (s.sending || s.batchIndex >= s.batches.length) return;
     const queuedBatch = s.batches[s.batchIndex];
     const filtered = filterNeverTextRecipients(queuedBatch, { allowDnu: s.allowDnu });
     const batch = filtered.allowed;
@@ -4882,6 +4892,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       renderGroupTextProgress();
       return;
     }
+    s.sending = true;
     btn.disabled = true;
     if (statusEl) statusEl.textContent = "Sending…";
     try {
@@ -4892,10 +4903,12 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || `Send failed (${res.status})`);
+      if (groupTextState !== s) return;
       s.totalSent += batch.length;
       s.batchIndex += 1;
       renderGroupTextProgress();
     } catch (e) {
+      if (groupTextState !== s) return;
       console.error("Group batch direct-send failed:", e);
       if (statusEl) {
         statusEl.textContent = `Couldn't send automatically (${String(e.message || e)}). Take it into Outlook instead:`;
@@ -4903,6 +4916,8 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       }
       btn.disabled = false;
       showGroupOutlookFallback();
+    } finally {
+      s.sending = false;
     }
   }
 
