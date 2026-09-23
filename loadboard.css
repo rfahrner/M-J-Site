@@ -835,6 +835,28 @@ tr.is-new td.pin { background-color: rgba(192,54,44,0.22) !important; }
   color: var(--red-600);
   font-weight: 600;
 }
+/* The sticky Accounting shows when a load-board push replaced what was on the
+   row. Small, yellow, unmissable next to a driver name, and clickable to
+   dismiss -- it is an acknowledgement, not an error. */
+.acct-push-sticky {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 6px;
+  padding: 0;
+  vertical-align: middle;
+  border: 1px solid #d9a441;
+  border-radius: 3px;
+  background: var(--butter-yellow, #ffe89a);
+  color: #6b4d05;
+  font: 700 11px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(11, 18, 32, 0.25);
+}
+.acct-push-sticky:hover { background: #ffd966; }
+
 /* ---------------- Column visibility ----------------
    Each rule hides every cell for that column — header cells in both
    header rows, and body cells in all 5 trip blocks where relevant —

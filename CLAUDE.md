@@ -413,10 +413,56 @@ changed in Load Details did not appear on the sheet until a reload. Both
 `publish_loads_accounting_to_realtime`), and the page subscribes to the route
 rows as well, since editing a route's miles or stops rewrites only those.
 
-**Still open:** that trigger overwrites `total_carrier_pay` and `total_cost`
-unconditionally, so a rate typed on the Accounting sheet is clobbered the next
-time the board recalculates that shift's `carrier_rate`. Deciding which one
-wins is a billing decision and has not been made.
+## A load-board change pushes itself to Accounting
+
+The propagation is automatic -- a change on the board IS the push, and nobody
+presses anything -- but it goes through `public.push_shift_to_accounting()`,
+which records what it replaced.
+
+Two triggers fire it: `trg_push_accounting_from_shift_rate` on a `carrier_rate`
+change, and `trg_push_accounting_from_trip` on any insert, delete or meaningful
+update of a route. The function re-syncs the accounting route rows, copies
+`carrier_rate` onto `total_carrier_pay`/`total_cost`, and returns how many rows
+it touched.
+
+The old pair of triggers did the copying but nothing else, which is why a rate
+an accountant typed survived only until the board next recalculated that shift.
+The overwrite was never the problem -- the board is the operational record --
+**doing it silently was**. So the function sets `push_note` and `pushed_at`
+**only when a figure Accounting actually had is replaced by a different one**.
+Routine propagation onto a row that agreed already, or had no figure yet, sets
+nothing: a sticky on every load would teach people to ignore it.
+
+The Accounting sheet draws `push_note` as a yellow sticky beside the driver
+name (`.acct-push-sticky`), tooltipped with what changed and when. Clicking it
+clears the note and leaves the figure alone.
+
+There is deliberately **no "Push to Accounting" button**. It was built and then
+removed: a dispatcher entering a load should not have to remember a second
+step, and a step people forget is worse than no step.
+
+The Accounting page keeps its realtime subscription. That is how a push reaches
+a screen someone already has open -- delivery, not a second source of change.
+`scripts/accounting-push-model.test.mjs` pins all of it.
+
+## REV/DRIVER, and what counts as a driver
+
+The denominator under REV/DRIVER, MARGIN/DRIVER and TURN on Location Analytics
+is `countDrivers()` in `location-analytics.js`. Three rules, none of them
+guessable from the column heading:
+
+- A driver who was there counts whether or not the load earned anything. TONU
+  counts. Turning up and not running counts.
+- A load **we cancelled or the driver called off** does not. The board already
+  treats those two identically.
+- A driver **typed by name** rather than picked from the list is still a
+  driver. Counting only `driver_id` dropped five real drivers out of one
+  Atlanta week ("Rodney Reid- Reids Trans - c" and the like, none matching a
+  driver profile), which inflated revenue per driver.
+
+A shift with neither an id nor a name is an empty board row, not a driver --
+19 of those in that same week. Keys live in one space (`id:` or normalised
+`name:`) so one person cannot be counted twice.
 
 ## Accounting revenue levels
 

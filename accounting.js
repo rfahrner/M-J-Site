@@ -78,6 +78,35 @@ async function saveAccountingMoneyField(rec, field, value) {
   }
 }
 
+/*
+ * A push from the load board overwrites what Accounting has -- including a rate
+ * they typed. That is deliberate (the board is the operational truth), but it
+ * must never be silent: someone who entered 500 and comes back to 740 needs to
+ * know it was replaced rather than think they mistyped.
+ *
+ * push_shift_to_accounting() writes the sentence; this draws it as a sticky
+ * beside the driver name. Clicking it clears the note -- the figure stays, the
+ * flag is just acknowledged.
+ */
+function acctPushStickyHtml(rec) {
+  if (!rec.push_note) return "";
+  const when = rec.pushed_at ? new Date(rec.pushed_at).toLocaleString() : "";
+  const title = `${rec.push_note}${when ? `\n${when}` : ""}\n\nClick to dismiss.`;
+  return `<button type="button" class="acct-push-sticky" data-acct-dismiss-push="${rec.id}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">!</button>`;
+}
+
+async function dismissAccountingPushNote(id) {
+  const rec = getAccountingRecordById(id);
+  if (!rec) return;
+  rec.push_note = null;
+  renderAccountingTable();
+  try {
+    await saveAccountingFields(supabaseClient, id, { push_note: null });
+  } catch (err) {
+    setDriverSyncStatus(`Couldn't clear that note (${err.message || err}).`, "error");
+  }
+}
+
 let accountingRecords = [];
   let accountingDriverSort = 0;
   function compareAccountingDriverNames(a, b) {
@@ -324,7 +353,7 @@ let accountingRecords = [];
     return `<tr id="acct-${rec.id}"${rowStyle}${cancelTitle}>
       <td>${escapeHtml(rec.shift_date)}</td>
       <td>${rec.aljex_load_number ? `<button type="button" class="cell-link-btn" style="width:auto; padding:2px 10px;" data-open-acct-load="${rec.id}">${escapeHtml(rec.aljex_load_number)} ↗</button>` : "—"}</td>
-      <td>${escapeHtml(rec.driver_name_text || "—")}${isCancelled ? `<div class="subtext" style="text-decoration:none; color:var(--slate-500);">Cancelled — ${escapeHtml(rec.cancelled_reason || "no reason recorded")}</div>` : ""}</td>
+      <td>${escapeHtml(rec.driver_name_text || "—")}${acctPushStickyHtml(rec)}${isCancelled ? `<div class="subtext" style="text-decoration:none; color:var(--slate-500);">Cancelled — ${escapeHtml(rec.cancelled_reason || "no reason recorded")}</div>` : ""}</td>
       <td>${escapeHtml(rec.mc_dot || "—")}</td>
       ${showLevels ? `
       <td><select class="cell-input" data-action="acct-cost-level" data-id="${rec.id}" title="What D&L pays the carrier">${levelSelect(COST_LEVELS, rec.cost_level ?? 1)}</select></td>
@@ -660,6 +689,8 @@ export function renderDriverStatsTable() {
         }
       });
       table.addEventListener("click", (e) => {
+        const sticky = e.target.closest("[data-acct-dismiss-push]");
+        if (sticky) { void dismissAccountingPushNote(sticky.dataset.acctDismissPush); return; }
         const openBtn = e.target.closest("[data-open-acct-load]");
         if (!openBtn) return;
         // Prefer the exact loads_trips id the chip carries. Falling back to
