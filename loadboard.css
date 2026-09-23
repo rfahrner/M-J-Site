@@ -857,6 +857,79 @@ tr.is-new td.pin { background-color: rgba(192,54,44,0.22) !important; }
 }
 .acct-push-sticky:hover { background: #ffd966; }
 
+/* ---------------- Accounting: find a load ----------------
+   The sheet is one location on one day; this reaches any load in the
+   database by Trip ID, Route ID, Load # or PRO #. Results sit in flow under
+   the field rather than in a floating dropdown -- a match list can run to 50
+   rows, and an overlay that long covers the sheet it is meant to help with. */
+.acct-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 12px 0;
+}
+.acct-search-label {
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.acct-search-input {
+  flex: 0 1 320px;
+  min-width: 200px;
+  padding: 6px 8px;
+  border: 1px solid var(--slate-500);
+  border-radius: var(--radius-sm);
+  font: inherit;
+}
+.acct-search-results {
+  flex-basis: 100%;
+  margin-top: 4px;
+  max-height: 340px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+}
+.acct-search-results:empty { display: none; }
+.acct-search-results.is-error { border-color: #fecdd3; background: #fff1f2; color: #881337; }
+.acct-search-results.is-empty { color: var(--slate-500); }
+.acct-search-results.hidden { display: none; }
+.acct-search-summary {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--slate-500);
+}
+.acct-search-hit {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 14px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.acct-search-hit:last-child { border-bottom: 0; }
+.acct-search-hit:hover,
+.acct-search-hit:focus-visible { background: #eef2f9; }
+.acct-search-hit-main { display: flex; align-items: baseline; gap: 8px; }
+.acct-search-hit-driver { color: var(--slate-500); }
+.acct-search-hit-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  color: var(--slate-500);
+  font-size: 12px;
+}
+/* Which field matched is the whole reason a list has more than one row on
+   it -- two loads can share a Trip ID and differ in nothing else visible. */
+.acct-search-hit-match { font-weight: 700; color: var(--ink, #0b1220); }
+
 /* ---------------- Column visibility ----------------
    Each rule hides every cell for that column — header cells in both
    header rows, and body cells in all 5 trip blocks where relevant —

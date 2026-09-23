@@ -842,6 +842,21 @@ export async function loadAndRenderMondelez() {
   if (mondelezNightShiftActive()) await ensureMondelezDateLoaded(nextShiftDate(state.activeDate));
   renderMondelezTable();
 }
+// Opens a Mondelez load by its database id, from off this board -- today,
+// the Accounting page's load search. The board shows one day and one DC at a
+// time, so the date and location travel with the id. setMondelezActiveDate()
+// refuses dates outside the calendar range, which is right for the arrows and
+// wrong for a load that demonstrably exists, so the date is set directly.
+export async function openMondelezLoadByDbId(dbId, shiftDate, locationKey) {
+  if (shiftDate) state.activeDate = shiftDate;
+  if (locationKey && MONDELEZ_LOCATION_KEYS.has(locationKey)) mondelezState.activeTab = locationKey;
+  await loadAndRenderMondelez();
+  const row = (mondelezState.rowsByDate[state.activeDate] || []).find((r) => String(r.dbId) === String(dbId));
+  if (!row) return false;
+  openMondelezLoadDetailsModal(row.id);
+  return true;
+}
+
 export function setMondelezActiveDate(newKey) {
   if (newKey < state.minDate || newKey > state.maxDate) return;
   state.activeDate = newKey;
@@ -912,7 +927,18 @@ export async function initMondelezPage() {
     });
   }
   await loadMondelezRateSettings();
-  loadAndRenderMondelez();
+  // ?load=<id>&date=<YYYY-MM-DD> — how the Accounting page's load search
+  // reaches a Mondelez load, since the Mondelez modal's markup only exists on
+  // this page.
+  const requestedLoad = new URLSearchParams(window.location.search).get("load");
+  if (requestedLoad) {
+    const requestedDate = new URLSearchParams(window.location.search).get("date");
+    void openMondelezLoadByDbId(requestedLoad, requestedDate, requestedLoc).then((opened) => {
+      if (!opened) setDriverSyncStatus(`Load ${requestedLoad} isn't on the Mondelez board for that date and location.`, "error");
+    });
+  } else {
+    loadAndRenderMondelez();
+  }
   setupMondelezRealtimeSync();
   loadMondelezDatesWithData().catch((e) => console.error("loadMondelezDatesWithData() failed:", e));
   renderMondelezTabs();

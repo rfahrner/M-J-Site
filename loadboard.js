@@ -5041,20 +5041,18 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     }
   }
 
-  // Opens a load straight from the Driver Profile's History tab (PRO#/
-  // Load# link). Reuses the same standaloneLoadedRows path Accounting's
-  // opener uses above, and marks the modal to render above the driver
-  // profile modal (#modal-add-driver is z-index 150 — see loadboard.css)
-  // via the ld-in-front class, since the person is drilling in from a
-  // modal that's already open rather than starting from a blank page.
-  // Houston and Mondelez loads live in separate tables/modals that this
-  // doesn't wire up to yet — flagged rather than guessed at.
-  export async function openLoadFromDriverHistory(kind, dbId) {
-    if (kind !== "shift") {
-      setDriverSyncStatus("Opening Houston or Mondelez loads from driver history isn't wired up yet — Atlanta, Delaware, and Building C loads work.", "error");
-      return;
-    }
-    if (!supabaseClient) return;
+  // Opens a loads_shifts row by its database id, on a page that is not the
+  // board it belongs to -- the Accounting sheet, a driver profile, a search
+  // result. The row is fetched on its own and parked in standaloneLoadedRows
+  // rather than reached through the day the board happens to be showing,
+  // because the load is usually not from today.
+  //
+  //   tripDbId  open on that route's tab instead of the overview
+  //   inFront   render above an already-open modal (#modal-add-driver is
+  //             z-index 150 -- see loadboard.css), for a person drilling in
+  //             from a modal rather than starting from a blank page
+  export async function openLoadStandalone(dbId, { tripDbId = null, inFront = false } = {}) {
+    if (!supabaseClient) return false;
     try {
       const { data: shiftRows, error: shiftErr } = await supabaseClient.from(SHIFTS_TABLE).select("*").eq("id", dbId);
       if (shiftErr || !shiftRows || !shiftRows[0]) throw shiftErr || new Error("Load not found");
@@ -5065,13 +5063,29 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       standaloneLoadedRows[row.id] = row;
       state.activeLocation = row.location || state.activeLocation;
       refreshDriverDatalist();
-      await openLoadDetailsModal(row.id);
+      const targetTrip = tripDbId ? row.trips.find((t) => String(t.dbId) === String(tripDbId)) : null;
+      await openLoadDetailsModal(row.id, targetTrip ? targetTrip.id : null);
       const ldModal = $("#modal-load-details");
-      if (ldModal) ldModal.classList.add("ld-in-front");
+      if (ldModal && inFront) ldModal.classList.add("ld-in-front");
+      return true;
     } catch (e) {
-      console.error("openLoadFromDriverHistory failed:", e);
+      console.error("openLoadStandalone failed:", e);
       setDriverSyncStatus(`Couldn't open this load (${e.message || e}).`, "error");
+      return false;
     }
+  }
+
+  // Opens a load straight from the Driver Profile's History tab (PRO#/
+  // Load# link). Houston and Mondelez loads live in separate tables and
+  // modals that this doesn't wire up to yet -- flagged rather than guessed
+  // at. (The Accounting search does reach them, by sending the person to
+  // that board; a driver profile is a modal and cannot navigate away.)
+  export async function openLoadFromDriverHistory(kind, dbId) {
+    if (kind !== "shift") {
+      setDriverSyncStatus("Opening Houston or Mondelez loads from driver history isn't wired up yet — Atlanta, Delaware, and Building C loads work.", "error");
+      return;
+    }
+    await openLoadStandalone(dbId, { inFront: true });
   }
 
   async function openLoadDetailsModal(rowId, jumpToTripId, forceTab) {
