@@ -128,7 +128,7 @@ async function refreshAccountingLoadNotes(ids) {
 }
 function accountingNoteButton(rec) {
   const hasNotes = accountingLoadNoteFlags.get(String(rec.source_shift_id)) === true;
-  return `<button type="button" class="acct-note-button${hasNotes ? ' has-notes' : ''}" data-acct-load-notes="${rec.id}" aria-label="Open load notes" title="${hasNotes ? 'Load has notes' : 'Open load notes'}"><svg width="15" height="17" viewBox="0 0 18 20" aria-hidden="true"><path d="M2 1h10l4 4v14H2z" fill="currentColor" stroke="#64748b"/><path d="M12 1v4h4" fill="none" stroke="#64748b"/></svg></button>`;
+  return `<button type="button" class="acct-note-button${hasNotes ? ' has-notes' : ''}" data-acct-load-notes="${rec.id}" aria-label="Open load notes" title="${hasNotes ? 'Load has notes' : 'Open load notes'}"><svg width="18" height="20" viewBox="0 0 18 20" aria-hidden="true"><path d="M3.5 2.5h8l4 4v12h-12z" fill="currentColor" stroke="#526887" stroke-width="1"/><path d="M11.5 2.5v4h4M5.5 10.5h7M5.5 13.5h7" fill="none" stroke="#526887" stroke-width="1"/></svg></button>`;
 }
 
   let accountingDriverSort = 0;
