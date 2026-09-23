@@ -12,6 +12,7 @@ import {
 import { ACCOUNTING_TABLE, ACCOUNTING_ROUTES_TABLE, loadPricingData, calcRoute, getPricingTiers, getPricingSettings } from './accountingcalc.js';
 import { releaseToAljex } from './aljex-outbox.js';
 import { saveAccountingFields } from './accounting-save.js';
+import { initAccountingLoadSearch } from './accounting-load-search.js';
 const pendingAccountingChecks = new Set();
 
 async function saveAccountingCheckbox(rec, patch, label) {
@@ -543,6 +544,9 @@ export function renderDriverStatsTable() {
   }
   export async function initAccountingPage() {
     console.log("accounting.js build marker: 2026-08-13-d"); // confirms THIS version's code actually ran — check DevTools Console for this exact string
+    // Reaches any load by its identifiers, independently of the location tab
+    // and date the rest of this page is pinned to.
+    initAccountingLoadSearch();
     // Accounting looks back further than the boards do — override the
     // shared min/max just for this page's calendar.
     state.minDate = dateKey(addDays(todayDate(), -60));

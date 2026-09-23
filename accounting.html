@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Accounting</title>
   <!-- BUILD MARKER: 2026-08-28-accounting-driver-profile -->
-  <link rel="stylesheet" href="loadboard.css?v=20260923-accounting-push">
+  <link rel="stylesheet" href="loadboard.css?v=20260923-load-search">
 </head>
 <body>
   <div class="topbar">
@@ -26,6 +26,18 @@
         <input type="number" id="fsc-rate-input" step="0.01" min="0" style="width:80px; padding:6px 8px; border:1px solid var(--slate-500); border-radius:var(--radius-sm);">
         <button class="btn" id="btn-save-fsc">Save FSC Rate</button>
       </div>
+    </div>
+    <!-- Reaches any load in the database by Trip ID, Route ID, Load # or
+         PRO #, regardless of the location tab and date below: the sheet is
+         one location on one day, and a load being asked about is rarely
+         today's. Matching is exact — see accounting-load-search.js. -->
+    <div class="acct-search" id="acct-load-search">
+      <label class="acct-search-label" for="acct-load-search-input">Find a load</label>
+      <input type="search" id="acct-load-search-input" class="acct-search-input"
+             placeholder="Trip ID, Route ID, Load # or PRO #"
+             autocomplete="off" spellcheck="false" enterkeyhint="search">
+      <button type="button" class="btn" id="acct-load-search-go">Search</button>
+      <div class="acct-search-results hidden" id="acct-load-search-results" role="region" aria-live="polite" aria-label="Load search results"></div>
     </div>
     <div class="location-tabs" id="acct-location-tabs">
       <button type="button" class="location-tab" data-location="atlanta">Atlanta</button>

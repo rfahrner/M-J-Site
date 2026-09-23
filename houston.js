@@ -623,13 +623,25 @@ export const HOUSTON_TABLE = "loads_houston";
 
   export function initHoustonBoardPage(info) {
     state.activeLocation = "houston";
+    // ?load=<id>&date=<YYYY-MM-DD> — how the Accounting page's load search
+    // reaches a Houston load. The Houston modal's markup only exists on this
+    // page, so the search sends the person here rather than trying to render
+    // a modal that isn't there.
+    const deepLink = new URLSearchParams(window.location.search);
+    const requestedLoad = deepLink.get("load");
     if ($("#btn-night-shift")) {
       $("#btn-night-shift").addEventListener("click", () => {
         state.nightShift = !state.nightShift;
         loadAndRenderHoustonBoard();
       });
     }
-    loadAndRenderHoustonBoard();
+    if (requestedLoad) {
+      void openHoustonLoadByDbId(requestedLoad, deepLink.get("date")).then((opened) => {
+        if (!opened) setDriverSyncStatus(`Load ${requestedLoad} isn't on the Houston board for that date.`, "error");
+      });
+    } else {
+      loadAndRenderHoustonBoard();
+    }
     setupHoustonRealtimeSync();
     loadHoustonDatesWithData().catch((e) => console.error("loadHoustonDatesWithData() failed:", e));
     initAvailableSection();
@@ -812,6 +824,23 @@ export const HOUSTON_TABLE = "loads_houston";
     // Add Load modal on this page saves via the Houston path instead
     const alSubmit = $("#al-submit");
     if (alSubmit) alSubmit.addEventListener("click", submitHoustonAddLoad);
+  }
+
+  // Opens a Houston load by its database id, from somewhere off this board --
+  // today, the Accounting page's load search.
+  //
+  // The board shows one day at a time and a searched-for load is rarely
+  // today's, so the date comes along with the id and is switched to first.
+  // setHoustonActiveDate() refuses anything outside the calendar's range,
+  // which is right for a person clicking arrows and wrong for a load that
+  // demonstrably exists, so this sets the date directly.
+  export async function openHoustonLoadByDbId(dbId, shiftDate) {
+    if (shiftDate) state.activeDate = shiftDate;
+    await loadAndRenderHoustonBoard();
+    const row = getHoustonSheet(state.activeDate).find((r) => String(r.dbId) === String(dbId));
+    if (!row) return false;
+    openHoustonLoadDetailsModal(row.id);
+    return true;
   }
 
   export function setHoustonActiveDate(newKey) {

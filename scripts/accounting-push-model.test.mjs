@@ -56,8 +56,13 @@ check('the sheet draws a sticky from push_note', /function acctPushStickyHtml/.t
 const STICKY = /function acctPushStickyHtml[\s\S]*?\n\}/.exec(ACCT)[0];
 check('nothing is drawn when there is no note', /if \(!rec\.push_note\) return "";/.test(STICKY), true);
 check('the note is the tooltip', /title="\$\{escapeHtml\(title\)\}"/.test(STICKY), true);
-check('it sits next to the driver name',
-  /rec\.driver_name_text \|\| "—"\)\}\$\{acctPushStickyHtml\(rec\)\}/.test(ACCT), true);
+// In the driver-name cell, after the name. It used to require the two to be
+// literally adjacent, which broke the moment the note icon was added between
+// them -- a false alarm about markup order, not about where the sticky lives.
+const DRIVER_CELL = /<td>\$\{escapeHtml\(rec\.driver_name_text[\s\S]*?<\/td>/.exec(ACCT)?.[0] || '';
+check('it sits in the driver name cell', /\$\{acctPushStickyHtml\(rec\)\}/.test(DRIVER_CELL), true);
+check('after the name, not before it',
+  DRIVER_CELL.indexOf('acctPushStickyHtml') > DRIVER_CELL.indexOf('driver_name_text'), true);
 check('clicking it clears the note', /data-acct-dismiss-push/.test(ACCT), true);
 const DISMISS = /async function dismissAccountingPushNote[\s\S]*?\n\}/.exec(ACCT)[0];
 // Only the flag is cleared. The figure the push wrote stays.
