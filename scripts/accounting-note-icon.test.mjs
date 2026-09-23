@@ -31,3 +31,26 @@ test('click routes to the load Notes tab without intercepting the load-number bu
  assert.match(board,/initialTab === 'notes' && loadDetailsState\?\.rowId === row.id/);
  assert.match(board,/loadDetailsState.activeTab = 'notes';\s+renderLoadDetailsTabs\(\)/);
 });
+
+
+test('rendered accounting driver cell contains the blank or yellow Notes shortcut',async()=>{
+ const f=fixture([{id:1,shift_id:10,note_text:'Load note'}]);
+ await f.refresh([10,11]);
+ const ctx=vm.createContext({
+  LOCATIONS_WITH_LEVELS:['atlanta'],LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST:['delaware'],LOCATIONS_WITHOUT_FSC:['atlanta'],
+  escapeHtml:value=>String(value ?? ''),acctMilesStopsHtml:()=>({miles:'10',stops:'1'}),
+  acctPushStickyHtml:()=>'<span data-existing-push-note>Existing push note</span>',
+  accountingNoteButton:f.button,acctRouteIdsHtml:()=>'',acctRoutesChipsHtml:()=>'',fmtMoney:()=>'',pendingAccountingChecks:new Set()
+ });
+ const fn=source.match(/function accountingRowHtml\(rec\) \{[\s\S]*?\n  \}/);
+ assert.ok(fn);vm.runInContext(fn[0],ctx);
+ const render=vm.runInContext('accountingRowHtml',ctx);
+ for(const location of ['atlanta','delaware','buildingc','houston']) {
+  for(const [shiftId,yellow] of [[10,true],[11,false]]) {
+   const html=render({id:5,source_shift_id:shiftId,location,driver_name_text:'Test Driver',status:'active'});
+   const driverCell=html.match(/<td>Test Driver[\s\S]*?<\/td>/)?.[0];
+   assert.ok(driverCell,location);assert.match(driverCell,/data-acct-load-notes="5"/);
+   assert.equal(driverCell.includes('has-notes'),yellow);assert.match(driverCell,/data-existing-push-note/);
+  }
+ }
+});
