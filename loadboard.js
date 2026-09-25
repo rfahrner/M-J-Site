@@ -721,7 +721,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       "rate",
       "email", "dispatcherPhone", "shiftDate", "rating", "driverPreference", "shiftHosLeft", "revLevel", // shift-level, hidden per spec
       "routeEstHours", // trip-level, hidden per spec
-      "backhaulLocation", // asked for by name: it is collected and kept, but not on the board
+      "backhaulLocation", "salvageBhaulRefusedBy", // asked for by name: collected and kept, but not on the board
       "backhaulType", "etaToFinalStop", "estRouteComplete", "etaNextDispatch", "tripCallTime", // not in the latest spec — kept but hidden, not deleted
     ]),
     editingDriverId: null,

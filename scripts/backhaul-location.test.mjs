@@ -76,6 +76,16 @@ check('hidden on load', HIDDEN.includes('"backhaulLocation"'), true);
 // Without a stylesheet rule the Columns toggle does nothing at all.
 check('the stylesheet can hide it', CSS.includes('table.board.hide-col-backhaulLocation .col-backhaulLocation'), true);
 
+console.log('\n4b. Refused By is hidden too');
+// Same treatment, same reasoning: still collected, still editable, just not
+// taking up width on a board people read for times and routes.
+check('hidden on load', HIDDEN.includes('"salvageBhaulRefusedBy"'), true);
+check('the stylesheet can hide it', CSS.includes('table.board.hide-col-salvageBhaulRefusedBy .col-salvageBhaulRefusedBy'), true);
+// Hiding must not remove it: it stays in TRIP_SUBCOLS and in the order, so the
+// Columns panel can put it back and nobody loses a field they were using.
+check('still a real column', /\{ key: "salvageBhaulRefusedBy", label: "Refused By"/.test(BOARD), true);
+check('still in the default order', ORDER.includes('"salvageBhaulRefusedBy"'), true);
+
 console.log('\n5. the prompt comes before the text');
 const HANDLER = /if \(t\.checked && \(t\.dataset\.field === "salvage" \|\| t\.dataset\.field === "backhaul"\)\) \{[\s\S]*?\n          \}/.exec(BOARD)[0];
 check('backhaul opens the location modal', /openBackhaulLocationModal\(found\.row, trip, phone\)/.test(HANDLER), true);
