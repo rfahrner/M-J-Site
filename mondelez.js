@@ -345,6 +345,11 @@ function toggleMondelezShiftComplete(rowId) {
   saveMondelezRowNow(row);
   renderMondelezTable(); // completed rows sort to the bottom and collapse to a pill
 }
+function updateMondelezMcCell(row) {
+  const cell = document.getElementById(row.id)?.querySelector(".pin-mdz-mc .static-text");
+  if (cell) cell.textContent = (row.driverId ? findDriver(row.driverId)?.mc : "") || "";
+}
+
 function mondelezRowHtml(row) {
   const drv = row.driverId ? findDriver(row.driverId) : null;
   const displayName = drv ? drv.name : row.driverName;
@@ -356,7 +361,7 @@ function mondelezRowHtml(row) {
     // way back into the full record (click the pill to open Load
     // Details, or right-click the row for "Mark Shift Incomplete" to
     // expand it back to the full editable row).
-    const collapsedCols = showLocationCol ? 17 : 16;
+    const collapsedCols = showLocationCol ? 18 : 17;
     return `<tr id="${row.id}" class="${rowClasses}">
     <td class="pin pin-select"><input type="checkbox" class="chk" data-action="toggle-mdz-select" data-mdz-row="${row.id}" ${row.selected ? "checked" : ""} title="Select"></td>
     <td class="pin pin-text">
@@ -376,6 +381,7 @@ function mondelezRowHtml(row) {
     </td>
     ${showLocationCol ? `<td class="col-mdz-location"><span class="static-text">${escapeHtml(mondelezLocationLabel(row.location))}</span></td>` : ""}
     <td class="pin pin-pro${row.shiftComplete ? " shift-complete-tint" : ""}"><div class="cell-with-link"><input class="cell-input" placeholder="Aljex#" data-mdz-row="${row.id}" data-mdz-field="aljexNumber" value="${escapeHtml(row.aljexNumber)}">${row.aljexNumber ? `<button type="button" class="cell-link-btn" data-open-mdz-load="${row.id}" title="Open load details">↗</button>` : ""}</div></td>
+    <td class="pin pin-mdz-mc"><span class="static-text">${escapeHtml(drv?.mc || "")}</span></td>
     <td class="pin pin-driver">
       <div class="driver-name-wrap"><input class="cell-input" data-driver-ac="true" placeholder="Type driver name…" data-mdz-row="${row.id}" data-mdz-field="driverName" value="${escapeHtml(displayName)}"></div>
     </td>
@@ -416,6 +422,7 @@ function renderMondelezTable() {
     <th class="pin pin-text"></th>
     ${showLocationCol ? `<th class="col-mdz-location">Location</th>` : ""}
     <th class="pin pin-pro">Aljex #</th>
+    <th class="pin pin-mdz-mc">MC</th>
     <th class="pin pin-driver">Driver</th>
     <th class="col-cell">Cell</th>
     <th class="col-shiftStart">Start</th>
@@ -432,7 +439,7 @@ function renderMondelezTable() {
     <th class="col-mdz-image">Route Image</th>
     <th class="col-availRemove"></th>
   </tr></thead>`;
-  const addRowHtml = `<tr class="quick-add-row"><td colspan="${showLocationCol ? 19 : 18}"><button type="button" class="quick-add-btn" id="btn-mdz-add-row"><span class="quick-add-btn-label">+ Add Row</span></button></td></tr>`;
+  const addRowHtml = `<tr class="quick-add-row"><td colspan="${showLocationCol ? 20 : 19}"><button type="button" class="quick-add-btn" id="btn-mdz-add-row"><span class="quick-add-btn-label">+ Add Row</span></button></td></tr>`;
   $("#mondelez-table").innerHTML = thead + `<tbody>${displayRows.map(mondelezRowHtml).join("")}${addRowHtml}</tbody>`;
   const emptyState = $("#mondelez-empty-state");
   if (emptyState) emptyState.classList.toggle("hidden", rows.length > 0);
@@ -1112,6 +1119,7 @@ export async function initMondelezPage() {
       if (row) {
         row.driverName = drv.name;
         row.driverId = drv.id;
+        updateMondelezMcCell(row);
         scheduleMondelezRowSave(row);
       }
     });
@@ -1138,6 +1146,7 @@ export async function initMondelezPage() {
       row.driverId = null;
       const match = driversForLocation("mondelez").find((d) => d.name.toLowerCase() === t.value.trim().toLowerCase());
       if (match) row.driverId = match.id;
+      updateMondelezMcCell(row);
       scheduleMondelezRowSave(row);
       if (t.dataset.driverAc === "true") updateDriverAutocomplete(t, "mondelez");
       return;

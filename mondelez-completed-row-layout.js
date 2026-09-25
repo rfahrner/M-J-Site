@@ -50,6 +50,7 @@ function completedRowCells(row) {
     <td class="pin pin-pro shift-complete-tint">
       <button type="button" class="trip-chip trip-segment-done" data-open-mdz-load="${row.id}" title="Completed load — click to view or edit">${escapeHtml(row.aljexNumber || '(no Aljex#)')}</button>
     </td>
+    <td class="pin pin-mdz-mc"><span class="static-text">${escapeHtml(drv?.mc || "")}</span></td>
     <td class="pin pin-driver">
       <div class="driver-name-wrap"><input class="cell-input" data-driver-ac="true" placeholder="Type driver name…" data-mdz-row="${row.id}" data-mdz-field="driverName" value="${escapeHtml(displayName || '')}"></div>
     </td>
