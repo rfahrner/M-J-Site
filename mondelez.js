@@ -52,7 +52,7 @@ const MONDELEZ_LOCATION_KEYS = new Set(MONDELEZ_LOCATIONS.map((l) => l.key));
 export const mondelezState = {
   rowsByDate: {},          // dateKey -> Row[] (every location, filtered client-side for display)
   datesWithData: new Set(),
-  activeTab: "westchester", // a location key, or "combined"
+  activeTab: "combined", // a location key, or "combined"
 };
 let mondelezRateSettings = null; // { [locationKey]: { daily_rate, stop_rate, over_mileage_threshold, over_mileage_rate } }
 /* ---------------- data model ---------------- */
@@ -473,7 +473,7 @@ function renderMondelezChrome() {
 function renderMondelezTabs() {
   const wrap = $("#mondelez-location-tabs");
   if (!wrap) return;
-  const allTabs = [...MONDELEZ_LOCATIONS, { key: "combined", label: "All Locations (combined)" }];
+  const allTabs = [{ key: "combined", label: "All Locations (combined)" }, ...MONDELEZ_LOCATIONS];
   wrap.innerHTML = allTabs.map((t) => `<button type="button" class="location-tab ${mondelezState.activeTab === t.key ? "is-active" : ""}" data-mdz-tab="${t.key}">${escapeHtml(t.label)}</button>`).join("");
 }
 function renderMondelezRateSettingsPanel() {
