@@ -86,12 +86,34 @@ const laState = {
   notesByDate: {},
   includedFields: new Set(FIELD_DEFS.filter((f) => f.category === 'default').map((f) => f.key)),
   reportRange: { start: '', end: '' }, // Generate Report's own single range — separate from selectedRanges, since a report is for one coherent period, not a multi-select combination
+  loadError: null, // a query that came back empty because it FAILED, not because the period was quiet — see reportFetchFailure()
 };
 
 function chunk(arr, size) {
   const out = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
+}
+
+/*
+ * A failed query and a quiet week both arrive here as an empty array, and this
+ * page turns an empty array into a report full of zeros. That is how it came
+ * to show $1,037,928.59 of Q3 revenue beside 0 drivers, 0 loads and 0 miles
+ * for weeks: analytics_shifts_all did not expose driver_name_text or
+ * load_cancelled, PostgREST rejected the whole shifts request over the two
+ * missing names, and the only trace was a console line nobody had open.
+ *
+ * Revenue came from a different view that answered fine, so the page looked
+ * like a business having a bad quarter rather than a broken request. Whatever
+ * else changes, a fetch that failed must never again be reported as a number.
+ */
+let fetchFailures = [];
+function beginFetchBatch() { fetchFailures = []; }
+function reportFetchFailure(table, error) {
+  fetchFailures.push(`${table}: ${error?.message || error?.code || 'request failed'}`);
+}
+function fetchBatchError() {
+  return fetchFailures.length ? [...new Set(fetchFailures)].join('; ') : null;
 }
 
 async function fetchAllRows(table, columns, applyFilters) {
@@ -102,7 +124,7 @@ async function fetchAllRows(table, columns, applyFilters) {
     let q = supabaseClient.from(table).select(columns).range(from, from + PAGE_SIZE - 1);
     if (applyFilters) q = applyFilters(q);
     const { data, error } = await q;
-    if (error) { console.error(`Failed to load ${table}:`, error); return all; }
+    if (error) { console.error(`Failed to load ${table}:`, error); reportFetchFailure(table, error); return all; }
     all = all.concat(data || []);
     if (!data || data.length < PAGE_SIZE) break;
     from += PAGE_SIZE;
@@ -182,6 +204,7 @@ function buildSelectedRanges(mode, years, subUnits) {
 /* ---------------- Fetch + compute ---------------- */
 
 async function fetchRangeData(startDate, endDate, location) {
+  beginFetchBatch();
   const shifts = await fetchAllRows(
     // driver_name_text, load_cancelled and called_off are all needed to count
     // drivers the way the business does -- see countDrivers().
@@ -191,17 +214,20 @@ async function fetchRangeData(startDate, endDate, location) {
   const shiftIds = shifts.map((s) => s.id);
 
   let trips = [];
+  let tripError = null;
   for (const idChunk of chunk(shiftIds, 150)) {
     const { data, error } = await supabaseClient.from(TRIPS_TABLE).select('shift_id, route_id, trip_id, route_miles, stop_count, salvage, backhaul').in('shift_id', idChunk);
-    if (error) { console.error('Failed to load trips (chunk):', error); continue; }
+    if (error) { console.error('Failed to load trips (chunk):', error); tripError = error; continue; }
     trips = trips.concat(data || []);
   }
+  if (tripError) reportFetchFailure(TRIPS_TABLE, tripError);
 
   const accountingRows = await fetchAllRows(
     ACCOUNTING_TABLE, 'shift_date, total_cost, total_revenue',
     (q) => q.eq('location', location).gte('shift_date', startDate).lte('shift_date', endDate)
   );
 
+  laState.loadError = fetchBatchError();
   return { shifts, trips, accountingRows };
 }
 
@@ -457,7 +483,16 @@ function renderTable() {
   table.innerHTML = `<thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}${totalRow}</tbody>`;
   const emptyState = $('#la-empty-state');
   const hasAnyData = laState.displayRows.some((r) => r.rowType === 'day' && (r.routes > 0 || r.drivers > 0));
-  if (emptyState) emptyState.classList.toggle('hidden', hasAnyData);
+  if (emptyState) emptyState.classList.toggle('hidden', hasAnyData || !!laState.loadError);
+  const errorBanner = $('#la-load-error');
+  if (errorBanner) {
+    errorBanner.classList.toggle('hidden', !laState.loadError);
+    // Naming the figures that are wrong matters more than naming the query:
+    // somebody is about to read this table out in a meeting.
+    errorBanner.textContent = laState.loadError
+      ? `Couldn't load operational data (${laState.loadError}). Driver, load, mileage and stop counts below are NOT accurate — they are showing zero because the query failed, not because there was no work. Revenue and cost are unaffected.`
+      : '';
+  }
 }
 
 function renderRangeDisplay() {
