@@ -14,7 +14,7 @@ async function alertsAt(iso, tripOverrides = {}, shiftOverrides = {}) {
   const ctx = vm.createContext({ ...time, Date: Clock, state: { activeLocation: 'atlanta' }, ALL_ALERT_LOCATIONS: ['atlanta'], SHIFTS_TABLE: 'shifts', TRIPS_TABLE: 'trips',
     supabaseClient: { from(table) { return { select() { return this; }, in(field, values) { requests.push({ table, field, values }); return this; }, then(resolve) { resolve({ data: table === 'shifts' ? [shift] : table === 'trips' ? [trip] : [] }); } }; } },
     parseHHMM: time.clockMinutes, minsToClock: min => `${String(Math.floor(min / 60) % 24).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`,
-    driverNameForShift: () => 'Rodney', driverPhoneForShift: () => '', PRE_SHIFT_ESCALATION_MIN: 15, PRE_SHIFT_CALL_FOLLOWUP_MIN: 30, PRE_SHIFT_TEXT_LEAD_MIN: 60, IDLE_THRESHOLD_MIN: 45, PAPERWORK_FOLLOWUP_MIN: 30, LAST_STOP_RETURN_FOLLOWUP_MIN: 30, AT_DC_FOLLOWUP_MIN: 45
+    driverNameForShift: () => 'Rodney', driverPhoneForShift: () => '', PRE_SHIFT_ESCALATION_MIN: 15, PRE_SHIFT_CALL_FOLLOWUP_MIN: 30, PRE_SHIFT_TEXT_LEAD_MIN: 60, IDLE_THRESHOLD_MIN: 45, PAPERWORK_FOLLOWUP_MIN: 30, LAST_STOP_RETURN_FOLLOWUP_MIN: 30, AT_DC_FOLLOWUP_MIN: 45, OPERATING_WINDOW_MIN: 12 * 60
   });
   vm.runInContext(scan.replace('export ', ''), ctx);
   return { alerts: await vm.runInContext('scanForBoardAlerts()', ctx), requests };

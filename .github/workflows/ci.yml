@@ -90,6 +90,9 @@ jobs:
       - name: Test overnight alert timing
         run: node --test scripts/overnight-alerts.test.mjs
 
+      - name: Test alerts age out finished shifts
+        run: node scripts/alerts-operating-window.test.mjs
+
       - name: Test alerts skip settled loads
         run: node scripts/alerts-skip-settled-loads.test.mjs
 
