@@ -96,6 +96,9 @@ jobs:
       - name: Test Stop Times modal and Mondelez landing tab
         run: node scripts/stop-times-modal.test.mjs
 
+      - name: Test backhaul location prompt
+        run: node scripts/backhaul-location.test.mjs
+
       - name: Test archive documents and Outlook fallback
         run: node --test scripts/archive-documents.test.mjs scripts/text-outlook-fallback.test.mjs
 

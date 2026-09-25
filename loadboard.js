@@ -73,6 +73,17 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   const SALVAGE_MESSAGE = "This is D&L, you have a salvage pick up at your last stop. Please Call or text me your return info (what trailer the salvage is on, if anything was missing or damaged, and your ETA back) when you are done at your last stop, Also a pic of your stores in and out times.";
   const BACKHAUL_MESSAGE = "This is D&L, you have a Backhaul pickup at your last stop. Please Call or text me your return info (what trailer the load is on, if anything was missing or damaged, and your ETA back) when you are done at your last stop, Also a pic of your stores in and out times.";
 
+  // The same text with the pickup named: "a BEVCO Backhaul pickup". A driver
+  // who knows where they are collecting from does not have to ring in to ask.
+  // No location -- the dispatcher skipped the prompt, or it is an older route
+  // saved before this existed -- falls back to the unnamed wording rather than
+  // texting "you have a  Backhaul pickup".
+  function backhaulMessageFor(location) {
+    const where = String(location || "").trim();
+    if (!where) return BACKHAUL_MESSAGE;
+    return `This is D&L, you have a ${where} Backhaul pickup at your last stop. Please Call or text me your return info (what trailer the load is on, if anything was missing or damaged, and your ETA back) when you are done at your last stop, Also a pic of your stores in and out times.`;
+  }
+
   const TRIP_SUBCOLS = [
     { key: "routeId",     label: "Route ID",         type: "text", pistachio: true },
     { key: "tripId",      label: "Trip ID",           type: "text", pistachio: true },
@@ -84,6 +95,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     { key: "returnToDC",     label: "Return to DC",       type: "time", pistachio: true, excludeLocations: ["delaware"] },
     { key: "salvage",        label: "Salvage",            type: "checkbox", group: "backhaul", pistachio: true, excludeLocations: ["delaware"] },
     { key: "backhaul",       label: "B/Haul",             type: "checkbox", group: "backhaul", pistachio: true, excludeLocations: ["delaware"] },
+    { key: "backhaulLocation", label: "B/Haul Location",   type: "text", group: "backhaul", pistachio: true, excludeLocations: ["delaware"] },
     { key: "backhaulTrailerNumber", label: "B/Haul Trailer #",    type: "text", group: "backhaul", pistachio: true, excludeLocations: ["delaware"] },
     { key: "salvageBhaulRefusedBy", label: "Refused By",          type: "text", group: "backhaul", pistachio: true, excludeLocations: ["delaware"] },
     { key: "returnEtaToDc",   label: "Return ETA to DC",    type: "time", group: "backhaul", pistachio: true, excludeLocations: ["delaware"] },
@@ -101,11 +113,11 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
 
   // Versioned so the new requested default replaces any prior per-browser order.
   // Users can still drag columns afterward; this is the default shared by all boards.
-  const TRIP_COL_ORDER_STORAGE_KEY = "dl-trip-col-order-v2";
+  const TRIP_COL_ORDER_STORAGE_KEY = "dl-trip-col-order-v3";
   const DEFAULT_TRIP_COL_ORDER = [
     "routeId", "tripId", "trailerOut", "routeMiles", "stopCount",
     "dispatchTime", "lastStopDepart", "returnToDC", "salvage", "backhaul",
-    "backhaulTrailerNumber", "salvageBhaulRefusedBy", "returnEtaToDc", "routeImage",
+    "backhaulLocation", "backhaulTrailerNumber", "salvageBhaulRefusedBy", "returnEtaToDc", "routeImage",
     "routeEstHours", "backhaulType", "etaToFinalStop", "estRouteComplete", "etaNextDispatch", "tripCallTime",
   ];
 
@@ -709,6 +721,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       "rate",
       "email", "dispatcherPhone", "shiftDate", "rating", "driverPreference", "shiftHosLeft", "revLevel", // shift-level, hidden per spec
       "routeEstHours", // trip-level, hidden per spec
+      "backhaulLocation", // asked for by name: it is collected and kept, but not on the board
       "backhaulType", "etaToFinalStop", "estRouteComplete", "etaNextDispatch", "tripCallTime", // not in the latest spec — kept but hidden, not deleted
     ]),
     editingDriverId: null,
@@ -1916,6 +1929,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       if (returnTime) parts.push(`Return to DC: ${returnTime}`);
       if (trip.tripId) parts.push(`Trip ID: ${trip.tripId}`);
       if (trip.trailerOut) parts.push(`Trailer Out: ${trip.trailerOut}`);
+      if (trip.backhaulLocation) parts.push(`B/Haul Location: ${trip.backhaulLocation}`);
       if (trip.backhaulTrailerNumber) parts.push(`B/Haul Trailer #: ${trip.backhaulTrailerNumber}`);
       returnInfoEl.textContent = parts.join("   ·   ");
     }
@@ -4469,6 +4483,98 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     $("#send-text-message").focus();
   }
 
+  /* ---------------- Backhaul location prompt ----------------
+     Ticking B/Haul already texted the driver. It now asks where the pickup is
+     first, so the text can name it -- "a BEVCO Backhaul pickup" rather than
+     "a Backhaul pickup" -- and the answer is kept on the route, in the hidden
+     B/Haul Location column and in Load Details.
+
+     Cancelling leaves the B/Haul tick alone. The tick is a fact about the
+     route and has already saved; declining to name the pickup is a separate
+     decision, and un-ticking it behind the dispatcher's back would be worse
+     than sending nothing. */
+  const BACKHAUL_LOCATION_MODAL_ID = "modal-backhaul-location";
+
+  function ensureBackhaulLocationModal() {
+    if ($("#" + BACKHAUL_LOCATION_MODAL_ID)) return;
+    const overlay = document.createElement("div");
+    overlay.id = BACKHAUL_LOCATION_MODAL_ID;
+    overlay.className = "overlay hidden";
+    overlay.innerHTML = `
+      <div class="modal" style="max-width:460px;">
+        <div class="modal-header">
+          <h3>Backhaul location</h3>
+          <button class="modal-close" id="bhl-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="subtext" id="bhl-context" style="margin-bottom:12px;"></div>
+          <div class="field">
+            <label for="bhl-input">Where is the backhaul pickup?</label>
+            <input class="cell-input" id="bhl-input" style="width:100%;" autocomplete="off" placeholder="e.g. BEVCO">
+            <div class="subtext" style="margin-top:4px;">Named in the driver's text. Leave blank to send the text without a location.</div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" id="bhl-cancel">Cancel</button>
+          <button class="btn" id="bhl-save">Save &amp; text driver</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener("click", (e) => { if (e.target.id === BACKHAUL_LOCATION_MODAL_ID) closeBackhaulLocationModal(); });
+    $("#bhl-close").addEventListener("click", closeBackhaulLocationModal);
+    $("#bhl-cancel").addEventListener("click", closeBackhaulLocationModal);
+    $("#bhl-save").addEventListener("click", () => void confirmBackhaulLocation());
+    $("#bhl-input").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); void confirmBackhaulLocation(); }
+      if (e.key === "Escape") closeBackhaulLocationModal();
+    });
+  }
+
+  let backhaulLocationTarget = null; // { rowId, tripId, phone }
+
+  function closeBackhaulLocationModal() {
+    backhaulLocationTarget = null;
+    $("#" + BACKHAUL_LOCATION_MODAL_ID)?.classList.add("hidden");
+  }
+
+  function openBackhaulLocationModal(row, trip, phone) {
+    ensureBackhaulLocationModal();
+    // Held by id, not by object: a redraw or a realtime merge between opening
+    // this and confirming it can replace the row this was opened from.
+    backhaulLocationTarget = { rowId: row.id, tripId: trip.id, phone: phone || "" };
+    const context = [labelForRow(row), trip.routeId || trip.tripId || "route"].filter(Boolean).join(" — ");
+    $("#bhl-context").textContent = context;
+    const input = $("#bhl-input");
+    input.value = trip.backhaulLocation || "";
+    $("#" + BACKHAUL_LOCATION_MODAL_ID).classList.remove("hidden");
+    input.focus();
+    input.select();
+  }
+
+  async function confirmBackhaulLocation() {
+    const target = backhaulLocationTarget;
+    if (!target) return;
+    const value = ($("#bhl-input")?.value || "").trim();
+    closeBackhaulLocationModal();
+
+    const found = findRowAnywhere(target.rowId);
+    const trip = found ? found.row.trips.find((t) => t.id === target.tripId) : null;
+    if (!found || !trip) {
+      setDriverSyncStatus("That route is no longer on the board, so the backhaul location was not saved.", "error");
+      return;
+    }
+    if (trip.backhaulLocation !== value) {
+      const before = trip.backhaulLocation;
+      trip.backhaulLocation = value;
+      markFieldDirty(dirtyTripFields, trip.id, "backhaulLocation");
+      await saveTripNow(found.row, trip, found.row.trips.indexOf(trip) + 1);
+      logChange(found.row.dbId, `${labelForRow(found.row)} — ${trip.routeId || trip.tripId || "route"}`, "backhaul_location", before, value);
+      renderBoardTable();
+    }
+    if (target.phone) textDriverPhone(target.phone, backhaulMessageFor(value));
+    else setDriverSyncStatus("Marked as backhaul — no phone on file for this driver to send the heads-up text.", "error");
+  }
+
   export function textDriverPhone(rawPhone, prefilledMessage) {
     // This is an intentional one-driver text from the dispatcher's Text
     // action. DNU exclusion applies to bulk/group sends, not this direct path.
@@ -5546,6 +5652,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
             <fieldset class="field-box"><legend>Route ID</legend><div class="static-text">${escapeHtml(trip.routeId || "—")}</div></fieldset>
             <fieldset class="field-box"><legend>Trip ID</legend><div class="static-text">${escapeHtml(trip.tripId || "—")}</div></fieldset>
             <fieldset class="field-box"><legend>Trailer #</legend><div class="static-text">${escapeHtml(trip.trailerOut || "—")}</div></fieldset>
+            <fieldset class="field-box"><legend>B/Haul Location</legend><div class="static-text">${escapeHtml(trip.backhaulLocation || "—")}</div></fieldset>
             <fieldset class="field-box"><legend>Return Trailer #</legend><div class="static-text">${escapeHtml(trip.backhaulTrailerNumber || "—")}</div></fieldset>
             <fieldset class="field-box"><legend>Route Miles</legend><div class="static-text">${escapeHtml(trip.routeMiles || "—")}</div></fieldset>
             <fieldset class="field-box"><legend>Stops</legend><div class="static-text">${escapeHtml(trip.stopCount || "—")}</div></fieldset>
@@ -5574,6 +5681,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
             <fieldset class="field-box"><legend>Route ID</legend><input class="cell-input" id="ld-tr-routeId" value="${escapeHtml(d.routeId)}"></fieldset>
             <fieldset class="field-box"><legend>Trip ID</legend><input class="cell-input" id="ld-tr-tripId" value="${escapeHtml(d.tripId)}"></fieldset>
             <fieldset class="field-box"><legend>Trailer #</legend><input class="cell-input" id="ld-tr-trailerOut" value="${escapeHtml(d.trailerOut)}"></fieldset>
+            <fieldset class="field-box"><legend>B/Haul Location</legend><input class="cell-input" id="ld-tr-backhaul-location" value="${escapeHtml(d.backhaulLocation)}"></fieldset>
             <fieldset class="field-box"><legend>Return Trailer #</legend><input class="cell-input" id="ld-tr-return-trailer-number" value="${escapeHtml(d.backhaulTrailerNumber)}"></fieldset>
             <fieldset class="field-box"><legend>Route Miles</legend><input class="cell-input" id="ld-tr-routeMiles" value="${escapeHtml(d.routeMiles)}"></fieldset>
             <fieldset class="field-box"><legend>Stops</legend><input class="cell-input" id="ld-tr-stopCount" value="${escapeHtml(d.stopCount)}"></fieldset>
@@ -5661,6 +5769,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
         stops: (loadDetailsState.stopsByTrip[tabKey] || []).map((s) => ({ ...s })),
         complete: !!trip.complete, ppwkReceived: !!trip.ppwkReceived, checkedIn: !!trip.checkedIn,
         returnDropLocation: trip.returnDropLocation || "", backhaulTrailerNumber: trip.backhaulTrailerNumber || "",
+        backhaulLocation: trip.backhaulLocation || "",
         dispatchTime: trip.dispatchTime || "", returnEtaToDc: trip.returnEtaToDc || "",
       };
     }
@@ -5825,6 +5934,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       const beforeRouteId = trip.routeId;
       const beforeTrailerOut = trip.trailerOut;
       const beforeBackhaulTrailerNumber = trip.backhaulTrailerNumber;
+      const beforeBackhaulLocation = trip.backhaulLocation;
       const beforeTripDriver = trip.driverId ? findDriver(trip.driverId) : null;
       const beforeTripDriverName = beforeTripDriver ? beforeTripDriver.name : "";
       trip.routeId = $("#ld-tr-routeId").value.trim();
@@ -5832,6 +5942,8 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       trip.trailerOut = $("#ld-tr-trailerOut").value.trim();
       const returnTrailerEl = $("#ld-tr-return-trailer-number");
       if (returnTrailerEl) trip.backhaulTrailerNumber = returnTrailerEl.value.trim();
+      const backhaulLocationEl = $("#ld-tr-backhaul-location");
+      if (backhaulLocationEl) trip.backhaulLocation = backhaulLocationEl.value.trim();
       trip.routeMiles = $("#ld-tr-routeMiles").value.trim();
       trip.stopCount = $("#ld-tr-stopCount").value.trim();
       trip.notes = $("#ld-tr-notes").value.trim();
@@ -5874,6 +5986,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       if (beforeRouteId !== trip.routeId) logChange(row.dbId, labelForRow(row), "route_id", beforeRouteId, trip.routeId);
       if (beforeTrailerOut !== trip.trailerOut) logChange(row.dbId, labelForRow(row), "trailer_out", beforeTrailerOut, trip.trailerOut);
       if (beforeBackhaulTrailerNumber !== trip.backhaulTrailerNumber) logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "backhaul_trailer_number", beforeBackhaulTrailerNumber, trip.backhaulTrailerNumber);
+      if (beforeBackhaulLocation !== trip.backhaulLocation) logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "backhaul_location", beforeBackhaulLocation, trip.backhaulLocation);
       if (driverNameVal && beforeTripDriverName.toLowerCase() !== driverNameVal.toLowerCase()) {
         logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "driver_reassigned", beforeTripDriverName, driverNameVal);
       }
@@ -7954,9 +8067,17 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
           if (t.checked && (t.dataset.field === "salvage" || t.dataset.field === "backhaul")) {
             const drv = trip.driverId ? findDriver(trip.driverId) : (found.row.driverId ? findDriver(found.row.driverId) : null);
             const phone = drv ? drv.phone : found.row.cellSnapshot;
-            const message = t.dataset.field === "salvage" ? SALVAGE_MESSAGE : BACKHAUL_MESSAGE;
-            if (phone) textDriverPhone(phone, message);
-            else setDriverSyncStatus(`Marked as ${t.dataset.field} — no phone on file for this driver to send the heads-up text.`, "error");
+            if (t.dataset.field === "backhaul") {
+              // Where the pickup is comes first, so the text can name it. The
+              // no-phone case is reported from inside, after the location has
+              // been saved -- it is still worth recording even if nothing can
+              // be sent.
+              openBackhaulLocationModal(found.row, trip, phone);
+            } else if (phone) {
+              textDriverPhone(phone, SALVAGE_MESSAGE);
+            } else {
+              setDriverSyncStatus(`Marked as ${t.dataset.field} — no phone on file for this driver to send the heads-up text.`, "error");
+            }
           }
         }
       }
