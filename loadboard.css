@@ -940,6 +940,7 @@ tr.is-new td.pin { background-color: rgba(192,54,44,0.22) !important; }
 table.board .col-schneider { min-width: 105px; }
 table.board.hide-col-schneider .col-schneider,
 table.board.hide-col-carrierRate .col-carrierRate,
+table.board.hide-col-backhaulLocation .col-backhaulLocation,
 table.board.hide-col-rate .col-rate,
 table.board.hide-col-cell .col-cell,
 table.board.hide-col-dispatcherPhone .col-dispatcherPhone,
