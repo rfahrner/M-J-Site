@@ -12,8 +12,12 @@ function fixture(){
     GROUP_FOOTER_BUTTONS:['tg-send-now','tg-open-web','tg-open-batch','tg-confirm-sent','tg-finish'],
     escapeHtml:String,console:{error(){}},SUPABASE_URL:'test',
     filterNeverTextRecipients:allowed=>({allowed,blocked:[]}),formatTextAddress:String,
-    openOutlookWebDraft(){},openMailDraft(){},fetch:async()=>{calls++;throw Error('unavailable');}});
-  for(const name of ['setGroupFooter','showGroupOutlookFallback','renderGroupTextProgress','sendCurrentGroupBatchDirect','confirmGroupBatchSent','openCurrentGroupBatchInWeb','openCurrentGroupBatch','resetGroupTextState']){
+    openOutlookWebDraft(){},openMailDraft(){},fetch:async()=>{calls++;throw Error('unavailable');},
+    TEXT_FROM_MAILBOX:'memppw@dltransport.com'});
+  // renderGroupTextProgress() now draws the "send from memppw@dltransport.com"
+  // note once the batch has fallen back to Outlook, so its helper has to exist
+  // in here too or that branch throws.
+  for(const name of ['sendFromReminderHtml','setGroupFooter','showGroupOutlookFallback','renderGroupTextProgress','sendCurrentGroupBatchDirect','confirmGroupBatchSent','openCurrentGroupBatchInWeb','openCurrentGroupBatch','resetGroupTextState']){
     const match=src.match(new RegExp(`(?:async )?function ${name}\\([^\\n]*\\) \\{[\\s\\S]*?\\n  \\}|function ${name}\\([^\\n]*\\) \\{[^\\n]*\\}`));
     assert.ok(match,name);vm.runInContext(match[0],context);
   }
