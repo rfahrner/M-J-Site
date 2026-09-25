@@ -1182,6 +1182,22 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     Object.entries(state.sheets).forEach(([k, rows]) => healUnlinkedDriverRows(rows, k.split("__")[0]));
     if (currentFile() === "driverlist.html") renderDriverList();
     else if (state.activeLocation && state.sheets[sheetKey(state.activeLocation, state.activeDate)]) renderBoardTable();
+    // And the Available list, which was the one thing this did not redraw.
+    //
+    // Every column of it except the name comes off the driver profile --
+    // carrier rate, cell, dispatcher phone, email, MC, rating -- so a list
+    // drawn before the pool arrived shows the name and six dashes. The name
+    // survives because it falls back to row.driverName, stored on the row
+    // itself, which is what made this look like data loss rather than a
+    // lookup miss.
+    //
+    // It is a race and it is lost about as often as it is won: the section
+    // renders from initBoardPage() while this fetch is still in flight, and
+    // whichever query returns second decides. Nothing redrew it afterwards,
+    // so a lost race stayed lost until a date change or an added row happened
+    // to rebuild it. Redrawing through the focus-preserving path because a
+    // dispatcher may already be typing a name in there.
+    renderAvailableTableKeepingFocus();
   }
 
   /* ---------------- saving loads to Supabase ---------------- */
