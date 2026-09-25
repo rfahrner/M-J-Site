@@ -1459,6 +1459,10 @@ table.available-table tbody tr:nth-child(even) { background: #fbfcfe; }
 .ld-stop-row { display: flex; gap: 14px; font-size: 12px; padding: 4px 0; border-bottom: 1px solid var(--line); }
 .ld-stop-edit-row { display: flex; gap: 8px; align-items: center; padding: 3px 0; }
 .ld-stop-edit-row span { font-size: 11px; font-weight: 700; color: var(--slate-500); width: 48px; flex-shrink: 0; }
+/* Time In / Time Out reuse .cell-input.small, which is 40px because that is
+   what a board cell needs. In the Stop Times modal that clipped the value --
+   "14:30" does not fit in 40px. There is room here, so take it. */
+.ld-stop-edit-row .cell-input { width: 92px; min-width: 92px; text-align: center; }
 .trip-add-btn {
   border: 1px dashed var(--slate-500);
   background: none;

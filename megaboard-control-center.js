@@ -336,7 +336,7 @@ function fieldLabel(field) {
   const labels = {
     driver_id: 'Driver assignment', driver_name_text: 'Driver', route_id: 'Route ID', trip_id: 'Trip ID',
     dispatch_time: 'Dispatch time', complete: 'Route complete', shift_complete: 'Load complete',
-    ppwk_received: 'Paperwork received', checked_in: 'Load checked in', route_image_path: 'Route image',
+    ppwk_received: 'Paperwork received', checked_in: 'Prospero check in/Post tripped', route_image_path: 'Route image',
     timesheet_received: 'Time sheet received', timesheet_start_time: 'Time sheet start', timesheet_end_time: 'Time sheet finish',
     eta_shift_report: 'Shift ETA', eta_for_shift_report: 'Shift ETA', next_call_time: 'Next call time',
     return_eta_to_dc: 'Return ETA to DC', return_drop_location: 'Trailer drop location', last_stop_depart: 'Last stop depart',
@@ -364,7 +364,7 @@ function describeHistoryChange(row) {
   if (field === 'complete') return { title: boolish(newValue) ? 'Route marked complete' : 'Route reopened', detail: '' };
   if (field === 'shift_complete') return { title: boolish(newValue) ? 'Load marked complete' : 'Load reopened', detail: '' };
   if (field === 'ppwk_received' && boolish(newValue)) return { title: 'Paperwork received', detail: '' };
-  if (field === 'checked_in' && boolish(newValue)) return { title: 'Load checked in', detail: '' };
+  if (field === 'checked_in' && boolish(newValue)) return { title: 'Prospero check in/Post tripped', detail: '' };
   if (field === 'route_image_path') return { title: 'Route image updated', detail: '' };
   if (field === 'timesheet_received' && boolish(newValue)) return { title: 'Time sheet received', detail: '' };
   if (field === 'route_id' && !oldValue && newValue) return { title: 'Route added', detail: `Route ${shortValue(newValue)}` };

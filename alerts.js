@@ -589,6 +589,11 @@ import './paperwork-load-integration.js';
     {
       label: "Mondelez",
       children: [
+        // First, because renderNav() points the parent tab at its first child.
+        // The page already defaults to the combined view, but the nav link
+        // carried ?loc=westchester, which overrode that default before it was
+        // ever read -- so clicking Mondelez always landed on West Chester.
+        { label: "All Locations", href: "mondelez.html?loc=combined" },
         { label: "West Chester", href: "mondelez.html?loc=westchester" },
         { label: "Morris", href: "mondelez.html?loc=morris" },
         { label: "Addison", href: "mondelez.html?loc=addison" },
@@ -600,7 +605,6 @@ import './paperwork-load-integration.js';
         { label: "Kent", href: "mondelez.html?loc=kent" },
         { label: "Salt Lake City", href: "mondelez.html?loc=saltlakecity" },
         { label: "New Berlin", href: "mondelez.html?loc=newberlin" },
-        { label: "All Locations", href: "mondelez.html?loc=combined" },
       ],
     },
     { label: "Racetrac", comingSoon: true },
