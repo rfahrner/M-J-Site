@@ -121,11 +121,16 @@ win.HTMLAnchorElement.prototype.click = function () {
 };
 const opens = [];
 win.open = (url, target, features) => { opens.push({ url, target, features }); return null; };
-const api = new Function('window', 'document', 'OUTLOOK_WEB_COMPOSE',
-  `${extractFunction(SRC, 'openMailDraft')}
+// The compose URL is now built rather than being one constant, because the
+// draft has to open inside the shared mailbox the texts go out from.
+const api = new Function('window', 'document', 'OUTLOOK_WEB_HOST', 'TEXT_FROM_MAILBOX',
+  `${extractFunction(SRC, 'outlookWebComposeUrl')}
+   ${extractFunction(SRC, 'openMailDraft')}
    ${extractFunction(SRC, 'openOutlookWebDraft')}
-   return { openMailDraft, openOutlookWebDraft };`
-)(win, win.document, /const OUTLOOK_WEB_COMPOSE = "([^"]+)"/.exec(SRC)[1]);
+   return { openMailDraft, openOutlookWebDraft, outlookWebComposeUrl };`
+)(win, win.document,
+  /const OUTLOOK_WEB_HOST = "([^"]+)"/.exec(SRC)[1],
+  /const TEXT_FROM_MAILBOX = "([^"]*)"/.exec(SRC)[1]);
 
 const ADDRS = ['15551230001@textbetter.com', '15551230002@textbetter.com'];
 const MESSAGE = 'Dispatch 0500, gate code 4417.';
@@ -142,8 +147,10 @@ api.openOutlookWebDraft(ADDRS, MESSAGE);
 check('a compose tab opened', opens.length, 1);
 check('in a new tab', opens[0]?.target, '_blank');
 checkTrue('with noopener', /noopener/.test(opens[0]?.features || ''));
-checkTrue('at the compose deeplink',
-  opens[0]?.url.startsWith('https://outlook.office.com/mail/deeplink/compose?'));
+// The mailbox sits in the path: that is what makes the draft compose AS the
+// shared mailbox instead of as whoever happens to be signed in.
+checkTrue('at the compose deeplink, inside the shared mailbox',
+  opens[0]?.url.startsWith('https://outlook.office.com/mail/memppw@dltransport.com/deeplink/compose?'));
 checkTrue('recipients unescaped', opens[0]?.url.includes(`to=${ADDRS.join(',')}`));
 // That endpoint rejects plus-encoding, so encodeURIComponent is the right one.
 checkTrue('body percent-encoded', opens[0]?.url.includes(`body=${encodeURIComponent(MESSAGE)}`));

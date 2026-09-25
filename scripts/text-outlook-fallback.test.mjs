@@ -11,11 +11,23 @@ function fixture() {
     const classes = new Set();
     const element = { value, disabled: false, textContent: '',
       classList: { add: c => classes.add(c), remove: c => classes.delete(c), contains: c => classes.has(c) },
-      remove: () => { elements.delete('#'+id); footer.splice(footer.indexOf(id), 1); },
+      // splice(-1, 1) drops the LAST entry, so removing an element that was
+      // never in the footer -- the send-from note lives in the body -- would
+      // silently delete the Send button from this list instead.
+      remove: () => {
+        elements.delete('#'+id);
+        const at = footer.indexOf(id);
+        if (at !== -1) footer.splice(at, 1);
+      },
       addEventListener: (_, handler) => { element.click = handler; },
+      // Only what is inserted next to the Send button lands in the footer. The
+      // send-from reminder goes after the status line, in the modal body, and
+      // counting it as a footer button would make this test assert something
+      // it does not mean.
       insertAdjacentHTML: (_, html) => {
         for (const match of html.matchAll(/id="([^"]+)"/g)) {
-          add(match[1]); footer.splice(footer.indexOf(id), 0, match[1]);
+          add(match[1]);
+          if (id === 'send-text-submit') footer.splice(footer.indexOf(id), 0, match[1]);
         }
       },
     };
@@ -32,8 +44,12 @@ function fixture() {
     openMailDraft: (addresses, message) => opened.push({ type: 'desktop', addresses, message }),
     openOutlookWebDraft: (addresses, message) => opened.push({ type: 'web', addresses, message }),
     finishSendTextModalAsSent() {},
+    TEXT_FROM_MAILBOX: 'memppw@dltransport.com', escapeHtml: v => String(v),
   });
-  for (const name of ['textDraftControlsHtml','wireTextDraftControls','resetSendTextActions','submitSendTextModal']) {
+  // sendFromReminderHtml() is pulled in with the rest because the fallback now
+  // draws the "send from memppw@dltransport.com" note beside the two buttons --
+  // without it the sandbox throws a ReferenceError on the branch under test.
+  for (const name of ['sendFromReminderHtml','textDraftControlsHtml','wireTextDraftControls','resetSendTextActions','submitSendTextModal']) {
     const match = source.match(new RegExp(`(?:async )?function ${name}\\([^\\n]*\\) \\{[\\s\\S]*?\\n  \\}`));
     assert.ok(match, name); vm.runInContext(match[0], context);
   }

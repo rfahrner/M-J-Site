@@ -4312,19 +4312,67 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     a.remove();
   }
 
-  // An alternative that does not touch Windows at all. The mailto above depends
+  // Driver texts go out from ONE mailbox, not from whoever happens to be at the
+  // desk. Several dispatchers have access to it and each signs into Outlook as
+  // themselves, so a compose window opened the ordinary way comes up under the
+  // dispatcher's own address -- the driver then gets the text from a number
+  // nobody recognises, and a reply lands in a personal inbox instead of the
+  // shared one everybody watches.
+  //
+  // Change this in one place if the shared mailbox ever moves.
+  const TEXT_FROM_MAILBOX = "memppw@dltransport.com";
+
+  // An alternative that does not touch Windows at all. The mailto below depends
   // on which app Windows has registered as the default mail client, and that
   // has now failed two different ways on two different machines -- once
   // opening an Outlook the mailbox was not signed into, once producing no
   // draft window whatsoever. This opens the compose window in a browser tab
   // instead, using the Outlook session the dispatcher is already signed into.
+  //
+  // Naming the mailbox in the path is what makes the draft come up AS the
+  // shared mailbox rather than as the person clicking: Outlook on the web
+  // takes /mail/<address>/ as "work in this mailbox", the same way
+  // /mail/<address>/inbox opens someone else's inbox. Without it the deeplink
+  // composes from the signed-in account and there is no parameter that says
+  // otherwise.
+  //
+  // The @ goes in literally. It is a legal path character and that is the form
+  // Outlook's own links use; percent-encoding it to %40 risks the single-page
+  // router matching the segment as text and not recognising the mailbox. Only
+  // the characters that would genuinely end the path segment are escaped, and
+  // an address containing any of them is not an address -- it falls back.
+  //
+  // A blank or unusable mailbox falls back to the plain compose URL, which is
+  // exactly the old behaviour: a draft from the wrong address beats no draft at
+  // all when someone is trying to reach a driver.
+  const OUTLOOK_WEB_HOST = "https://outlook.office.com/mail";
+
+  function outlookWebComposeUrl() {
+    const box = String(TEXT_FROM_MAILBOX || "").trim();
+    const usable = box && /^[^\s/?#\\]+@[^\s/?#\\]+$/.test(box);
+    return usable
+      ? `${OUTLOOK_WEB_HOST}/${box}/deeplink/compose`
+      : `${OUTLOOK_WEB_HOST}/deeplink/compose`;
+  }
+
   // Addresses stay unencoded: they are digits@textbetter.com, which needs no
   // escaping, and the deeplink expects a plain comma-separated list.
-  const OUTLOOK_WEB_COMPOSE = "https://outlook.office.com/mail/deeplink/compose";
-
   function openOutlookWebDraft(addresses, message) {
-    const url = `${OUTLOOK_WEB_COMPOSE}?to=${addresses.join(",")}&body=${encodeURIComponent(message)}`;
+    const url = `${outlookWebComposeUrl()}?to=${addresses.join(",")}&body=${encodeURIComponent(message)}`;
     window.open(url, "_blank", "noopener");
+  }
+
+  // Nothing here can make the desktop button obey the shared mailbox. A mailto:
+  // has no sender field -- RFC 6068 does not define one -- so Windows hands the
+  // draft to Outlook's default sending account and that is the end of it. The
+  // honest answer is to say so at the point of use, next to the button that
+  // does get it right.
+  function sendFromReminderHtml() {
+    const box = String(TEXT_FROM_MAILBOX || "").trim();
+    if (!box) return "";
+    return `<div class="calc-note" style="margin-top:8px;">Send from <strong>${escapeHtml(box)}</strong>.
+      <em>Open in Outlook Web</em> opens the draft in that mailbox already.
+      <em>Open in Outlook</em> opens it under your own address — change the <strong>From</strong> before sending.</div>`;
   }
 
   function textDraftControlsHtml(idPrefix) {
@@ -4347,6 +4395,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   function resetSendTextActions() {
     $("#send-text-draft-open-web")?.remove();
     $("#send-text-draft-open")?.remove();
+    $("#send-text-send-from")?.remove();
     const send = $("#send-text-submit");
     if (send) { send.classList.remove("hidden"); send.disabled = false; }
   }
@@ -4673,6 +4722,11 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       const addresses = sendTextModalState.recipients.map((r) => formatTextAddress(r.phone)).filter(Boolean);
       $("#send-text-status").textContent = `Couldn't send automatically (${String(e.message || e)}). Choose Outlook below to finish sending.`;
       resetSendTextActions();
+      // Which mailbox this is meant to go out from, said where the decision is
+      // being made -- one of the two buttons below gets it right on its own and
+      // the other cannot.
+      $("#send-text-status").insertAdjacentHTML("afterend",
+        `<div id="send-text-send-from">${sendFromReminderHtml()}</div>`);
       sendBtn.classList.add("hidden");
       // The existing Cancel button stays first in the footer.
       sendBtn.insertAdjacentHTML("beforebegin", textDraftControlsHtml("send-text-draft"));
@@ -5021,6 +5075,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       <div class="subtext" style="margin-top:6px;">${escapeHtml(batch.map((d) => d.name).join(", "))}</div>
       ${details}
       <div class="calc-note hidden" style="margin-top:10px;" id="tg-batch-status"></div>
+      ${s.outlookOnly ? sendFromReminderHtml() : ""}
     `;
     $("#tg-send-now").disabled = false;
     if (s.outlookOnly) {
