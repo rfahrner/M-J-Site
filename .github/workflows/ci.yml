@@ -87,6 +87,9 @@ jobs:
       - name: Test board row height stability
         run: node scripts/board-row-height-stability.test.mjs
 
+      - name: Test overnight alert timing
+        run: node --test scripts/overnight-alerts.test.mjs
+
       - name: Test alerts skip settled loads
         run: node scripts/alerts-skip-settled-loads.test.mjs
 

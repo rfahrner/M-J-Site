@@ -1,3 +1,4 @@
+import { boardDateKey, offsetDate, shiftRelativeNow, tripTimeline } from './overnight-times.js';
 /* ---------------- board alerts: bottom-right notification panel ---------------- */
 import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, parseHHMM, AVG_MPH, minsToClock, escapeHtml, $, openSendTextModal, isAccountingUser, isAdminUser, signOut, scrollToAndOutlineShiftRow} from './loadboard.js';
 import './paperwork-load-integration.js';
@@ -87,18 +88,6 @@ import './paperwork-load-integration.js';
     const minute = Number(parts.find((p) => p.type === "minute").value);
     return hour * 60 + minute;
   }
-  // Same idea, but for an arbitrary timestamp instead of always "now" --
-  // needed to compare a trip's completed_at against its return_eta_to_dc
-  // on the same Atlanta-local clock, for the "at DC" alert below.
-  function minsSinceMidnightAtTimestamp(isoString) {
-    if (!isoString) return null;
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York", hour: "numeric", minute: "numeric", hour12: false,
-    }).formatToParts(new Date(isoString));
-    const hour = Number(parts.find((p) => p.type === "hour").value) % 24;
-    const minute = Number(parts.find((p) => p.type === "minute").value);
-    return hour * 60 + minute;
-  }
   export function driverPhoneForShift(s) {
     const drv = s.driver_id ? findDriver(String(s.driver_id)) : null;
     const rawPhone = (drv && drv.phone) || s.driver_cell_snapshot || "";
@@ -118,9 +107,11 @@ import './paperwork-load-integration.js';
     // show any of these at all, since none of this applies to them.
     if (!ALL_ALERT_LOCATIONS.includes(state.activeLocation)) return [];
     const thisLocation = [state.activeLocation];
-    const todayKey = dateKey(new Date()); // existing helper — local YYYY-MM-DD
+    const scanTime = new Date();
+    const todayKey = boardDateKey(scanTime);
+    const scanDates = [offsetDate(todayKey, -1), todayKey, offsetDate(todayKey, 1)];
     const { data: shifts, error: shiftErr } = await supabaseClient
-      .from(SHIFTS_TABLE).select("*").in("location", thisLocation).eq("shift_date", todayKey);
+      .from(SHIFTS_TABLE).select("*").in("location", thisLocation).in("shift_date", scanDates);
     if (shiftErr || !shifts || !shifts.length) return [];
     const shiftIds = shifts.map((s) => s.id);
     const { data: trips } = await supabaseClient.from(TRIPS_TABLE).select("*").in("shift_id", shiftIds);
@@ -137,7 +128,7 @@ import './paperwork-load-integration.js';
       const { data: stopRows } = await supabaseClient.from("trip_stops").select("trip_id, time_in, time_out").in("trip_id", allTripIds);
       (stopRows || []).forEach((s) => { if (s.time_in || s.time_out) stopsByTrip[s.trip_id] = (stopsByTrip[s.trip_id] || 0) + 1; });
     }
-    const nowMin = minsSinceMidnightNow();
+
     const alerts = [];
     const preShiftTextNeeded = []; // collected across all shifts, then grouped by shift time below
     const preShiftEscalations = []; // stage 3, grouped the same way -- see below
@@ -153,6 +144,8 @@ import './paperwork-load-integration.js';
       // entire alert panel shouting about loads that are settled.
       if (s.shift_complete || s.tonu || s.called_off || s.load_cancelled) continue;
       const rowTrips = (tripsByShift[s.id] || []).sort((a, b) => a.trip_number - b.trip_number);
+      const nowMin = shiftRelativeNow(s.shift_date, scanTime);
+      const timeline = tripTimeline(s.shift_start, rowTrips);
       const hasRealTrip = rowTrips.some((t) => (t.route_id || "").trim() || (t.trip_id || "").trim());
       const label = s.pro_number || s.driver_name_text || `Load on ${s.location}`;
       const driverName = driverNameForShift(s);
@@ -215,7 +208,7 @@ import './paperwork-load-integration.js';
         if (hasStops) continue;
         const laterStarted = rowTrips.slice(i + 1).find((t) => t.dispatch_time);
         if (!laterStarted) continue;
-        const laterDispatchMin = parseHHMM(laterStarted.dispatch_time);
+        const laterDispatchMin = timeline.get(laterStarted).dispatch;
         if (laterDispatchMin == null) continue;
         const sinceLaterStarted = nowMin - laterDispatchMin;
         if (sinceLaterStarted >= PAPERWORK_FOLLOWUP_MIN) {
@@ -250,8 +243,8 @@ import './paperwork-load-integration.js';
         // cycle (checked independently, this same loop) takes over
         const laterDispatched = rowTrips.some((t2) => t2.trip_number > t.trip_number && ((t2.route_id || "").trim() || (t2.trip_id || "").trim()));
         if (laterDispatched) continue;
-        const lastStopMin = parseHHMM(t.last_stop_depart);
-        const returnEtaMin = parseHHMM(t.return_eta_to_dc);
+        const lastStopMin = timeline.get(t).lastStop;
+        const returnEtaMin = timeline.get(t).returnEta;
         if (returnEtaMin != null) {
           const missingTrailerLabels = [];
           if (!(t.trailer_out || "").trim()) missingTrailerLabels.push("the current trailer number");
@@ -300,8 +293,8 @@ import './paperwork-load-integration.js';
         if (allDone) {
           const lastReal = [...rowTrips].reverse().find((t) => String(t.route_id || t.trip_id || "").trim());
           if (lastReal) {
-            const etaMin = parseHHMM(lastReal.return_eta_to_dc);
-            const completedMin = minsSinceMidnightAtTimestamp(lastReal.completed_at);
+            const etaMin = timeline.get(lastReal).returnEta;
+            const completedMin = lastReal.completed_at ? shiftRelativeNow(s.shift_date, lastReal.completed_at) : null;
             let atDcMin = null;
             if (etaMin != null && completedMin != null) atDcMin = Math.max(etaMin, completedMin);
             else if (etaMin != null) atDcMin = etaMin;
@@ -347,8 +340,8 @@ import './paperwork-load-integration.js';
       // One driver reads exactly as it always did, PRO# and all. The grouped
       // wording only appears once there is actually a group.
       const message = list.length === 1
-        ? `${list[0].driverName} (${list[0].label}) — has not confirmed their ${clockLabel} shift today`
-        : `${list.length} drivers have not confirmed their ${clockLabel} shift today (${list.map((d) => d.driverName).join(", ")})`;
+        ? `${list[0].driverName} (${list[0].label}) — has not confirmed their ${clockLabel} shift`
+        : `${list.length} drivers have not confirmed their ${clockLabel} shift (${list.map((d) => d.driverName).join(", ")})`;
       alerts.push({
         key: `preshift-escalate-${groupKey}`, type: "preshift_escalate", location,
         ...(list.length === 1 ? { shiftDbId: list[0].shiftDbId } : {}),

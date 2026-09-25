@@ -2,7 +2,7 @@
  * Regression test for grouping stage-3 pre-shift escalations.
  *
  * When four drivers are all overdue on the same 09:00 shift, the alert widget
- * used to show four separate "has not confirmed their 09:00 shift today"
+ * used to show four separate "has not confirmed their 09:00 shift"
  * rows, each with its own Text button, each sending the identical message.
  * Stage 1 (the 60-minute check-in text) had been grouped by shift time for
  * exactly this reason; stage 3 never was.
@@ -69,7 +69,7 @@ const many = groupEscalations([
 check('one alert, not three', many.length, 1);
 check('all three are recipients', many[0].recipients.length, 3);
 check('it still says what it is', many[0].type, 'preshift_escalate');
-check('message counts them', /^3 drivers have not confirmed their 9:00 shift today/.test(many[0].message), true);
+check('message counts them', /^3 drivers have not confirmed their 9:00 shift/.test(many[0].message), true);
 checkTrue('and names them', /\(Tramall Marshall, Pierre Paul, Kecia May\)$/.test(many[0].message));
 check('one message for the whole group',
   many[0].actionMessage, 'This is D&L Transportation, could we have an ETA for your 9:00 kroger shift');
@@ -93,7 +93,7 @@ console.log('\n3. a single driver is untouched');
 const one = groupEscalations([driver('Tramall Marshall', 11, { label: '1991892' })]);
 check('still one alert', one.length, 1);
 check('message is the original wording',
-  one[0].message, 'Tramall Marshall (1991892) — has not confirmed their 9:00 shift today');
+  one[0].message, 'Tramall Marshall (1991892) — has not confirmed their 9:00 shift');
 // The old key was `preshift-escalate-${s.id}`. If this drifts, every alert a
 // dispatcher dismissed earlier today reappears.
 check('key matches the old single-driver key', one[0].key, 'preshift-escalate-11');
