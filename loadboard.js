@@ -2263,6 +2263,8 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   // stays a plain clock string for parseHHMM, but what actually shows in
   // the cell gets the "At DC since:" label when that's the situation.
   function nextCallTimeDisplayForRow(row) {
+    if (row.loadCancelled || row.calledOff) return "cancelled";
+    if (row.tonu) return "TONU";
     if (row.shiftComplete) return "Complete";
     const atDcMin = atDcSinceMinForRow(row);
     if (atDcMin != null) return `At DC since: ${minsToClock(atDcMin)}`;
@@ -3593,12 +3595,18 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     $("#called-off-close").addEventListener("click", close);
     $("#called-off-cancel").addEventListener("click", close);
     $("#called-off-submit").addEventListener("click", async () => {
+      const submitBtn = $("#called-off-submit");
+      if (submitBtn.disabled) return;
+      submitBtn.disabled = true;
       const reasonText = ($("#called-off-notes").value || "").trim();
       row.calledOff = true;
       row.calledOffReason = reasonText;
       row.calledOffNotes = reasonText;
       row.calledOffAt = new Date().toISOString();
-      await saveShiftNow(row);
+      if (!await saveShiftNow(row)) {
+        submitBtn.disabled = false;
+        return;
+      }
       await logDriverCancellationNote(row, reasonText);
       logChange(row.dbId, labelForRow(row), "called_off", "false", "true");
       close();
@@ -6427,8 +6435,31 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   const DRIVER_NOTES_TABLE = "driver_notes";
   const LOAD_NOTES_TABLE = "load_notes";
 
+  async function logCancellationToLoadNotes(row, reasonText) {
+    if (!supabaseClient || !row.dbId) return;
+    const shift = [row.shiftDate, row.shiftStart].filter(Boolean).join(" ");
+    const driver = row.driverNameText || findDriver(row.driverId)?.name || "Driver";
+    const noteText = `Driver cancellation — ${driver}${shift ? ` — ${shift}` : ""} — ${String(reasonText || "").trim() || "No reason provided"}`;
+    try {
+      const { data, error } = await supabaseClient.from(LOAD_NOTES_TABLE)
+        .insert({ shift_id: row.dbId, note_text: noteText, source: "cancellation", created_by: currentUserName() || currentUserLabel || "unknown user" })
+        .select().single();
+      if (error) throw error;
+      if (!data?.id) throw new Error("The note was not confirmed saved");
+      if (loadDetailsState?.rowId === row.id) {
+        if (!loadDetailsState.loadNotes) loadDetailsState.loadNotes = [];
+        loadDetailsState.loadNotes.push(data);
+        renderLoadDetailsTabContent();
+      }
+    } catch (e) {
+      console.error("Failed to add load cancellation note:", e);
+      setDriverSyncStatus(`Couldn't save the cancellation note under Pro # ${row.proNumber || ""}. Add it in the load's Notes tab (${e.message || e}).`, "error");
+    }
+  }
+
   async function logDriverCancellationNote(row, reasonText) {
     if (!supabaseClient) return;
+    await logCancellationToLoadNotes(row, reasonText);
     // Imported rows can retain the typed driver name without a linked
     // driver_id. Resolve that name so cancellation notes still land on the
     // driver's profile.
