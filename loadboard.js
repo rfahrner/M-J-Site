@@ -1186,7 +1186,14 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   export async function uploadRowImage(row, files, saveRowFn, renderFn) {
     if (!supabaseClient) return;
     if (!row.dbId) await saveRowFn(row);
-    if (!row.dbId) { setDriverSyncStatus("Couldn't save this load before uploading — try again.", "error"); return; }
+    if (!row.dbId) {
+      const missingRouteId = ('routeId' in row || 'tripId' in row)
+        && !String(row.routeId || '').trim() && !String(row.tripId || '').trim();
+      setDriverSyncStatus(missingRouteId
+        ? "Route or trip ID must be entered before uploading image."
+        : "Couldn't save this load before uploading — try again.", "error");
+      return;
+    }
     const list = acceptedUploads(files);
     if (!list.length) return;
     const paths = row.routeImagePaths || parseRouteImagePaths(row.routeImagePath);
