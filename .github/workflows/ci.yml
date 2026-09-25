@@ -81,6 +81,9 @@ jobs:
       - name: Test accounting checkbox persistence
         run: node --test scripts/accounting-save.test.mjs scripts/accounting-note-icon.test.mjs
 
+      - name: Test analytics pages only select columns their view has
+        run: node scripts/analytics-view-columns.test.mjs
+
       - name: Test Atlanta and Delaware rounded-down mileage tiers
         run: node --test scripts/carrier-mileage-tiers.test.mjs
 
