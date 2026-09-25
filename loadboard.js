@@ -1,3 +1,4 @@
+import { shiftRelativeNow, tripTimeline } from './overnight-times.js';
 /* ============================================================
    Load Board — application logic (multi-page version)
    Each tab is its own real HTML file; this file is loaded on
@@ -2150,7 +2151,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     const out = { etaNextDispatch: "", hosLeft: "", tripCallTime: "" };
     if (dispatch != null) out.tripCallTime = minsToClock(dispatch - 30);
 
-    const returnMin = parseHHMM(trip.returnToDC);
+    const returnMin = tripTimeline(row.shiftStart, row.trips || [trip]).get(trip)?.returnToDC;
     if (returnMin == null) return applyCalcRetention(out, row);
 
     const etaNextMin = returnMin + 30;
@@ -2184,19 +2185,6 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   // of the row/trip objects already loaded on the board -- pulling that in
   // live per-row isn't practical, so this column only reflects the other
   // four rule types.
-  // Same idea as alerts.js's minsSinceMidnightNow, but for an arbitrary
-  // timestamp instead of always "now" -- needed to compare a trip's
-  // completedAt against its returnEtaToDc on the same Atlanta-local clock.
-  function minsSinceMidnightAtlanta(isoString) {
-    if (!isoString) return null;
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York", hour: "numeric", minute: "numeric", hour12: false,
-    }).formatToParts(new Date(isoString));
-    const hour = Number(parts.find((p) => p.type === "hour").value) % 24;
-    const minute = Number(parts.find((p) => p.type === "minute").value);
-    return hour * 60 + minute;
-  }
-
   // A driver is "at the DC" once every trip on the shift is closed out and
   // the shift itself isn't complete yet -- the pause between routes. The
   // reference time is whichever is later: the ETA they actually provided,
@@ -2209,8 +2197,8 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     if (!allDone) return null;
     const lastReal = [...row.trips].reverse().find((t) => String(t.routeId || t.tripId || "").trim());
     if (!lastReal) return null;
-    const etaMin = parseHHMM(lastReal.returnEtaToDc);
-    const completedMin = minsSinceMidnightAtlanta(lastReal.completedAt);
+    const etaMin = tripTimeline(row.shiftStart, row.trips).get(lastReal).returnEta;
+    const completedMin = lastReal.completedAt ? shiftRelativeNow(row.shiftDate || state.activeDate, lastReal.completedAt) : null;
     if (etaMin == null && completedMin == null) return null;
     if (etaMin == null) return completedMin;
     if (completedMin == null) return etaMin;
@@ -2245,12 +2233,13 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     // later one. Stage 5 (Last Stop Depart, asking for a return ETA) only
     // applies while Return ETA to DC is still blank; Stage 6 (paperwork /
     // drop-spot) only applies once we actually have that return ETA.
+    const timeline = tripTimeline(row.shiftStart, row.trips);
     row.trips.forEach((t, idx) => {
       if (t.minimized || t.complete || !String(t.routeId || t.tripId || "").trim()) return;
       const laterDispatched = row.trips.some((t2, idx2) => idx2 > idx && String(t2.routeId || t2.tripId || "").trim());
       if (laterDispatched) return;
-      const lastStopMin = parseHHMM(t.lastStopDepart);
-      const returnEtaMin = parseHHMM(t.returnEtaToDc);
+      const lastStopMin = timeline.get(t).lastStop;
+      const returnEtaMin = timeline.get(t).returnEta;
       if (lastStopMin != null && returnEtaMin == null) candidates.push(lastStopMin);
       else if (returnEtaMin != null) candidates.push(returnEtaMin);
     });
