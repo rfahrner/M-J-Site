@@ -2524,7 +2524,9 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       </td>
       ${row.location === "atlanta" ? `<td class="col-carrierRate"${rs} title="Carrier's 61–140.9 MI rate"><span class="static-text">${escapeHtml(atlantaCarrierRateLabel(drv))}</span></td>` : ""}
         <td class="col-rate"${rs}>
-          <input class="cell-input small" style="width:46px;" placeholder="Rate" data-row="${row.id}" data-field="rate" value="${escapeHtml(row.rate)}">
+          ${(row.loadCancelled || row.calledOff || row.tonu)
+            ? `<span class="static-text">${row.loadCancelled || row.calledOff ? 'cancelled' : 'TONU'}</span>`
+            : `<input class="cell-input small" style="width:46px;" placeholder="Rate" data-row="${row.id}" data-field="rate" value="${escapeHtml(row.rate)}">`}
       </td>
       <td class="col-cell"${rs}><span class="static-text">${escapeHtml(pick(drv && drv.phone, row.cellSnapshot))}</span></td>
       <td class="col-shiftStart"${rs}>${nightShiftActive() ? `<span class="static-text shift-start-date">${shortShiftDate(row.shiftDate || state.activeDate)}</span>` : ""}<input class="cell-input small" style="width:46px;" placeholder="--:--" data-row="${row.id}" data-field="shiftStart" value="${escapeHtml(row.shiftStart)}"></td>
@@ -3547,6 +3549,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     }
     saveShiftNow(found.row);
     recomputeRowRate(found.row);
+    renderBoardTable();
     if (!wasTonu && found.row.tonu) logChange(found.row.dbId, labelForRow(found.row), "tonu", "false", "true");
   }
 
