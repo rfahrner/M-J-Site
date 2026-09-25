@@ -1712,7 +1712,8 @@ fieldset.rate-tier-box.is-overridden {
   display: flex; align-items: center; justify-content: center; gap: 4px;
 }
 #mondelez-table .pin-pro { left: 182px; }
-#mondelez-table .pin-driver { left: 274px; }
+#mondelez-table .pin-mdz-mc { left: 274px; width: 84px; min-width: 84px; }
+#mondelez-table .pin-driver { left: 358px; }
 /* Add Time Slots modal */
 .ats-slot-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .ats-slot-row input[data-ats-time] { width: 80px; flex: none; }
