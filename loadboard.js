@@ -1910,7 +1910,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     }
     if (!String(trip.routeId || "").trim()) return;
     await openLoadDetailsModal(rowId, tripId);
-    startLoadDetailsEdit(tripId);
+    startLoadDetailsEdit(tripId, true);
   }
 
   let stopTimesModalState = null; // { rowId, tripId, stopCount }
@@ -5762,7 +5762,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     }
   }
 
-  export function startLoadDetailsEdit(tabKey) {
+  export function startLoadDetailsEdit(tabKey, completing = false) {
     if (!loadDetailsState) return;
     const found = findRowAnywhere(loadDetailsState.rowId);
     if (!found) return;
@@ -5783,7 +5783,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
         routeMiles: trip.routeMiles || "", stopCount: trip.stopCount || "",
         driverName: tripDrv ? tripDrv.name : "", notes: trip.notes || "",
         stops: (loadDetailsState.stopsByTrip[tabKey] || []).map((s) => ({ ...s })),
-        complete: !!trip.complete, ppwkReceived: !!trip.ppwkReceived, checkedIn: !!trip.checkedIn,
+        complete: completing || !!trip.complete, ppwkReceived: !!trip.ppwkReceived, checkedIn: !!trip.checkedIn,
         returnDropLocation: trip.returnDropLocation || "", backhaulTrailerNumber: trip.backhaulTrailerNumber || "",
         backhaulLocation: trip.backhaulLocation || "",
         dispatchTime: trip.dispatchTime || "", returnEtaToDc: trip.returnEtaToDc || "",
