@@ -1923,6 +1923,12 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     if (ppwkCheckbox) ppwkCheckbox.checked = !!trip.ppwkReceived;
     const checkedInCheckbox = $("#st-checked-in");
     if (checkedInCheckbox) checkedInCheckbox.checked = !!trip.checkedIn;
+    // Ticked on the way in, whatever the route's current state: this modal is
+    // reached by pressing Complete, so completing is what the dispatcher came
+    // to do. Unticking it is the way to record times, paperwork and the
+    // check-in without closing the route out yet.
+    const completeCheckbox = $("#st-complete");
+    if (completeCheckbox) completeCheckbox.checked = true;
     const uploadInput = $("#st-ppwk-upload");
     if (uploadInput) uploadInput.value = "";
     const dropLocationInput = $("#st-trailer-drop-location");
@@ -2025,13 +2031,23 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     const dropLocationInput = $("#st-trailer-drop-location");
     if (dropLocationInput) trip.returnDropLocation = dropLocationInput.value.trim();
 
-    trip.complete = true;
-    trip.minimized = true;
+    // The Complete box decides it now. It arrives ticked, so the ordinary path
+    // is unchanged; unticking saves everything else and leaves the route open,
+    // which is the only way to record times mid-route without closing it.
+    const completeBox = $("#st-complete");
+    const markComplete = completeBox ? completeBox.checked : true;
+    const wasComplete = !!trip.complete;
+    trip.complete = markComplete;
+    // A route still being run stays open on the board; only a completed one
+    // collapses to its chip.
+    if (markComplete) trip.minimized = true;
     await saveTripNow(row, trip, row.trips.indexOf(trip) + 1);
-    logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "route_complete", "false", "true");
+    if (markComplete !== wasComplete) {
+      logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "route_complete", String(wasComplete), String(markComplete));
+    }
     closeStopTimesModal();
     renderBoardTable();
-    flashTripGreenTint(rowId, tripId);
+    if (markComplete) flashTripGreenTint(rowId, tripId);
   }
 
   function flashTripGreenTint(rowId, tripId) {
@@ -2410,7 +2426,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     if (!trip.hasStopTimes) missing.push({ key: "stops", label: "stop times" });
     if (!(trip.routeImagePaths || []).length && !trip.routeImagePath) missing.push({ key: "image", label: "an image" });
     if (!String(trip.returnDropLocation || "").trim()) missing.push({ key: "dropLocation", label: "a drop location" });
-    if (!trip.checkedIn) missing.push({ key: "checkedIn", label: "load checked in" });
+    if (!trip.checkedIn) missing.push({ key: "checkedIn", label: "Prospero check in/Post tripped" });
     return missing;
   }
 
@@ -5544,7 +5560,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
             </fieldset>
             <fieldset class="field-box"><legend>Complete</legend><div class="static-text">${trip.complete ? "Yes" : "—"}</div></fieldset>
             <fieldset class="field-box${missCls("ppwk")}"><legend>Paperwork Received</legend><div class="static-text">${trip.ppwkReceived ? "Yes" : "—"}</div></fieldset>
-            <fieldset class="field-box${missCls("checkedIn")}"><legend>Load Checked In</legend><div class="static-text">${trip.checkedIn ? "Yes" : "—"}</div></fieldset>
+            <fieldset class="field-box${missCls("checkedIn")}"><legend>Prospero Check In/Post Tripped</legend><div class="static-text">${trip.checkedIn ? "Yes" : "—"}</div></fieldset>
             <fieldset class="field-box${missCls("dropLocation")}"><legend>Trailer Drop Location</legend><div class="static-text">${escapeHtml(trip.returnDropLocation || "—")}</div></fieldset>
             <fieldset class="field-box${missCls("image")}" style="grid-column: span 2;"><legend>Image</legend>${rowImageDropzoneHtml(trip, trip.id)}</fieldset>
           </div>
@@ -5578,8 +5594,8 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
               <label style="display:flex; align-items:center; gap:8px; margin:0;"><input type="checkbox" id="ld-tr-ppwk-received" ${d.ppwkReceived ? "checked" : ""}><span>Received</span></label>
             </fieldset>
             <fieldset class="field-box${missCls("checkedIn")}">
-              <legend>Load Checked In</legend>
-              <label style="display:flex; align-items:center; gap:8px; margin:0;"><input type="checkbox" id="ld-tr-checked-in" ${d.checkedIn ? "checked" : ""}><span>Checked In</span></label>
+              <legend>Prospero Check In/Post Tripped</legend>
+              <label style="display:flex; align-items:center; gap:8px; margin:0;"><input type="checkbox" id="ld-tr-checked-in" ${d.checkedIn ? "checked" : ""}><span>Prospero check in/Post tripped</span></label>
             </fieldset>
             <fieldset class="field-box${missCls("dropLocation")}"><legend>Trailer Drop Location</legend><input class="cell-input" id="ld-tr-drop-location" placeholder="Where was the trailer dropped?" value="${escapeHtml(d.returnDropLocation)}"></fieldset>
             <fieldset class="field-box${missCls("image")}" style="grid-column: span 2;"><legend>Image</legend>${rowImageDropzoneHtml(trip, trip.id)}</fieldset>

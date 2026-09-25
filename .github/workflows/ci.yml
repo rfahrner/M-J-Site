@@ -93,6 +93,9 @@ jobs:
       - name: Test alerts skip settled loads
         run: node scripts/alerts-skip-settled-loads.test.mjs
 
+      - name: Test Stop Times modal and Mondelez landing tab
+        run: node scripts/stop-times-modal.test.mjs
+
       - name: Test archive documents and Outlook fallback
         run: node --test scripts/archive-documents.test.mjs scripts/text-outlook-fallback.test.mjs
 

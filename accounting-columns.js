@@ -249,7 +249,7 @@ function tripMissing(trip, location) {
     if (!trip.ppwk_received) missing.push('paperwork confirmation');
     if (!tripHasStopTimes.get(Number(trip.id))) missing.push('stop times');
     if (!String(trip.return_drop_location || '').trim()) missing.push('drop location');
-    if (!trip.checked_in) missing.push('load checked in');
+    if (!trip.checked_in) missing.push('Prospero check in/Post tripped');
   }
   return missing;
 }

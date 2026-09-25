@@ -267,7 +267,7 @@ function missingDocumentation(trip, stopRows, location) {
   if (!stopPairsComplete(trip, stopRows)) missing.push('stop times');
   if (!imagePresent(trip.route_image_path)) missing.push('an image');
   if (!String(trip.return_drop_location || '').trim()) missing.push('a drop location');
-  if (!boolish(trip.checked_in)) missing.push('load checked in');
+  if (!boolish(trip.checked_in)) missing.push('Prospero check in/Post tripped');
   return missing;
 }
 
