@@ -7,6 +7,10 @@ import './paperwork-load-integration.js';
   export const PRE_SHIFT_TEXT_LEAD_MIN = 60; // Stage 1: pre-shift ETA text needed 60 min before shift start
   export const PRE_SHIFT_CALL_FOLLOWUP_MIN = 30; // Stage 2: call nudge once we're inside 30 min of shift start with no ETA
   export const PRE_SHIFT_ESCALATION_MIN = 15; // Stage 3: driver hasn't confirmed at all, inside 15 min of shift start with no ETA
+  // A shift stops being operationally live 12 hours after it starts. The board
+  // already works to this number -- it is the Megaboard's running cap -- and
+  // the alert scan needs it because the scan window is now three days wide.
+  export const OPERATING_WINDOW_MIN = 12 * 60;
   export const LAST_STOP_RETURN_FOLLOWUP_MIN = 45; // Stage 6 repeat interval: once Return ETA to DC's time has arrived, re-check every 45 min until the trip's marked complete
   export const AT_DC_FOLLOWUP_MIN = 45; // repeat interval for "still waiting at the DC, not yet dispatched on their next load"
   const PAPERWORK_FOLLOWUP_MIN = 15; // reach out within 15 min if a new route starts before the last one's paperwork is in
@@ -151,6 +155,18 @@ import './paperwork-load-integration.js';
       const driverName = driverNameForShift(s);
       const driverPhone = driverPhoneForShift(s);
       const shiftStartMin = parseHHMM(s.shift_start);
+      // Yesterday and tomorrow are in the scan so a night shift keeps its
+      // alerts across midnight -- a 20:00 load is still running at 02:00 and
+      // still worth chasing. But nothing aged those shifts out again, so a
+      // 16:00 load from yesterday was still raising "has been at the DC" and
+      // "no dispatch time entered" at half twelve the next afternoon, twenty
+      // hours after it started.
+      //
+      // The pre-shift cascade below already stops at -180 minutes; every rule
+      // after it had no lower bound at all. One window covers the lot: past
+      // twelve hours from its start, a shift is over whether or not anybody
+      // marked it complete, and there is nothing left to prompt.
+      if (shiftStartMin != null && nowMin != null && nowMin - shiftStartMin > OPERATING_WINDOW_MIN) continue;
       // ---- Pre-shift ETA cascade (Stages 1-3) ----
       // Gated on eta_shift_report being blank AND the driver not already
       // having a real dispatched trip -- if they've been dispatched, that's
