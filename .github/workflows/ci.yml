@@ -57,6 +57,9 @@ jobs:
       - name: Test Delaware driver rates
         run: node scripts/delaware-driver-rates.test.mjs
 
+      - name: Test cancellation labels and load notes
+        run: node --test scripts/cancellation-load-notes.test.mjs
+
       - name: Test driver note ordering and presentation
         run: node --test scripts/driver-profile-notes.test.mjs
 
