@@ -1878,3 +1878,9 @@ fieldset.rate-tier-box.is-overridden {
 .acct-note-button { border: 0; background: transparent; padding: 2px 4px; color: white; cursor: pointer; vertical-align: middle; }
 .acct-note-button.has-notes { color: #facc15; }
 .acct-note-button svg { display: block; }
+
+/* Enclose each week's daily rows AND its recap in one black box. */
+:is(#la-table, #vol-table) .analytics-week-row > td:first-child { border-left: 3px solid #000; }
+:is(#la-table, #vol-table) .analytics-week-row > td:last-child { border-right: 3px solid #000; }
+:is(#la-table, #vol-table) .analytics-week-start > td { border-top: 3px solid #000; }
+:is(#la-table, #vol-table) .analytics-week-end > td { border-bottom: 3px solid #000; }

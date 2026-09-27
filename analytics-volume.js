@@ -13,8 +13,8 @@
 
    Metrics:
    - Drivers requested: distinct drivers with a shift that day, INCLUDING
-     TONU'd shifts (they were still requested), EXCLUDING shifts where
-     the driver called off (they never actually ran).
+     TONU'd shifts (even when cancellation flags are set). Recaps add
+     daily counts, and manually typed driver names count too.
    - TONU's: shifts marked tonu that day.
    - Routes ran: real trips (with a route_id and/or trip_id) across the
      whole shift that day.
@@ -67,7 +67,7 @@ async function fetchAllRows(table, columns, applyFilters) {
   let all = [];
   let from = 0;
   while (true) {
-    let q = supabaseClient.from(table).select(columns).range(from, from + PAGE_SIZE - 1);
+    let q = supabaseClient.from(table).select(columns).order('id', { ascending: true }).range(from, from + PAGE_SIZE - 1);
     if (applyFilters) q = applyFilters(q);
     const { data, error } = await q;
     if (error) { console.error(`Failed to load ${table}:`, error); return all; }
@@ -164,26 +164,36 @@ function buildSelectedRanges(mode, years, subUnits) {
 
 async function fetchRangeData(startDate, endDate, location) {
   const shifts = await fetchAllRows(
-    SHIFTS_TABLE, 'id, shift_date, driver_id, tonu, called_off',
+    SHIFTS_TABLE, 'id, shift_date, driver_id, driver_name_text, tonu, load_cancelled, called_off',
     (q) => q.eq('location', location).gte('shift_date', startDate).lte('shift_date', endDate)
   );
   const shiftIds = shifts.map((s) => s.id);
 
   let trips = [];
   for (const idChunk of chunk(shiftIds, 150)) {
-    const { data, error } = await supabaseClient.from(TRIPS_TABLE).select('shift_id, route_id, trip_id').in('shift_id', idChunk);
-    if (error) { console.error('Failed to load trips (chunk):', error); continue; }
-    trips = trips.concat(data || []);
+    trips.push(...await fetchAllRows(TRIPS_TABLE, 'shift_id, route_id, trip_id', (q) => q.in('shift_id', idChunk)));
   }
+
   return { shifts, trips };
+}
+
+// Recaps add daily driver counts; a person working three days counts three.
+// TONU is attendance even if cancellation/call-off flags are also present.
+function countDrivers(shiftsInScope) {
+  const keys = new Set();
+  for (const s of shiftsInScope) {
+    if (!s.tonu && (s.load_cancelled || s.called_off)) continue;
+    const day = s.shift_date || '';
+    if (s.driver_id != null) { keys.add(`${day}:id:${s.driver_id}`); continue; }
+    const name = String(s.driver_name_text || '').trim().replace(/\s+/g, ' ').toLowerCase();
+    if (name) keys.add(`${day}:name:${name}`);
+  }
+  return keys.size;
 }
 
 function computeMetricsFromRows(shiftsInScope, tripsInScope) {
   const realTrips = tripsInScope.filter((t) => (t.route_id && String(t.route_id).trim()) || (t.trip_id && String(t.trip_id).trim()));
-  // Drivers requested: distinct drivers with a shift, including TONU'd
-  // shifts (still requested), excluding called-off shifts (never ran).
-  const requestedShifts = shiftsInScope.filter((s) => !s.called_off);
-  const driversRequested = new Set(requestedShifts.filter((s) => s.driver_id != null).map((s) => s.driver_id)).size;
+  const driversRequested = countDrivers(shiftsInScope);
   const tonu = shiftsInScope.filter((s) => s.tonu).length;
   const routesRan = realTrips.length;
   return { driversRequested, tonu, routesRan };
@@ -212,11 +222,8 @@ function buildDisplayRows(rangeData, startDate, endDate) {
 
   const flushWeek = () => {
     if (!weekDays.length) return;
-    const anyDayInWeek = new Date(weekDays[0] + 'T00:00:00');
-    const trueWeekStart = startOfWeek(anyDayInWeek);
-    const trueWeekEnd = addDays(trueWeekStart, 6);
-    const wStart = dateKey(trueWeekStart);
-    const wEnd = dateKey(trueWeekEnd);
+    const wStart = weekDays[0];
+    const wEnd = weekDays[weekDays.length - 1];
     rows.push({ rowType: 'weekRecap', date: `Weekly Recap (${wStart} to ${wEnd})`, rangeStart: wStart, rangeEnd: wEnd, ...computeMetricsForDateRange(rangeData, wStart, wEnd) });
     weekDays = [];
   };
@@ -235,7 +242,7 @@ function buildDisplayRows(rangeData, startDate, endDate) {
     if (currentQLabel !== null && qLabel !== currentQLabel) { flushWeek(); flushPeriod(); }
     currentQLabel = qLabel;
     if (weekDays.length && cursor.getDay() === WEEK_START_DAY) flushWeek();
-    rows.push({ rowType: 'day', date: dayKey, ...computeMetricsForDateRange(rangeData, dayKey, dayKey) });
+    rows.push({ rowType: 'day', weekStart: weekDays.length === 0, date: dayKey, ...computeMetricsForDateRange(rangeData, dayKey, dayKey) });
     weekDays.push(dayKey);
     periodDays.push(dayKey);
     cursor = addDays(cursor, 1);
@@ -273,12 +280,12 @@ function renderTable() {
       const cellStyle = zebra ? 'background:#DAECF5;' : '';
       const dow = DAY_NAMES[new Date(row.date + 'T00:00:00').getDay()];
       const metricCells = FIELD_DEFS.map((f) => rowTd(fmtValue(f, row[f.key]), cellStyle)).join('');
-      return `<tr>${rowTd(escapeHtml(row.date), cellStyle)}${rowTd(escapeHtml(dow), cellStyle)}${metricCells}</tr>`;
+      return `<tr class="analytics-week-row${row.weekStart ? ' analytics-week-start' : ''}">${rowTd(escapeHtml(row.date), cellStyle)}${rowTd(escapeHtml(dow), cellStyle)}${metricCells}</tr>`;
     }
     const isPeriod = row.rowType === 'periodRecap';
     const cellStyle = isPeriod ? 'background:#006495; color:#fff; font-weight:700;' : 'background:#54b2e5; color:#000; font-weight:700;';
     const metricCells = FIELD_DEFS.map((f) => rowTd(fmtValue(f, row[f.key]), cellStyle)).join('');
-    const rowHtml = `<tr>${rowTd(escapeHtml(row.date), cellStyle, ' colspan="2"')}${metricCells}</tr>`;
+    const rowHtml = `<tr class="${isPeriod ? 'analytics-period-recap' : 'analytics-week-row analytics-week-end'}">${rowTd(escapeHtml(row.date), cellStyle, ' colspan="2"')}${metricCells}</tr>`;
     return isPeriod ? rowHtml + blankSpacerRows : rowHtml;
   }).join('');
 
@@ -426,8 +433,8 @@ async function reload() {
 
   for (let i = 0; i < ranges.length; i++) {
     const { start, end } = ranges[i];
-    const fetchStart = dateKey(startOfWeek(new Date(start + 'T00:00:00')));
-    const fetchEnd = dateKey(addDays(startOfWeek(new Date(end + 'T00:00:00')), 6));
+    const fetchStart = start;
+    const fetchEnd = end;
     const rangeData = await fetchRangeData(fetchStart, fetchEnd, volState.activeTab);
 
     if (i > 0) allDisplayRows.push({ rowType: 'gap' });

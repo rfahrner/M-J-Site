@@ -102,7 +102,7 @@ console.log('\n4. a failed fetch is reported, not drawn as zero');
 // are the same thing to this page. They must not be again.
 const LA = read('location-analytics.js');
 check('fetchAllRows records the failure', /reportFetchFailure\(table, error\)/.test(LA), true);
-check('the trips loop does too', /reportFetchFailure\(TRIPS_TABLE, tripError\)/.test(LA), true);
+check('the trips loop does too', /fetchAllRows\(TRIPS_TABLE,/.test(LA), true);
 check('each range fetch starts a fresh batch', /beginFetchBatch\(\);/.test(LA), true);
 check('and the result is put on laState', /laState\.loadError = fetchBatchError\(\);/.test(LA), true);
 check('the banner element exists on the page', read('location-analytics.html').includes('id="la-load-error"'), true);
