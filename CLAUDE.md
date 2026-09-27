@@ -445,24 +445,19 @@ The Accounting page keeps its realtime subscription. That is how a push reaches
 a screen someone already has open -- delivery, not a second source of change.
 `scripts/accounting-push-model.test.mjs` pins all of it.
 
-## REV/DRIVER, and what counts as a driver
+## Analytics recaps and driver counts
 
-The denominator under REV/DRIVER, MARGIN/DRIVER and TURN on Location Analytics
-is `countDrivers()` in `location-analytics.js`. Three rules, none of them
-guessable from the column heading:
+Location Analytics and Volume add the daily driver counts for weekly, period,
+and running totals. Deduplicate a person within a date, not across the whole
+range. TONUs count even when cancellation/call-off flags are also set. Typed
+names count too. Ratios are recomputed from totals, not summed or averaged.
+Each thick black weekly box includes its displayed daily rows and its recap;
+partial-week recaps and reports use those exact dates.
 
-- A driver who was there counts whether or not the load earned anything. TONU
-  counts. Turning up and not running counts.
-- A load **we cancelled or the driver called off** does not. The board already
-  treats those two identically.
-- A driver **typed by name** rather than picked from the list is still a
-  driver. Counting only `driver_id` dropped five real drivers out of one
-  Atlanta week ("Rodney Reid- Reids Trans - c" and the like, none matching a
-  driver profile), which inflated revenue per driver.
-
-A shift with neither an id nor a name is an empty board row, not a driver --
-19 of those in that same week. Keys live in one space (`id:` or normalised
-`name:`) so one person cannot be counted twice.
+The user designated the uploaded Accounting workbook as the authority for
+historical validity. The historical membership reconciliation is still pending;
+do not replace it with a start-time-plus-route filter or assume missing site
+Accounting rows prove invalidity. The site ledger has historical gaps.
 
 ## Accounting revenue levels
 
