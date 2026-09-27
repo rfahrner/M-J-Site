@@ -19,12 +19,8 @@
 
    Week boundary is Sunday-Saturday (WEEK_START_DAY below).
 
-   Boundary-straddling weeks: the on-screen Weekly Recap row for a week
-   that crosses a quarter boundary may reflect only the portion of that
-   week within the currently-loaded chunk. Clicking "Generate Report" on
-   that row always re-fetches the true, complete 7-day week fresh,
-   independent of what's currently loaded — so the generated report
-   itself is always accurate for the full week, even in that edge case.
+   Each weekly recap covers exactly the displayed days inside its box.
+   Partial weeks show their actual date range, including in reports.
 
    Financial figures come from loads_accounting, which today is
    populated for Atlanta. Houston/Mondelez track their own revenue on
@@ -121,7 +117,7 @@ async function fetchAllRows(table, columns, applyFilters) {
   let all = [];
   let from = 0;
   while (true) {
-    let q = supabaseClient.from(table).select(columns).range(from, from + PAGE_SIZE - 1);
+    let q = supabaseClient.from(table).select(columns).order('id', { ascending: true }).range(from, from + PAGE_SIZE - 1);
     if (applyFilters) q = applyFilters(q);
     const { data, error } = await q;
     if (error) { console.error(`Failed to load ${table}:`, error); reportFetchFailure(table, error); return all; }
@@ -214,13 +210,9 @@ async function fetchRangeData(startDate, endDate, location) {
   const shiftIds = shifts.map((s) => s.id);
 
   let trips = [];
-  let tripError = null;
   for (const idChunk of chunk(shiftIds, 150)) {
-    const { data, error } = await supabaseClient.from(TRIPS_TABLE).select('shift_id, route_id, trip_id, route_miles, stop_count, salvage, backhaul').in('shift_id', idChunk);
-    if (error) { console.error('Failed to load trips (chunk):', error); tripError = error; continue; }
-    trips = trips.concat(data || []);
+    trips.push(...await fetchAllRows(TRIPS_TABLE, 'shift_id, route_id, trip_id, route_miles, stop_count, salvage, backhaul', (q) => q.in('shift_id', idChunk)));
   }
-  if (tripError) reportFetchFailure(TRIPS_TABLE, tripError);
 
   const accountingRows = await fetchAllRows(
     ACCOUNTING_TABLE, 'shift_date, total_cost, total_revenue',
@@ -234,33 +226,16 @@ async function fetchRangeData(startDate, endDate, location) {
 // Computes every metric from whatever subset of rows it's given — reused
 // for a single day, a week, a quarter, or the overall aggregate, just
 // called with different scopes.
-/*
- * How many drivers a period had, which is the denominator under REV/DRIVER,
- * MARGIN/DRIVER and TURN. Three rules, none of them obvious from the column:
- *
- *   - A driver who was there counts whether or not the load made money. TONU
- *     counts. Turning up and not running counts.
- *   - A load we cancelled, or that the driver called off, does NOT count. The
- *     board already treats those two the same way and CLAUDE.md says both mean
- *     the load is no longer running.
- *   - A driver typed by name rather than picked from the list is still a
- *     driver. Counting only driver_id dropped five real drivers out of one
- *     Atlanta week ("Rodney Reid- Reids Trans - c" and the like, none of which
- *     match a driver profile), which quietly inflated revenue per driver.
- *
- * A shift with no driver_id AND no name is an empty board row, not a driver --
- * there were 19 of those in that same week. Those stay out.
- *
- * Keys are kept in one space so the same person cannot be counted twice: a
- * driver_id when there is one, otherwise the normalised name.
- */
+// Recaps add daily driver counts; a person working three days counts three.
+// TONU is attendance even if cancellation/call-off flags are also present.
 function countDrivers(shiftsInScope) {
   const keys = new Set();
   for (const s of shiftsInScope) {
-    if (s.load_cancelled || s.called_off) continue;
-    if (s.driver_id != null) { keys.add(`id:${s.driver_id}`); continue; }
+    if (!s.tonu && (s.load_cancelled || s.called_off)) continue;
+    const day = s.shift_date || '';
+    if (s.driver_id != null) { keys.add(`${day}:id:${s.driver_id}`); continue; }
     const name = String(s.driver_name_text || '').trim().replace(/\s+/g, ' ').toLowerCase();
-    if (name) keys.add(`name:${name}`);
+    if (name) keys.add(`${day}:name:${name}`);
   }
   return keys.size;
 }
@@ -323,18 +298,8 @@ function buildDisplayRows(rangeData, startDate, endDate) {
 
   const flushWeek = () => {
     if (!weekDays.length) return;
-    // Always the TRUE Sun-Sat week, even if the currently-displayed
-    // range only contains a partial slice of it (e.g. viewing "Period"
-    // right at a quarter's start/end, where the week's earlier days
-    // belong to the previous quarter). The period boundary changes
-    // which days render as their own rows — it never changes what a
-    // week itself is. rangeData is fetched padded out to full weeks at
-    // each end specifically so this has real data to compute from.
-    const anyDayInWeek = new Date(weekDays[0] + 'T00:00:00');
-    const trueWeekStart = startOfWeek(anyDayInWeek);
-    const trueWeekEnd = addDays(trueWeekStart, 6);
-    const wStart = dateKey(trueWeekStart);
-    const wEnd = dateKey(trueWeekEnd);
+    const wStart = weekDays[0];
+    const wEnd = weekDays[weekDays.length - 1];
     rows.push({ rowType: 'weekRecap', date: `Weekly Recap (${wStart} to ${wEnd})`, rangeStart: wStart, rangeEnd: wEnd, ...computeMetricsForDateRange(rangeData, wStart, wEnd) });
     weekDays = [];
   };
@@ -359,7 +324,7 @@ function buildDisplayRows(rangeData, startDate, endDate) {
 
     if (weekDays.length && cursor.getDay() === WEEK_START_DAY) flushWeek();
 
-    rows.push({ rowType: 'day', date: dayKey, ...computeMetricsForDateRange(rangeData, dayKey, dayKey) });
+    rows.push({ rowType: 'day', weekStart: weekDays.length === 0, date: dayKey, ...computeMetricsForDateRange(rangeData, dayKey, dayKey) });
     weekDays.push(dayKey);
     periodDays.push(dayKey);
     cursor = addDays(cursor, 1);
@@ -431,7 +396,7 @@ function renderTable() {
       const dow = DAY_NAMES[new Date(row.date + 'T00:00:00').getDay()];
       const note = laState.notesByDate[row.date] || '';
       const metricCells = FIELD_DEFS.map((f) => rowTd(fmtValue(f, row[f.key]), cellStyle)).join('');
-      return `<tr>
+      return `<tr class="analytics-week-row${row.weekStart ? ' analytics-week-start' : ''}">
         ${rowTd(escapeHtml(row.date), cellStyle)}
         ${rowTd(escapeHtml(dow), cellStyle)}
         ${rowTd(`<input type="text" class="cell-input la-note-input" data-note-date="${row.date}" value="${escapeHtml(note)}" placeholder="Note…" style="width:100%;">`, cellStyle)}
@@ -448,7 +413,7 @@ function renderTable() {
     const cellStyle = isPeriod ? 'background:#006495; color:#fff; font-weight:700;' : 'background:#54b2e5; color:#000; font-weight:700;';
     const metricCells = FIELD_DEFS.map((f) => rowTd(fmtValue(f, row[f.key]), cellStyle)).join('');
     const reportBtn = `<button type="button" class="btn btn-ghost" style="padding:2px 10px; font-size:11px;" data-report-start="${row.rangeStart}" data-report-end="${row.rangeEnd}" data-report-weekly="${row.rowType === 'weekRecap' ? '1' : '0'}">Generate Report</button>`;
-    const rowHtml = `<tr>
+    const rowHtml = `<tr class="${isPeriod ? 'analytics-period-recap' : 'analytics-week-row analytics-week-end'}">
       ${rowTd(escapeHtml(row.date), cellStyle, ' colspan="3"')}
       ${metricCells}
       ${rowTd(reportBtn, cellStyle)}
@@ -599,12 +564,8 @@ async function reload() {
 
   for (let i = 0; i < ranges.length; i++) {
     const { start, end } = ranges[i];
-    // Fetch wider than what's actually displayed — padded out to the
-    // full containing week at each end — so the first/last Weekly Recap
-    // rows can be computed from the TRUE 7-day week even when this
-    // chunk's own boundary cuts a week short.
-    const fetchStart = dateKey(startOfWeek(new Date(start + 'T00:00:00')));
-    const fetchEnd = dateKey(addDays(startOfWeek(new Date(end + 'T00:00:00')), 6));
+    const fetchStart = start;
+    const fetchEnd = end;
     const [rangeData, notes] = await Promise.all([
       fetchRangeData(fetchStart, fetchEnd, laState.activeTab),
       loadNotesForRange(start, end, laState.activeTab),
@@ -661,8 +622,7 @@ function renderRecapPreview() {
 
 // Generic — works for any date range (a week or a period), not just a
 // single day. Always re-fetches fresh for the EXACT given range, so a
-// week that straddles a quarter boundary still generates a complete,
-// accurate report regardless of what's currently loaded on screen.
+// report agrees with its recap, including a partial week.
 async function openReportForRange(startKey, endKey, isWeekly) {
   laState.reportRange = { start: startKey, end: endKey };
   const rangeData = await fetchRangeData(startKey, endKey, laState.activeTab);
