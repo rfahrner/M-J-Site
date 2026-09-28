@@ -105,7 +105,7 @@ function ensureRateColumnOrder() {
   const current = [...headRow.children];
   const order = ['Highlight', 'Date', 'Aljex #', 'Driver', 'MC', 'Applied',
     'Rate Customer', 'Rate Carrier', 'Trip ID', 'Total Miles', 'Total Stops',
-    'Revenue Rate', 'FSC Payment', 'Sent', 'Released', 'Hidden'];
+    'Revenue Rate', 'FSC Payment', 'Sent', 'Released'];
   const key = th => {
     if (th.querySelector('[data-acct-driver-sort]')) return 'Driver';
     const text = th.textContent.trim();
