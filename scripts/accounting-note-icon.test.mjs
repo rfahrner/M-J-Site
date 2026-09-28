@@ -37,7 +37,10 @@ test('rendered accounting driver cell contains the blank or yellow Notes shortcu
  const f=fixture([{id:1,shift_id:10,note_text:'Load note'}]);
  await f.refresh([10,11]);
  const ctx=vm.createContext({
-  LOCATIONS_WITH_LEVELS:['atlanta'],LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST:['delaware'],LOCATIONS_WITHOUT_FSC:['atlanta'],
+  LOCATIONS_WITH_LEVELS:['atlanta'],LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST:['delaware'],LOCATIONS_WITHOUT_FSC:['atlanta','houston'],
+  // Houston hides Total Miles/Stops and shows the carrier's email; the row
+  // builder reads both lists, so the sandbox has to carry them.
+  LOCATIONS_WITHOUT_MILES_STOPS:['houston'],LOCATIONS_WITH_CARRIER_EMAIL:['houston'],acctCarrierEmailHtml:()=>'-',
   escapeHtml:value=>String(value ?? ''),acctMilesStopsHtml:()=>({miles:'10',stops:'1'}),
   acctPushStickyHtml:()=>'<span data-existing-push-note>Existing push note</span>',
   accountingNoteButton:f.button,acctRouteIdsHtml:()=>'',acctRoutesChipsHtml:()=>'',fmtMoney:()=>'',pendingAccountingChecks:new Set()

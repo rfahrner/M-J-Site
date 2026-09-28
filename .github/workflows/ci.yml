@@ -84,6 +84,9 @@ jobs:
       - name: Test accounting checkbox persistence
         run: node --test scripts/accounting-save.test.mjs scripts/accounting-note-icon.test.mjs
 
+      - name: Test Houston accounting columns
+        run: node scripts/accounting-houston-columns.test.mjs
+
       - name: Test analytics arithmetic and weekly recap grouping
         run: node scripts/analytics-weekly-totals.test.mjs
 

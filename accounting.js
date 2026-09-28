@@ -7,7 +7,7 @@ import {
   saveLoadDetailsEdit, stopFieldsHtml, openLoadDetailsFromAccounting, submitLoadNote,
   commitRateOverride, resetRateToCalculated, changeRouteType, setHostlerHours, commitRateBoxOverride, openEditDriverModal,
   loadLocationNotes, openLocationNotesModal, closeLocationNotesModal, saveLocationNotes,
-  showDriverAssignmentWarning, SHIFTS_TABLE,
+  showDriverAssignmentWarning, SHIFTS_TABLE, DRIVERS_TABLE,
 } from './loadboard.js';
 import { ACCOUNTING_TABLE, ACCOUNTING_ROUTES_TABLE, loadPricingData, calcRoute, getPricingTiers, getPricingSettings } from './accountingcalc.js';
 import { releaseToAljex } from './aljex-outbox.js';
@@ -165,6 +165,11 @@ function accountingNoteButton(rec) {
   // text snapshots taken when the shift was completed), so clicking a
   // route chip has to match by that text — see openLoadDetailsFromAccounting.
   let acctRoutesByAccountingId = {};
+  // driver_id -> the carrier's email off the driver profile. Read live rather
+  // than copied onto the accounting record, because an accountant chasing a
+  // load wants the address the carrier uses now, not the one that was on file
+  // the night the load closed.
+  let acctDriverEmailById = {};
   // loadboard.js's openLoadDetailsFromAccounting() needs to look up a
   // record from this module-private array — this is the sanctioned way
   // in, rather than exporting the array itself.
@@ -220,6 +225,18 @@ function accountingNoteButton(rec) {
         (shiftRows || []).forEach((s) => { acctShiftCompleteById[s.id] = !!s.shift_complete; });
       }
     }
+    // Chunked like the rest: this list grows with every load that lands in
+    // Accounting, and a long .in() truncates without saying so.
+    const driverIds = [...new Set(accountingRecords.map((r) => r.driver_id).filter((id) => id != null))];
+    if (driverIds.length) {
+      acctDriverEmailById = {};
+      for (const idChunk of chunk(driverIds, CHUNK_SIZE)) {
+        const { data: drivers, error: driverErr } = await supabaseClient.from(DRIVERS_TABLE).select('id, "E mail"').in("id", idChunk);
+        if (driverErr) { console.error("Failed to load driver emails (chunk):", driverErr); continue; }
+        (drivers || []).forEach((d) => { acctDriverEmailById[d.id] = String(d["E mail"] || "").trim(); });
+      }
+    }
+
     await refreshAccountingLoadNotes(allShiftIds);
     const accountingIds = accountingRecords.map((r) => r.id);
     if (accountingIds.length) {
@@ -308,24 +325,46 @@ function accountingNoteButton(rec) {
     return { miles, stops };
   }
   export function fmtMoney(n) { return n == null ? "—" : `$${Number(n).toFixed(2)}`; }
+  // A mailto, because the only reason to want this on the page is to write to
+  // them. A load typed in by driver name has no profile to read, and plenty of
+  // profiles have no email on file yet -- both show a dash rather than an empty
+  // cell that looks like a rendering fault.
+  export function acctCarrierEmailHtml(rec) {
+    const email = rec.driver_id == null ? "" : (acctDriverEmailById[rec.driver_id] || "");
+    if (!email) return "—";
+    // escapeHtml, not encodeURIComponent: this is an HTML attribute, and
+    // percent-encoding the @ is not what a mail client expects to be handed.
+    return `<a href="mailto:${escapeHtml(email)}" title="${escapeHtml(email)}">${escapeHtml(email)}</a>`;
+  }
   const LOCATIONS_WITH_LEVELS = ["atlanta"]; // only these use Cost/Revenue Level tiers — everyone else has a set rate
   const LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST = ["delaware"]; // flat-rate locations: show Routes, hide Total Cost/Revenue/FSC
-  const LOCATIONS_WITHOUT_FSC = ["atlanta"]; // Atlanta keeps Total Cost/Revenue but doesn't need its own FSC column
+  const LOCATIONS_WITHOUT_FSC = ["atlanta", "houston"]; // keep Total Cost/Revenue but no FSC column of their own
+  // Houston's loads carry neither figure -- total_miles and total_stops are
+  // null on every one of its records, so the columns were two dashes on every
+  // row of every day. Nothing computes from them here either; this hides the
+  // columns and changes no arithmetic.
+  const LOCATIONS_WITHOUT_MILES_STOPS = ["houston"];
+  // The carrier's email beside the driver, for the tabs whose accountants chase
+  // paperwork by email. Off the driver profile, so it is blank where the
+  // profile is blank rather than showing something stale.
+  const LOCATIONS_WITH_CARRIER_EMAIL = ["houston"];
   export function acctTableHeaderHtml() {
     const loc = state.acctLocationTab || "atlanta";
     const showLevels = LOCATIONS_WITH_LEVELS.includes(loc);
     const showRoutesInstead = LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST.includes(loc);
     const showFsc = !showRoutesInstead && !LOCATIONS_WITHOUT_FSC.includes(loc);
+    const showMilesStops = !LOCATIONS_WITHOUT_MILES_STOPS.includes(loc);
+    const showEmail = LOCATIONS_WITH_CARRIER_EMAIL.includes(loc);
     return `<tr>
       <th>Date</th>
       <th>Aljex #</th>
       <th aria-sort="${accountingDriverSort === 1 ? "ascending" : accountingDriverSort === -1 ? "descending" : "none"}">${accountingDriverHeaderHtml()}</th>
+      ${showEmail ? `<th>MC Email</th>` : ""}
       <th>MC</th>
       ${showLevels ? `<th>Cost Level</th><th>Revenue Rate</th>` : ""}
       ${showLevels ? `<th>Routes</th>` : ""}
       ${showRoutesInstead ? `<th>Routes</th>` : ""}
-      <th>Total Miles</th>
-      <th>Total Stops</th>
+      ${showMilesStops ? `<th>Total Miles</th><th>Total Stops</th>` : ""}
       <th>Carrier Rate</th>
       ${showRoutesInstead ? "" : `<th>Customer Rate</th>${showFsc ? "<th>FSC Payment</th>" : ""}`}
       <th>Day Type</th>
@@ -338,6 +377,8 @@ function accountingNoteButton(rec) {
     const showLevels = LOCATIONS_WITH_LEVELS.includes(rec.location);
     const showRoutesInstead = LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST.includes(rec.location);
     const showFsc = !showRoutesInstead && !LOCATIONS_WITHOUT_FSC.includes(rec.location);
+    const showMilesStops = !LOCATIONS_WITHOUT_MILES_STOPS.includes(rec.location);
+    const showEmail = LOCATIONS_WITH_CARRIER_EMAIL.includes(rec.location);
     /*
      * Say what each level MEANS. These read "1", "2", "3", "4 (Market)", which
      * is unreadable for the one decision this dropdown exists to make: whether
@@ -378,14 +419,14 @@ function accountingNoteButton(rec) {
       <td>${escapeHtml(rec.shift_date)}</td>
       <td>${rec.aljex_load_number ? `<span class="acct-load-reference"><span class="acct-load-text">${escapeHtml(rec.aljex_load_number)}</span><button type="button" class="cell-link-btn" style="width:auto; padding:2px 6px;" data-open-acct-load="${rec.id}" aria-label="Open load ${escapeHtml(rec.aljex_load_number)}" title="Open load">↗</button></span>` : "—"}</td>
       <td>${escapeHtml(rec.driver_name_text || "—")} ${accountingNoteButton(rec)}${acctPushStickyHtml(rec)}${isCancelled ? `<div class="subtext" style="text-decoration:none; color:var(--slate-500);">Cancelled — ${escapeHtml(rec.cancelled_reason || "no reason recorded")}</div>` : ""}</td>
+      ${showEmail ? `<td>${acctCarrierEmailHtml(rec)}</td>` : ""}
       <td>${escapeHtml(rec.mc_dot || "—")}</td>
       ${showLevels ? `
       <td><select class="cell-input" data-action="acct-cost-level" data-id="${rec.id}" title="What D&L pays the carrier">${levelSelect(COST_LEVELS, rec.cost_level ?? 1)}</select></td>
       <td><select class="cell-input" data-action="acct-revenue-level" data-id="${rec.id}" ${isCancelled ? "disabled" : ""} title="What Kroger is billed. Core unless this load ran at holiday rates.">${levelSelect(REVENUE_LEVELS, rec.revenue_level ?? 1)}</select></td>` : ""}
       ${showLevels ? `<td>${acctRouteIdsHtml(rec)}</td>` : ""}
       ${showRoutesInstead ? `<td>${acctRoutesChipsHtml(rec)}</td>` : ""}
-      <td>${ms.miles}</td>
-      <td>${ms.stops}</td>
+      ${showMilesStops ? `<td>${ms.miles}</td><td>${ms.stops}</td>` : ""}
       <td>
         <div style="display:flex; align-items:center; gap:2px;">
           <span class="subtext">$</span>
@@ -417,11 +458,14 @@ function accountingNoteButton(rec) {
     if (!body) return;
     const filtered = getFilteredAccountingRecords();
     const loc = state.acctLocationTab || "atlanta";
-    if ($("#accounting-table-head")) $("#accounting-table-head").innerHTML = acctTableHeaderHtml();
-    const showLevels = LOCATIONS_WITH_LEVELS.includes(loc);
-    const showRoutesInstead = LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST.includes(loc);
-    const showFsc = !showRoutesInstead && !LOCATIONS_WITHOUT_FSC.includes(loc);
-    const colspan = (showLevels ? (showFsc ? 14 : 13) : (showRoutesInstead ? 10 : (showFsc ? 11 : 10))) + 1;      body.innerHTML = filtered.length
+    const headerHtml = acctTableHeaderHtml();
+    if ($("#accounting-table-head")) $("#accounting-table-head").innerHTML = headerHtml;
+    // Counted off the header that was just built, rather than kept as a hand
+    // -maintained ternary per location. The old one had to be edited every time
+    // a column was added or hidden for one tab, and being wrong only showed up
+    // as a misaligned "no loads yet" row that nobody would report.
+    const colspan = (headerHtml.match(/<th\b/g) || []).length || 1;
+    body.innerHTML = filtered.length
       ? filtered.map(accountingRowHtml).join("")
       : `<tr><td colspan="${colspan}" class="subtext" style="padding:16px;">No completed loads ${state.acctDateFilter ? "for this day" : ""} here yet — mark a shift complete on the ${loc} board and it'll show up here.</td></tr>`;
     renderDriverStatsTable();
