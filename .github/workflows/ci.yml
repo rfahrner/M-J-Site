@@ -108,6 +108,9 @@ jobs:
       - name: Test Stop Times modal and Mondelez landing tab
         run: node scripts/stop-times-modal.test.mjs
 
+      - name: Test Load Details footer actions and route tabs
+        run: node scripts/load-details-footer-actions.test.mjs
+
       - name: Test backhaul location prompt
         run: node scripts/backhaul-location.test.mjs
 
