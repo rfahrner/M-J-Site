@@ -42,11 +42,12 @@ function headersFor(loc) {
     'state', 'accountingDriverSort', 'accountingDriverHeaderHtml',
     'LOCATIONS_WITH_LEVELS', 'LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST',
     'LOCATIONS_WITHOUT_FSC', 'LOCATIONS_WITHOUT_MILES_STOPS', 'LOCATIONS_WITH_CARRIER_EMAIL',
+    'LOCATIONS_WITH_MONDELEZ_COLS',
     `${HEADER}; return acctTableHeaderHtml();`
   )({ acctLocationTab: loc }, 0, () => 'Driver',
     listOf('LOCATIONS_WITH_LEVELS'), listOf('LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST'),
     listOf('LOCATIONS_WITHOUT_FSC'), listOf('LOCATIONS_WITHOUT_MILES_STOPS'),
-    listOf('LOCATIONS_WITH_CARRIER_EMAIL'));
+    listOf('LOCATIONS_WITH_CARRIER_EMAIL'), listOf('LOCATIONS_WITH_MONDELEZ_COLS'));
   return [...html.matchAll(/<th[^>]*>([\s\S]*?)<\/th>/g)].map((m) => m[1].replace(/<[^>]*>/g, '').trim());
 }
 
@@ -97,9 +98,12 @@ check('counted off the header', /const colspan = \(headerHtml\.match\(\/<th\\b\/
 
 console.log('\n7. the email cell');
 const CELL = /export function acctCarrierEmailHtml\(rec\)[\s\S]*?\n  \}/.exec(SRC)[0];
-const acctCarrierEmailHtml = new Function('acctDriverEmailById', 'escapeHtml',
+// The map now carries the cell alongside the email, so the tab that wants both
+// gets them from one lookup.
+const acctCarrierEmailHtml = new Function('acctDriverInfoById', 'escapeHtml',
   `${CELL.replace('export ', '')}; return acctCarrierEmailHtml;`
-)({ 7: 'dispatch@carrier.com', 9: '' }, (v) => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;'));
+)({ 7: { email: 'dispatch@carrier.com', cell: '555-0100' }, 9: { email: '', cell: '' } },
+  (v) => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;'));
 check('a profile with an email gets a mailto',
   acctCarrierEmailHtml({ driver_id: 7 }),
   '<a href="mailto:dispatch@carrier.com" title="dispatch@carrier.com">dispatch@carrier.com</a>');
@@ -111,11 +115,11 @@ check('a driver not on file is a dash', acctCarrierEmailHtml({ driver_id: 404 })
 check('no driver_id is a dash', acctCarrierEmailHtml({ driver_id: null }), '—');
 
 console.log('\n8. the email is read live, and read safely');
-check('fetched from the drivers table', /from\(DRIVERS_TABLE\)\.select\('id, "E mail"'\)/.test(SRC), true);
+check('fetched from the drivers table', /from\(DRIVERS_TABLE\)\.select\('id, "E mail", "Driver Cell"'\)/.test(SRC), true);
 // A long .in() truncates without erroring -- the same failure this page hit
 // once with the drivers table, which is why every other lookup here is chunked.
 check('chunked like every other lookup here', /for \(const idChunk of chunk\(driverIds, CHUNK_SIZE\)\)/.test(SRC), true);
-check('and not copied onto the accounting record', /acctDriverEmailById\[d\.id\]/.test(SRC), true);
+check('and not copied onto the accounting record', /acctDriverInfoById\[d\.id\]/.test(SRC), true);
 
 console.log(failures ? `\n  ${failures} check(s) FAILED\n` : '\n  All checks passed.\n');
 process.exit(failures ? 1 : 0);

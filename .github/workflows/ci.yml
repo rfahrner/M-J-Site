@@ -87,6 +87,9 @@ jobs:
       - name: Test Houston accounting columns
         run: node scripts/accounting-houston-columns.test.mjs
 
+      - name: Test Mondelez accounting tab
+        run: node scripts/accounting-mondelez-tab.test.mjs
+
       - name: Test analytics arithmetic and weekly recap grouping
         run: node scripts/analytics-weekly-totals.test.mjs
 

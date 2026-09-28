@@ -13,6 +13,11 @@ import { ACCOUNTING_TABLE, ACCOUNTING_ROUTES_TABLE, loadPricingData, calcRoute, 
 import { releaseToAljex } from './aljex-outbox.js';
 import { saveAccountingFields } from './accounting-save.js';
 import { initAccountingLoadSearch } from './accounting-load-search.js';
+// Deliberately not imported from mondelez.js. loadboard.js already imports both
+// this module and that one, and both import back from it, so pulling one page
+// module into another adds a direct edge to a cycle that has broken startup
+// before. A table name is a stable literal; a new import edge is not.
+const MONDELEZ_TABLE = "mondelez_loads";
 const pendingAccountingChecks = new Set();
 
 async function saveAccountingCheckbox(rec, patch, label) {
@@ -165,11 +170,15 @@ function accountingNoteButton(rec) {
   // text snapshots taken when the shift was completed), so clicking a
   // route chip has to match by that text — see openLoadDetailsFromAccounting.
   let acctRoutesByAccountingId = {};
-  // driver_id -> the carrier's email off the driver profile. Read live rather
-  // than copied onto the accounting record, because an accountant chasing a
-  // load wants the address the carrier uses now, not the one that was on file
-  // the night the load closed.
-  let acctDriverEmailById = {};
+  // driver_id -> { email, cell } off the driver profile. Read live rather than
+  // copied onto the accounting record, because an accountant chasing a load
+  // wants the contact the carrier uses now, not the one that was on file the
+  // night the load closed.
+  let acctDriverInfoById = {};
+  // source_mondelez_id -> the board row, for the three columns that live only
+  // there: the Mondelez site, the shift start and the delivery group. Same
+  // reasoning -- one copy of each fact, on the row that owns it.
+  let acctMondelezById = {};
   // loadboard.js's openLoadDetailsFromAccounting() needs to look up a
   // record from this module-private array — this is the sanctioned way
   // in, rather than exporting the array itself.
@@ -229,11 +238,24 @@ function accountingNoteButton(rec) {
     // Accounting, and a long .in() truncates without saying so.
     const driverIds = [...new Set(accountingRecords.map((r) => r.driver_id).filter((id) => id != null))];
     if (driverIds.length) {
-      acctDriverEmailById = {};
+      acctDriverInfoById = {};
       for (const idChunk of chunk(driverIds, CHUNK_SIZE)) {
-        const { data: drivers, error: driverErr } = await supabaseClient.from(DRIVERS_TABLE).select('id, "E mail"').in("id", idChunk);
-        if (driverErr) { console.error("Failed to load driver emails (chunk):", driverErr); continue; }
-        (drivers || []).forEach((d) => { acctDriverEmailById[d.id] = String(d["E mail"] || "").trim(); });
+        const { data: drivers, error: driverErr } = await supabaseClient.from(DRIVERS_TABLE).select('id, "E mail", "Driver Cell"').in("id", idChunk);
+        if (driverErr) { console.error("Failed to load driver contacts (chunk):", driverErr); continue; }
+        (drivers || []).forEach((d) => {
+          acctDriverInfoById[d.id] = { email: String(d["E mail"] || "").trim(), cell: String(d["Driver Cell"] || "").trim() };
+        });
+      }
+    }
+
+    const mondelezIds = [...new Set(accountingRecords.map((r) => r.source_mondelez_id).filter((id) => id != null))];
+    if (mondelezIds.length) {
+      acctMondelezById = {};
+      for (const idChunk of chunk(mondelezIds, CHUNK_SIZE)) {
+        const { data: mdz, error: mdzErr } = await supabaseClient.from(MONDELEZ_TABLE)
+          .select("id, location, start_time, delivery_group").in("id", idChunk);
+        if (mdzErr) { console.error("Failed to load Mondelez board rows (chunk):", mdzErr); continue; }
+        (mdz || []).forEach((m) => { acctMondelezById[m.id] = m; });
       }
     }
 
@@ -329,8 +351,25 @@ function accountingNoteButton(rec) {
   // them. A load typed in by driver name has no profile to read, and plenty of
   // profiles have no email on file yet -- both show a dash rather than an empty
   // cell that looks like a rendering fault.
+  export function mondelezSiteLabel(key) {
+    const k = String(key || "").trim();
+    if (!k) return "—";
+    return MONDELEZ_SITE_LABELS[k] || k;
+  }
+  export function acctDriverCell(rec) {
+    return rec.driver_id == null ? "" : (acctDriverInfoById[rec.driver_id]?.cell || "");
+  }
+  // Carrier pay below zero is not a credit, it is broken data -- 121 Mondelez
+  // loads were left holding a constant like -5600 against a few hundred
+  // dollars of revenue by a historical import. Marked where it is read, so it
+  // reads as something to fix rather than as a real cost sitting in the
+  // margin.
+  export function acctCarrierPayWarningHtml(rec) {
+    if (!(Number(rec.total_carrier_pay) < 0)) return "";
+    return `<div class="subtext" style="color:#b42318; font-weight:700;" title="Carrier pay cannot be negative — this figure came in wrong and needs correcting.">Check this figure</div>`;
+  }
   export function acctCarrierEmailHtml(rec) {
-    const email = rec.driver_id == null ? "" : (acctDriverEmailById[rec.driver_id] || "");
+    const email = rec.driver_id == null ? "" : (acctDriverInfoById[rec.driver_id]?.email || "");
     if (!email) return "—";
     // escapeHtml, not encodeURIComponent: this is an HTML attribute, and
     // percent-encoding the @ is not what a mail client expects to be handed.
@@ -348,6 +387,20 @@ function accountingNoteButton(rec) {
   // paperwork by email. Off the driver profile, so it is blank where the
   // profile is blank rather than showing something stale.
   const LOCATIONS_WITH_CARRIER_EMAIL = ["houston"];
+  // Mondelez runs out of thirteen sites and arrives here as one tab, the way
+  // the board's "All Locations (combined)" view does, so the site needs a
+  // column of its own. These three come off the board row rather than the
+  // accounting record: the site, the shift start and the delivery group.
+  const LOCATIONS_WITH_MONDELEZ_COLS = ["mondelez"];
+  // Labels for the sites, so the column reads "West Chester" rather than
+  // "westchester". Anything not listed falls back to its own key, so a new site
+  // appears as itself instead of vanishing.
+  const MONDELEZ_SITE_LABELS = {
+    westchester: "West Chester", morris: "Morris", addison: "Addison",
+    indianapolis: "Indianapolis", louisville: "Louisville", spokane: "Spokane",
+    lasvegas: "Las Vegas", boise: "Boise", kent: "Kent",
+    saltlakecity: "Salt Lake City", newberlin: "New Berlin",
+  };
   export function acctTableHeaderHtml() {
     const loc = state.acctLocationTab || "atlanta";
     const showLevels = LOCATIONS_WITH_LEVELS.includes(loc);
@@ -355,12 +408,15 @@ function accountingNoteButton(rec) {
     const showFsc = !showRoutesInstead && !LOCATIONS_WITHOUT_FSC.includes(loc);
     const showMilesStops = !LOCATIONS_WITHOUT_MILES_STOPS.includes(loc);
     const showEmail = LOCATIONS_WITH_CARRIER_EMAIL.includes(loc);
+    const showMdz = LOCATIONS_WITH_MONDELEZ_COLS.includes(loc);
     return `<tr>
       <th>Date</th>
+      ${showMdz ? `<th>Location</th>` : ""}
       <th>Aljex #</th>
       <th aria-sort="${accountingDriverSort === 1 ? "ascending" : accountingDriverSort === -1 ? "descending" : "none"}">${accountingDriverHeaderHtml()}</th>
       ${showEmail ? `<th>MC Email</th>` : ""}
       <th>MC</th>
+      ${showMdz ? `<th>Cell</th><th>Start</th><th>DG#</th>` : ""}
       ${showLevels ? `<th>Cost Level</th><th>Revenue Rate</th>` : ""}
       ${showLevels ? `<th>Routes</th>` : ""}
       ${showRoutesInstead ? `<th>Routes</th>` : ""}
@@ -379,6 +435,8 @@ function accountingNoteButton(rec) {
     const showFsc = !showRoutesInstead && !LOCATIONS_WITHOUT_FSC.includes(rec.location);
     const showMilesStops = !LOCATIONS_WITHOUT_MILES_STOPS.includes(rec.location);
     const showEmail = LOCATIONS_WITH_CARRIER_EMAIL.includes(rec.location);
+    const showMdz = LOCATIONS_WITH_MONDELEZ_COLS.includes(rec.location);
+    const mdz = showMdz ? (acctMondelezById[rec.source_mondelez_id] || null) : null;
     /*
      * Say what each level MEANS. These read "1", "2", "3", "4 (Market)", which
      * is unreadable for the one decision this dropdown exists to make: whether
@@ -417,10 +475,14 @@ function accountingNoteButton(rec) {
       : "";
     return `<tr id="acct-${rec.id}" class="${rec.highlighted ? "acct-highlighted" : ""}"${rowStyle}${cancelTitle}>
       <td>${escapeHtml(rec.shift_date)}</td>
+      ${showMdz ? `<td>${escapeHtml(mondelezSiteLabel(mdz?.location))}</td>` : ""}
       <td>${rec.aljex_load_number ? `<span class="acct-load-reference"><span class="acct-load-text">${escapeHtml(rec.aljex_load_number)}</span><button type="button" class="cell-link-btn" style="width:auto; padding:2px 6px;" data-open-acct-load="${rec.id}" aria-label="Open load ${escapeHtml(rec.aljex_load_number)}" title="Open load">↗</button></span>` : "—"}</td>
       <td>${escapeHtml(rec.driver_name_text || "—")} ${accountingNoteButton(rec)}${acctPushStickyHtml(rec)}${isCancelled ? `<div class="subtext" style="text-decoration:none; color:var(--slate-500);">Cancelled — ${escapeHtml(rec.cancelled_reason || "no reason recorded")}</div>` : ""}</td>
       ${showEmail ? `<td>${acctCarrierEmailHtml(rec)}</td>` : ""}
       <td>${escapeHtml(rec.mc_dot || "—")}</td>
+      ${showMdz ? `<td>${escapeHtml(acctDriverCell(rec) || "—")}</td>
+      <td>${escapeHtml(mdz?.start_time || "—")}</td>
+      <td>${escapeHtml(mdz?.delivery_group || "—")}</td>` : ""}
       ${showLevels ? `
       <td><select class="cell-input" data-action="acct-cost-level" data-id="${rec.id}" title="What D&L pays the carrier">${levelSelect(COST_LEVELS, rec.cost_level ?? 1)}</select></td>
       <td><select class="cell-input" data-action="acct-revenue-level" data-id="${rec.id}" ${isCancelled ? "disabled" : ""} title="What Kroger is billed. Core unless this load ran at holiday rates.">${levelSelect(REVENUE_LEVELS, rec.revenue_level ?? 1)}</select></td>` : ""}
@@ -432,6 +494,7 @@ function accountingNoteButton(rec) {
           <span class="subtext">$</span>
           <input class="cell-input" style="width:78px;" data-action="acct-carrier-pay" data-id="${rec.id}" value="${rec.total_carrier_pay != null ? Number(rec.total_carrier_pay).toFixed(2) : ""}">
         </div>
+        ${acctCarrierPayWarningHtml(rec)}
       </td>
       ${showRoutesInstead ? "" : `<td>
         <div style="display:flex; align-items:center; gap:2px;">

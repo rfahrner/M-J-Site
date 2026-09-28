@@ -41,6 +41,9 @@ test('rendered accounting driver cell contains the blank or yellow Notes shortcu
   // Houston hides Total Miles/Stops and shows the carrier's email; the row
   // builder reads both lists, so the sandbox has to carry them.
   LOCATIONS_WITHOUT_MILES_STOPS:['houston'],LOCATIONS_WITH_CARRIER_EMAIL:['houston'],acctCarrierEmailHtml:()=>'-',
+  // Mondelez adds Location/Cell/Start/DG# and the negative-carrier-pay flag.
+  LOCATIONS_WITH_MONDELEZ_COLS:['mondelez'],acctMondelezById:{},mondelezSiteLabel:()=>'-',
+  acctDriverCell:()=>'',acctCarrierPayWarningHtml:()=>'',
   escapeHtml:value=>String(value ?? ''),acctMilesStopsHtml:()=>({miles:'10',stops:'1'}),
   acctPushStickyHtml:()=>'<span data-existing-push-note>Existing push note</span>',
   accountingNoteButton:f.button,acctRouteIdsHtml:()=>'',acctRoutesChipsHtml:()=>'',fmtMoney:()=>'',pendingAccountingChecks:new Set()
