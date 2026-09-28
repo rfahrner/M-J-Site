@@ -59,3 +59,32 @@ for(let day=0;day<3;day++) for(let person=0;person<(day===2?9:57);person++) week
 assert.equal(location.computeMetricsFromRows(week,[],[]).drivers,123);
 assert.equal(volume.computeMetricsFromRows(week,[]).driversRequested,123);
 console.log('All analytics columns, daily totals, TONUs, partial weeks, quarter boundaries, and box grouping passed.');
+
+// Atlanta fixed TONU amounts replace linked ledger money and also cover a
+// TONU with no ledger row yet. Other locations keep their Accounting amounts.
+const fixedShifts = [
+ {id:101,location:'atlanta',shift_date:'2026-09-21',driver_id:1,tonu:true,load_cancelled:true},
+ {id:102,location:'atlanta',shift_date:'2026-09-22',driver_id:2,tonu:true},
+ {id:103,location:'delaware',shift_date:'2026-09-22',driver_id:3,tonu:true},
+ {id:104,location:'atlanta',shift_date:'2026-09-22',driver_id:4},
+];
+const fixedLedger = [
+ {source_shift_id:'101',shift_date:'2026-09-21',total_cost:999,total_revenue:888},
+ {source_shift_id:103,shift_date:'2026-09-22',total_cost:200,total_revenue:300},
+ {source_shift_id:104,shift_date:'2026-09-22',total_cost:500,total_revenue:1000},
+];
+const fixed=location.computeMetricsFromRows(fixedShifts,[],fixedLedger);
+assert.equal(fixed.cost,1000);
+assert.equal(fixed.revenue,1800);
+assert.equal(fixed.margin,800);
+assert.equal(fixed.drivers,4);
+assert.equal(fixed.revPerDriver,450);
+assert.equal(fixed.marginPerDriver,200);
+assert.equal(fixed.gmPct,800/1800*100);
+const fixedRows=location.buildDisplayRows({shifts:fixedShifts,trips:[],accountingRows:fixedLedger},'2026-09-21','2026-09-22');
+const fixedRecap=fixedRows.find(r=>r.rowType==='weekRecap');
+for(const key of ['cost','revenue','margin']) {
+ assert.equal(fixedRecap[key],fixed[key]);
+ assert.equal(fixedRecap[key],fixedRows.filter(r=>r.rowType==='day').reduce((sum,r)=>sum+r[key],0));
+}
+console.log('Atlanta TONU fixed cost, revenue, margin, ratios and weekly recap passed.');
