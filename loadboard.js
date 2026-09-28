@@ -5403,6 +5403,13 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     $("#modal-load-details").classList.add("hidden");
     $("#modal-load-details").classList.remove("ld-in-front");
     loadDetailsState = null;
+    // State is gone, so the footer must not keep offering to act on it.
+    renderLoadDetailsFooter();
+  }
+
+  function tripTabLabel(trip, index) {
+    const parts = [String(trip.routeId || "").trim(), String(trip.tripId || "").trim()].filter(Boolean);
+    return parts.join("/") || `Route ${index + 1}`;
   }
 
   function loadDetailsTabs(row) {
@@ -5410,10 +5417,40 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     return [
       { key: "overview", label: "Overview" },
       { key: "notes", label: "Notes" },
-      ...realTrips.map((t, i) => ({ key: `trip-${t.id}`, label: t.routeId || t.tripId || `Route ${i + 1}` })),
+      // "BA3002/1296760" -- a dispatcher looking for one route among five knows
+      // it by both numbers, and the Route ID alone repeats within a load (two
+      // FRGT legs, two Nestle legs), so it cannot tell the tabs apart on its
+      // own. Either half may be blank, in which case the other stands alone
+      // rather than leaving a dangling slash.
+      ...realTrips.map((t, i) => ({ key: `trip-${t.id}`, label: tripTabLabel(t, i) })),
       { key: "images", label: "Trip Sheet Images" },
       { key: "history", label: "Change History" },
     ];
+  }
+
+  // Which key the Edit/Save buttons act on for the tab that is open, or null
+  // when the tab has nothing to edit. The in-body buttons carry this in a data
+  // attribute; the footer ones are outside the rendered content, so they work
+  // it out from the active tab instead. Same two values either way: "overview",
+  // or the trip's local id.
+  function loadDetailsEditKey() {
+    const tab = loadDetailsState?.activeTab;
+    if (tab === "overview") return "overview";
+    if (typeof tab === "string" && tab.startsWith("trip-")) return tab.slice(5);
+    return null;
+  }
+
+  // Kept in step with the body by being called from the same render. Edit turns
+  // into Cancel + Save while editing, and all three disappear on the tabs that
+  // only display -- an Edit button that does nothing is worse than no button.
+  export function renderLoadDetailsFooter() {
+    const editBtn = $("#ld-edit-btn"), cancelBtn = $("#ld-cancel-btn"), saveBtn = $("#ld-save-btn");
+    if (!editBtn || !cancelBtn || !saveBtn) return;
+    const key = loadDetailsEditKey();
+    const editing = !!key && loadDetailsState?.editMode === key;
+    editBtn.classList.toggle("hidden", !key || editing);
+    cancelBtn.classList.toggle("hidden", !editing);
+    saveBtn.classList.toggle("hidden", !editing);
   }
 
   export function renderLoadDetailsTabs() {
@@ -5612,6 +5649,11 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   }
 
   function renderLoadDetailsTabContent() {
+    // Called here rather than from each of the dozen callers, because every
+    // path that changes the tab or the edit state ends up in this function --
+    // and one that did not would silently leave a Save button on a panel that
+    // is no longer editing.
+    renderLoadDetailsFooter();
     if (!loadDetailsState) return;
     const found = findRowAnywhere(loadDetailsState.rowId);
     const body = $("#ld-tab-content");
@@ -7567,6 +7609,17 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     if ($("#modal-load-details")) {
       on("ld-close", "click", closeLoadDetailsModal);
       on("ld-close-btn", "click", closeLoadDetailsModal);
+      // Deliberately the same three functions the in-body buttons call, keyed
+      // off the open tab. Two ways to reach one code path, not two code paths.
+      on("ld-edit-btn", "click", () => {
+        const key = loadDetailsEditKey();
+        if (key) startLoadDetailsEdit(key);
+      });
+      on("ld-cancel-btn", "click", cancelLoadDetailsEdit);
+      on("ld-save-btn", "click", () => {
+        const key = loadDetailsEditKey();
+        if (key) saveLoadDetailsEdit(key);
+      });
       $("#modal-load-details").addEventListener("click", (e) => { if (e.target.id === "modal-load-details") closeLoadDetailsModal(); });
       $("#ld-tabs").addEventListener("click", (e) => {
         const tabBtn = e.target.closest(".ld-tab");
