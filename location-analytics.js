@@ -204,7 +204,7 @@ async function fetchRangeData(startDate, endDate, location) {
   const shifts = await fetchAllRows(
     // driver_name_text, load_cancelled and called_off are all needed to count
     // drivers the way the business does -- see countDrivers().
-    SHIFTS_TABLE, 'id, shift_date, driver_id, driver_name_text, tonu, load_cancelled, called_off',
+    SHIFTS_TABLE, 'id, location, shift_date, driver_id, driver_name_text, tonu, load_cancelled, called_off',
     (q) => q.eq('location', location).gte('shift_date', startDate).lte('shift_date', endDate)
   );
   const shiftIds = shifts.map((s) => s.id);
@@ -215,7 +215,7 @@ async function fetchRangeData(startDate, endDate, location) {
   }
 
   const accountingRows = await fetchAllRows(
-    ACCOUNTING_TABLE, 'shift_date, total_cost, total_revenue',
+    ACCOUNTING_TABLE, 'source_shift_id, shift_date, total_cost, total_revenue',
     (q) => q.eq('location', location).gte('shift_date', startDate).lte('shift_date', endDate)
   );
 
@@ -249,8 +249,14 @@ function computeMetricsFromRows(shiftsInScope, tripsInScope, accountingInScope) 
   const salvage = realTrips.filter((t) => t.salvage).length;
   const backhauls = realTrips.filter((t) => t.backhaul).length;
   const tonu = shiftsInScope.filter((s) => s.tonu).length;
-  const revenue = accountingInScope.reduce((sum, r) => sum + (Number(r.total_revenue) || 0), 0);
-  const cost = accountingInScope.reduce((sum, r) => sum + (Number(r.total_cost) || 0), 0);
+  // Atlanta TONUs have fixed economics, even before Accounting is populated.
+  // Replace their linked ledger totals so a TONU is never counted twice.
+  const atlantaTonus = new Set(shiftsInScope
+    .filter((s) => s.location === 'atlanta' && s.tonu && s.id != null)
+    .map((s) => String(s.id)));
+  const regularAccounting = accountingInScope.filter((r) => !atlantaTonus.has(String(r.source_shift_id)));
+  const revenue = regularAccounting.reduce((sum, r) => sum + (Number(r.total_revenue) || 0), 0) + atlantaTonus.size * 250;
+  const cost = regularAccounting.reduce((sum, r) => sum + (Number(r.total_cost) || 0), 0) + atlantaTonus.size * 150;
   const margin = revenue - cost;
 
   return {
