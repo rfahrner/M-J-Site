@@ -331,7 +331,6 @@ function accountingNoteButton(rec) {
       <th>Day Type</th>
       <th>Sent</th>
       <th>Released</th>
-      <th>Hidden</th>
       <th>Highlight</th>
     </tr>`;
   }
@@ -362,7 +361,7 @@ function accountingNoteButton(rec) {
     };
     const dayTypeOptions = ["weekday", "weekend", "holiday"].map((d) => `<option value="${d}" ${d === (rec.day_type || "weekday") ? "selected" : ""}>${d[0].toUpperCase() + d.slice(1)}</option>`).join("");
     const ms = acctMilesStopsHtml(rec);
-    const isDimmed = rec.hidden || rec.status === "released";
+    const isDimmed = rec.status === "released";
     // A cancelled load is struck through across the whole row. It carries
     // no money by design, so the only things worth reading on it are the
     // driver, their details, and why it was cancelled -- the reason rides
@@ -402,7 +401,6 @@ function accountingNoteButton(rec) {
       <td><select class="cell-input" data-action="acct-day-type" data-id="${rec.id}">${dayTypeOptions}</select></td>
       <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-sent" data-id="${rec.id}" ${pendingAccountingChecks.has(String(rec.id)) ? "disabled" : ""} ${rec.sent ? "checked" : ""} title="Sent"></td>
       <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-released" data-id="${rec.id}" ${pendingAccountingChecks.has(String(rec.id)) ? "disabled" : ""} ${rec.status === "released" ? "checked" : ""} title="Released"></td>
-      <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-hidden" data-id="${rec.id}" ${pendingAccountingChecks.has(String(rec.id)) ? "disabled" : ""} ${rec.hidden ? "checked" : ""} title="Hidden"></td>
       <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-highlighted" data-id="${rec.id}" ${pendingAccountingChecks.has(String(rec.id)) ? "disabled" : ""} ${rec.highlighted ? "checked" : ""} title="Highlight row" aria-label="Highlight row"></td>
     </tr>`;
   }
@@ -410,26 +408,10 @@ function accountingNoteButton(rec) {
     const loc = state.acctLocationTab || "atlanta";
     let filtered = accountingRecords.filter((r) => r.location === loc);
     if (state.acctDateFilter) filtered = filtered.filter((r) => r.shift_date === state.acctDateFilter);
-    if (!state.acctShowHidden) filtered = filtered.filter((r) => !r.hidden);
     if (accountingDriverSort) filtered.sort((a, b) => compareAccountingDriverNames(a.driver_name_text, b.driver_name_text) || acctSortCompare(a, b));
     return filtered;
   }
 
-  // Count of hidden rows for the current location tab — drives the label
-  // on the Show Hidden toggle. Deliberately ignores the day filter (shows
-  // the total for the whole tab), so the count doesn't flicker as someone
-  // clicks through days.
-  function hiddenCountForCurrentTab() {
-    const loc = state.acctLocationTab || "atlanta";
-    return accountingRecords.filter((r) => r.location === loc && r.hidden).length;
-  }
-
-  function updateShowHiddenButton() {
-    const btn = $("#btn-show-hidden");
-    if (!btn) return;
-    const count = hiddenCountForCurrentTab();
-    btn.textContent = state.acctShowHidden ? "Hide Hidden Again" : `Show Hidden (${count})`;
-  }
   export function renderAccountingTable() {
     const body = $("#accounting-table-body");
     if (!body) return;
@@ -439,11 +421,10 @@ function accountingNoteButton(rec) {
     const showLevels = LOCATIONS_WITH_LEVELS.includes(loc);
     const showRoutesInstead = LOCATIONS_WITH_ROUTES_INSTEAD_OF_COST.includes(loc);
     const showFsc = !showRoutesInstead && !LOCATIONS_WITHOUT_FSC.includes(loc);
-    const colspan = (showLevels ? (showFsc ? 14 : 13) : (showRoutesInstead ? 10 : (showFsc ? 11 : 10))) + 2;      body.innerHTML = filtered.length
+    const colspan = (showLevels ? (showFsc ? 14 : 13) : (showRoutesInstead ? 10 : (showFsc ? 11 : 10))) + 1;      body.innerHTML = filtered.length
       ? filtered.map(accountingRowHtml).join("")
       : `<tr><td colspan="${colspan}" class="subtext" style="padding:16px;">No completed loads ${state.acctDateFilter ? "for this day" : ""} here yet — mark a shift complete on the ${loc} board and it'll show up here.</td></tr>`;
     renderDriverStatsTable();
-    updateShowHiddenButton();
   }
 export function renderDriverStatsTable() {
     const body = $("#accounting-driver-table-body");
@@ -554,7 +535,6 @@ export function renderDriverStatsTable() {
     state.acctLocationTab = "atlanta";
     state.acctDateFilter = state.todayKey;
     state.activeDate = state.todayKey;
-    state.acctShowHidden = false;
     await loadPricingData();
     const initialSettings = getPricingSettings();
     if (initialSettings && $("#fsc-rate-input")) $("#fsc-rate-input").value = initialSettings.fsc_rate || "";
@@ -600,12 +580,7 @@ export function renderDriverStatsTable() {
         renderAccountingTable();
       });
     }
-    if ($("#btn-show-hidden")) {
-      $("#btn-show-hidden").addEventListener("click", () => {
-        state.acctShowHidden = !state.acctShowHidden;
-        renderAccountingTable();
-      });
-    }
+
     $("#date-prev").addEventListener("click", () => setAcctDateFilter(dateKey(addDays(keyToDate(state.activeDate || state.todayKey), -1))));
     $("#date-next").addEventListener("click", () => setAcctDateFilter(dateKey(addDays(keyToDate(state.activeDate || state.todayKey), 1))));
     $("#date-input").addEventListener("change", (e) => setAcctDateFilter(e.target.value));
@@ -644,11 +619,6 @@ export function renderDriverStatsTable() {
           const rec = accountingRecords.find((r) => r.id == t.dataset.id);
           if (!rec) return;
           void saveAccountingCheckbox(rec, { highlighted: t.checked }, 'Highlight');
-        }
-        else if (t.dataset.action === "acct-hidden") {
-          const rec = accountingRecords.find((r) => r.id == t.dataset.id);
-          if (!rec) return;
-          void saveAccountingCheckbox(rec, { hidden: t.checked }, 'Hidden');
         }
         else if (t.dataset.action === "acct-sent") {
           const rec = accountingRecords.find((r) => r.id == t.dataset.id);
