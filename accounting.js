@@ -91,25 +91,62 @@ async function saveAccountingMoneyField(rec, field, value) {
  * know it was replaced rather than think they mistyped.
  *
  * push_shift_to_accounting() writes the sentence; this draws it as a sticky
- * beside the driver name. Clicking it clears the note -- the figure stays, the
- * flag is just acknowledged.
+ * beside the driver name. Clicking it opens the note; the explicit Dismiss
+ * alert button acknowledges it without changing the figure.
  */
 function acctPushStickyHtml(rec) {
   if (!rec.push_note) return "";
   const when = rec.pushed_at ? new Date(rec.pushed_at).toLocaleString() : "";
-  const title = `${rec.push_note}${when ? `\n${when}` : ""}\n\nClick to dismiss.`;
-  return `<button type="button" class="acct-push-sticky" data-acct-dismiss-push="${rec.id}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">!</button>`;
+  const title = `${rec.push_note}${when ? `\n${when}` : ""}\n\nClick to view alert.`;
+  return `<button type="button" class="acct-push-sticky" data-acct-open-push="${rec.id}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">!</button>`;
+}
+
+function openAccountingPushNote(id) {
+  const rec = getAccountingRecordById(id);
+  if (!rec?.push_note) return;
+  document.getElementById("accounting-alert-dialog")?.remove();
+  const dialog = document.createElement("dialog");
+  dialog.id = "accounting-alert-dialog";
+  dialog.setAttribute("aria-labelledby", "accounting-alert-title");
+  dialog.style.cssText = "width:min(420px,calc(100vw - 32px));box-sizing:border-box;border:1px solid #ccd3dc;border-radius:12px;padding:20px;background:#fff;color:#172b4d;box-shadow:0 16px 48px #0004;";
+  dialog.innerHTML = `<h3 id="accounting-alert-title" style="margin:0 0 12px;">Accounting alert</h3>
+    <div data-alert-note style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:50vh;overflow:auto;"></div>
+    <p data-alert-time style="font-size:12px;color:#64748b;"></p>
+    <p data-alert-error role="alert" style="color:#b42318;"></p>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+      <button type="button" class="btn btn-ghost" data-alert-close autofocus>Close</button>
+      <button type="button" class="btn" data-alert-dismiss>Dismiss alert</button>
+    </div>`;
+  dialog.querySelector('[data-alert-note]').textContent = rec.push_note;
+  dialog.querySelector('[data-alert-time]').textContent = rec.pushed_at ? new Date(rec.pushed_at).toLocaleString() : '';
+  dialog.querySelector('[data-alert-close]').onclick = () => dialog.close();
+  dialog.addEventListener('close', () => dialog.remove(), { once: true });
+  dialog.querySelector('[data-alert-dismiss]').onclick = async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    dialog.querySelector('[data-alert-error]').textContent = '';
+    if (await dismissAccountingPushNote(id)) dialog.close();
+    else {
+      dialog.querySelector('[data-alert-error]').textContent = 'Could not dismiss the alert. Please try again.';
+      button.disabled = false;
+    }
+  };
+  document.body.appendChild(dialog);
+  dialog.showModal();
 }
 
 async function dismissAccountingPushNote(id) {
   const rec = getAccountingRecordById(id);
-  if (!rec) return;
-  rec.push_note = null;
-  renderAccountingTable();
+  if (!rec) return false;
   try {
     await saveAccountingFields(supabaseClient, id, { push_note: null });
+    const current = getAccountingRecordById(id);
+    if (current) current.push_note = null;
+    renderAccountingTable();
+    return true;
   } catch (err) {
     setDriverSyncStatus(`Couldn't clear that note (${err.message || err}).`, "error");
+    return false;
   }
 }
 
@@ -800,8 +837,8 @@ export function renderDriverStatsTable() {
         }
       });
       table.addEventListener("click", (e) => {
-        const sticky = e.target.closest("[data-acct-dismiss-push]");
-        if (sticky) { void dismissAccountingPushNote(sticky.dataset.acctDismissPush); return; }
+        const sticky = e.target.closest("[data-acct-open-push]");
+        if (sticky) { openAccountingPushNote(sticky.dataset.acctOpenPush); return; }
         const noteBtn = e.target.closest('[data-acct-load-notes]');
         if (noteBtn) { void openLoadDetailsFromAccounting(noteBtn.dataset.acctLoadNotes, null, null, 'notes'); return; }
         const openBtn = e.target.closest("[data-open-acct-load]");
