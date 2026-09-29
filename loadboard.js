@@ -2353,6 +2353,15 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       };
     }
     const drv = row.driverId ? findDriver(row.driverId) : null;
+    // The driver list loads asynchronously after the board. Until this
+    // assigned profile arrives, its negotiated rates are unknown. Saving a
+    // location-only calculation here briefly reprices the load on every visit.
+    if (row.driverId && !drv) {
+      return {
+        total: Number(row.rate) || 0, mode: "driver-not-loaded", lines: [], notReady: true,
+        note: "Waiting for the assigned driver's rate profile. The saved rate is unchanged.",
+      };
+    }
     const driverOv = drv && (
       locationKey === "atlanta" ? drv.atlantaRateOverrides :
       locationKey === "delaware" ? drv.delawareRateOverrides :
