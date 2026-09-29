@@ -59,6 +59,8 @@ test('PRO fragments are never recorded, even across a redraw restoring focus', (
 
 test('Tabbing through unchanged cells, editing back, or automatic value replacement produces no event', () => {
   const { history, entries } = setup();
+  history.blur({ dataset: {} }, null); // selection/action controls have no tracked field
+  history.focus({ dataset: {} });
   const pro = cell('proNumber', '1997623');
   history.focus(pro);
   history.focus(cell('driverName', 'Atiba Ward'));

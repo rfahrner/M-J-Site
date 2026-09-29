@@ -21,7 +21,7 @@ export function createCellEditHistory({ describe, commit }) {
   }
   function blur(element, activeElement) {
     const cell = describe(element);
-    if (active?.key !== cell?.key) return;
+    if (!active || !cell || active.key !== cell.key) return;
     // Redrawing and restoring this same cell does not commit partial text.
     if (describe(activeElement)?.key === active.key) return;
     finish();
