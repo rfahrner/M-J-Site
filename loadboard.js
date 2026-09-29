@@ -1,4 +1,5 @@
 import { shiftRelativeNow, tripTimeline } from './overnight-times.js';
+import { createCellEditHistory } from './cell-edit-history.js';
 /* ============================================================
    Load Board — application logic (multi-page version)
    Each tab is its own real HTML file; this file is loaded on
@@ -1723,38 +1724,33 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   // shift completion, TONU, delete, reassignment). shift_id is set when
   // available but load_label is always captured too, so entries stay
   // readable even after the parent load is deleted.
-  async function logChange(shiftDbId, label, fieldName, oldValue, newValue) {
-    if (!supabaseClient) return;
-    // Only a genuine CHANGE gets tracked — not the first time a value is
-    // entered into a field that was previously blank. Filling in an empty
-    // start time isn't a change; 15:00 -> 22:00 is. A boolean toggle's
-    // "before" (the literal string "false") still counts as a real prior
-    // value, so those keep logging correctly either way — this only
-    // suppresses the case where there was genuinely nothing there yet.
-    const oldIsBlank = oldValue === null || oldValue === undefined || String(oldValue).trim() === "";
-    if (oldIsBlank) return;
-    if (String(oldValue) === String(newValue)) return;
+  async function logChange(shiftDbId, label, fieldName, oldValue, newValue, tripDbId = null) {
+    if (!supabaseClient || !shiftDbId) return;
+    const before = oldValue == null ? "" : String(oldValue).trim();
+    const after = newValue == null ? "" : String(newValue).trim();
+    if (before === after) return;
     try {
-      // log_load_change() instead of a plain INSERT, for the same reason the
-      // board's notes go through log_board_note(): this is called on focusout,
-      // and a redraw mid-typing fires focusout with partial text, so the audit
-      // trail was recording keystrokes as changes (740 of 36,352 entries). The
-      // function merges an entry that only extends the previous one from the
-      // same person on the same field within two minutes, keeping the ORIGINAL
-      // old_value -- the true "before" is what was there when editing started,
-      // not the previous keystroke. It re-checks the blank/no-op guards above
-      // server-side too, so any other caller gets the same behaviour.
-      const { error } = await supabaseClient.rpc("log_load_change", {
-        p_shift_id: shiftDbId || null,
+      // Only explicit user actions call this RPC. Each completed edit is its
+      // own event; separate edits must not be merged by a typing time window.
+      const { data, error } = await supabaseClient.rpc("log_committed_load_change", {
+        p_shift_id: shiftDbId,
         p_load_label: label || null,
         p_field_name: fieldName,
-        p_old_value: oldValue != null ? String(oldValue) : null,
-        p_new_value: newValue != null ? String(newValue) : null,
-        p_changed_by: currentUserLabel || "unknown user",
+        p_old_value: before || null,
+        p_new_value: after || null,
+        p_changed_by: currentUserLabel || null,
+        p_trip_id: tripDbId,
       });
       if (error) throw error;
+      // Push the saved entry into an already open History tab as well. There
+      // is no realtime listener and no need to close/reopen the load modal.
+      if (data?.id && loadDetailsState && String(findRowAnywhere(loadDetailsState.rowId)?.row.dbId) === String(shiftDbId)) {
+        loadDetailsState.history = [data, ...loadDetailsState.history.filter((h) => h.id !== data.id)];
+        if (loadDetailsState.activeTab === "history" && !document.activeElement?.dataset?.histNoteId) renderLoadDetailsTabContent();
+      }
     } catch (e) {
-      console.error("logChange failed:", e); // never block the actual action over a logging failure
+      console.error("logChange failed:", e);
+      setDriverSyncStatus("The edit was saved, but its change-history entry could not be saved. Please reload and check the history.", "error");
     }
   }
 
@@ -1766,10 +1762,8 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   // covered here, rather than showing nothing.
   // Shared phrasing for every "from X to Y" style entry. Handles a
   // genuinely blank old value gracefully (falls back to "set to Y"
-  // instead of an awkward "changed from  to Y") — this path only
-  // matters for entries logged before the blank-check fix went into
-  // logChange(); nothing new can ever have a blank "from" going forward,
-  // since logChange() skips logging that case entirely now.
+  // instead of an awkward "changed from  to Y"). Initial user entries and
+  // later overrides both describe the final value committed by the user.
   function fromToPhrase(label, ov, nv, prefix) {
     prefix = prefix || "";
     // `label` is escaped like every other value here. Most callers pass a
@@ -1798,18 +1792,18 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       case "tonu": return nv === "true" ? "Marked TONU" : "TONU removed";
       case "shift_complete": return nv === "true" ? "Shift marked complete" : "Shift marked incomplete";
       case "called_off": return nv === "true" ? "Marked as cancellation" : "Cancellation removed";
-      case "timesheet_received": return "Time sheet received";
-      case "pre_shift_text_sent": return "Pre-shift text sent";
+      case "timesheet_received": return nv === "true" ? "Time sheet received" : "Time sheet marked not received";
+      case "pre_shift_text_sent": return nv === "true" ? "Pre-shift text sent" : "Pre-shift text marked not sent";
       case "deleted": return "Load deleted";
       case "route_deleted": return "Route deleted";
       case "route_type": return `Route type changed to <strong>${escapeHtml(ROUTE_TYPE_LABELS[nv] || nv)}</strong>`;
       case "hostler_hours": return fromToPhrase("Hostler hours", ov, nv);
       case "carrier_rate_manual":
-      case "rate": return fromToPhrase("Carrier rate", ov, nv, "$");
+      case "rate": return nv ? fromToPhrase("Carrier rate", ov, nv, "$") : "Carrier rate override cleared — returned to calculated rate";
       case "route_id": return fromToPhrase("Route ID", ov, nv || "(blank)");
       case "trailer_out": return fromToPhrase("Trailer #", ov, nv || "(blank)");
       case "backhaul_trailer_number": return fromToPhrase("Return trailer #", ov, nv || "(blank)");
-      case "driver_reassigned": return ov ? `Driver changed from ${escapeHtml(ov)} to <strong>${escapeHtml(nv)}</strong>` : `Driver assigned: <strong>${escapeHtml(nv)}</strong>`;
+      case "driver_reassigned": return !nv ? `Driver removed: <strong>${escapeHtml(ov)}</strong>` : ov ? `Driver changed from ${escapeHtml(ov)} to <strong>${escapeHtml(nv)}</strong>` : `Driver assigned: <strong>${escapeHtml(nv)}</strong>`;
       case "driver_id": {
         // Older entries logged the raw numeric driver id directly rather
         // than a name — resolve both sides to real names at display
@@ -2108,13 +2102,21 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     });
   }
 
+  const scheduledCellSaves = new Map();
+  async function runScheduledCellSave(key, save) {
+    const prior = scheduledCellSaves.get(key) || Promise.resolve();
+    const task = prior.then(save);
+    scheduledCellSaves.set(key, task);
+    try { return await task; }
+    finally { if (scheduledCellSaves.get(key) === task) scheduledCellSaves.delete(key); }
+  }
   function scheduleShiftSave(row) {
     clearTimeout(shiftSaveTimers.get(row.id));
-    shiftSaveTimers.set(row.id, setTimeout(() => saveShiftNow(row), SAVE_DEBOUNCE_MS));
+    shiftSaveTimers.set(row.id, setTimeout(() => runScheduledCellSave(`${row.id}:`, () => saveShiftNow(row)), SAVE_DEBOUNCE_MS));
   }
   function scheduleTripSave(row, trip, tripNumber) {
     clearTimeout(tripSaveTimers.get(trip.id));
-    tripSaveTimers.set(trip.id, setTimeout(() => saveTripNow(row, trip, tripNumber), SAVE_DEBOUNCE_MS));
+    tripSaveTimers.set(trip.id, setTimeout(() => runScheduledCellSave(`${row.id}:${trip.id}`, () => saveTripNow(row, trip, tripNumber)), SAVE_DEBOUNCE_MS));
   }
 
   /* ---- fields changed locally that the database has not confirmed yet ----
@@ -3826,7 +3828,75 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   }
 
   let timesheetModalState = null; // { rowId, queue: [rowId, ...] } — queue is for bulk-complete chaining
-  const focusValueSnapshots = new Map(); // "rowId:field" -> value at focus-in, for detecting a real committed change on blur
+  // Deliberate user-edit allowlists. Calculations, driver profile links,
+  // timestamps and background sync fields never produce history entries.
+  const SHIFT_HISTORY_FIELDS = {
+    proNumber: "pro_number", driverName: "driver_reassigned", rate: "carrier_rate_manual",
+    shiftStart: "shift_start", etaShiftReport: "eta_shift_report", revLevel: "rev_level",
+    schneider: "schneider", preShiftTextSent: "pre_shift_text_sent", notes: "notes",
+  };
+  const TRIP_HISTORY_FIELDS = {
+    routeId: "route_id", tripId: "trip_id", trailerOut: "trailer_out",
+    routeMiles: "route_miles", stopCount: "stop_count", dispatchTime: "dispatch_time",
+    lastStopDepart: "last_stop_depart", returnToDC: "return_to_dc", salvage: "salvage",
+    backhaul: "backhaul", backhaulLocation: "backhaul_location",
+    backhaulTrailerNumber: "backhaul_trailer_number", salvageBhaulRefusedBy: "salvage_bhaul_refused_by",
+    returnEtaToDc: "return_eta_to_dc", routeEstHours: "route_est_hours", backhaulType: "backhaul_type",
+    etaToFinalStop: "eta_to_final_stop", estRouteComplete: "est_route_complete",
+  };
+  function describeHistoryCell(element) {
+    const { row: rowId, trip: tripId, field } = element?.dataset || {};
+    const fieldName = (tripId ? TRIP_HISTORY_FIELDS : SHIFT_HISTORY_FIELDS)[field];
+    if (!rowId || !fieldName || element.readOnly || element.disabled) return null;
+    let value = element.type === "checkbox" ? String(element.checked) : String(element.value ?? "").trim();
+    let valid = true;
+    if (["rate", "routeMiles", "stopCount", "routeEstHours"].includes(field)) {
+      const parsed = numOrNull(value);
+      valid = parsed !== undefined;
+      if (valid) value = parsed == null ? "" : String(parsed);
+    }
+    return { key: `${rowId}:${tripId || ""}:${field}`, rowId, tripId, field, fieldName, value, valid };
+  }
+  const cellHistorySaveQueues = new Map();
+  async function commitBoardCellEdit(edit) {
+    const found = findRowAnywhere(edit.rowId);
+    if (!found) return;
+    const row = found.row;
+    const trip = edit.tripId ? row.trips.find((t) => t.id === edit.tripId) : null;
+    if (edit.tripId && !trip) return;
+    const key = `${row.id}:${trip?.id || ""}`;
+    const timers = trip ? tripSaveTimers : shiftSaveTimers;
+    const id = trip ? trip.id : row.id;
+    clearTimeout(timers.get(id));
+    timers.delete(id);
+    // Let an autosave already in flight finish before persisting the final
+    // edit. Rapid Tab navigation keeps its normal focus behavior.
+    const prior = cellHistorySaveQueues.get(key) || Promise.resolve();
+    const task = prior.then(async () => {
+      const saved = await runScheduledCellSave(key, () => {
+        if (!findRowAnywhere(edit.rowId) || (trip && !row.trips.includes(trip))) return null;
+        return trip ? saveTripNow(row, trip, row.trips.indexOf(trip) + 1) : saveShiftNow(row);
+      });
+      if (!saved) return; // failed saves are not successful audit events
+      if (!trip && edit.field === "notes") {
+        await logBoardNoteToPermanentLog(row.dbId, edit.value);
+      } else {
+        const label = trip ? `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}` : labelForRow(row);
+        await logChange(row.dbId, label, edit.fieldName, edit.before, edit.value, trip?.dbId || null);
+      }
+      if (edit.field === "driverName") {
+        const match = resolveDriverByName(edit.value, row.location).driver;
+        if (match) {
+          warnIfDriverAlreadyScheduled(row, match.id);
+          checkDriverComplianceWarning(match);
+        }
+      }
+    }).catch((error) => console.error("Could not record completed cell edit:", error));
+    cellHistorySaveQueues.set(key, task);
+    await task;
+    if (cellHistorySaveQueues.get(key) === task) cellHistorySaveQueues.delete(key);
+  }
+  const boardCellHistory = createCellEditHistory({ describe: describeHistoryCell, commit: commitBoardCellEdit });
 
   // Hours elapsed since this shift's own start time (shift_date + shift_start
   // combined into a real moment), regardless of what today's date is. Returns
@@ -5385,7 +5455,10 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
         // lets the caller fall through to its own "no image" state.
         return { ...a, publicUrl };
       });
-      loadDetailsState.history = (history || []).sort((a, b) => (a.changed_at < b.changed_at ? 1 : -1));
+      // A just-committed edit can finish while this initial fetch is in
+      // flight. Merge by ID so a stale response cannot erase the pushed event.
+      loadDetailsState.history = [...new Map([...(history || []), ...loadDetailsState.history].map((h) => [h.id, h])).values()]
+        .sort((a, b) => (a.changed_at < b.changed_at ? 1 : -1));
       loadDetailsState.loadNotes = notesResult.data || [];
       const stopRows = stopsResult.data || [];
       row.trips.forEach((t) => {
@@ -5961,7 +6034,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       bucket[idOrKey] = num;
     }
 
-    await saveShiftNow(row);
+    if (!await saveShiftNow(row)) return;
     recomputeRowRate(row);
     logChange(
       row.dbId, labelForRow(row), `rate_override_${kind}_${idOrKey}`,
@@ -5986,12 +6059,12 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     if (String(newValue).trim() === "") {
       row.rate = "";
       row.rateManual = false;
-      await saveShiftNow(row);
+      if (!await saveShiftNow(row)) return;
       recomputeRowRate(row);
     } else {
       row.rate = String(newValue).trim();
       row.rateManual = true;
-      await saveShiftNow(row);
+      if (!await saveShiftNow(row)) return;
     }
     if (before !== row.rate) logChange(row.dbId, labelForRow(row), "carrier_rate_manual", before, row.rate);
     renderLoadDetailsTabContent();
@@ -6022,6 +6095,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     const d = loadDetailsState.editDraft;
 
     if (tabKey === "overview") {
+      const before = { ...row, driverName: findDriver(row.driverId)?.name || row.driverNameText || "" };
       const nameVal = $("#ld-ov-driver").value.trim();
       row.driverNameText = nameVal;
       row.driverId = null;
@@ -6029,13 +6103,15 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       if (match) row.driverId = match.id;
       const timesheetReceivedEl = $("#ld-ov-timesheet-received");
       if (timesheetReceivedEl) {
-        const wasTimesheetReceived = row.timesheetReceived;
         row.timesheetReceived = timesheetReceivedEl.checked;
         row.timesheetStartTime = $("#ld-ov-timesheet-start").value.trim();
         row.timesheetEndTime = $("#ld-ov-timesheet-end").value.trim();
-        if (!wasTimesheetReceived && row.timesheetReceived) logChange(row.dbId, labelForRow(row), "timesheet_received", "false", "true");
       }
-      await saveShiftNow(row);
+      if (!await saveShiftNow(row)) return;
+      const after = { ...row, driverName: findDriver(row.driverId)?.name || row.driverNameText || "" };
+      for (const [key, fieldName] of Object.entries({ driverName: "driver_reassigned", timesheetReceived: "timesheet_received", timesheetStartTime: "timesheet_start_time", timesheetEndTime: "timesheet_end_time" })) {
+        await logChange(row.dbId, labelForRow(row), fieldName, before[key], after[key]);
+      }
       // Time sheet start+end both filled in is one of the three auto-send
       // triggers on its own now — no longer forces shift_complete, and no
       // longer gated on open trips: that "is this really done" concern is
@@ -6044,12 +6120,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     } else {
       const trip = row.trips.find((t) => t.id === tabKey);
       if (!trip) return;
-      const beforeRouteId = trip.routeId;
-      const beforeTrailerOut = trip.trailerOut;
-      const beforeBackhaulTrailerNumber = trip.backhaulTrailerNumber;
-      const beforeBackhaulLocation = trip.backhaulLocation;
-      const beforeTripDriver = trip.driverId ? findDriver(trip.driverId) : null;
-      const beforeTripDriverName = beforeTripDriver ? beforeTripDriver.name : "";
+      const before = { ...trip, driverName: findDriver(trip.driverId)?.name || "" };
       trip.routeId = $("#ld-tr-routeId").value.trim();
       trip.tripId = $("#ld-tr-tripId").value.trim();
       trip.trailerOut = $("#ld-tr-trailerOut").value.trim();
@@ -6067,7 +6138,6 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
         if (match) trip.driverId = match.id;
       }
       const ppwkEl = $("#ld-tr-ppwk-received");
-      const beforePpwkReceived = trip.ppwkReceived;
       if (ppwkEl) trip.ppwkReceived = ppwkEl.checked;
       const checkedInEl = $("#ld-tr-checked-in");
       if (checkedInEl) trip.checkedIn = checkedInEl.checked;
@@ -6093,18 +6163,14 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
           await saveShiftNow(row);
         }
       }
-      await saveTripNow(row, trip, row.trips.indexOf(trip) + 1);
+      if (!await saveTripNow(row, trip, row.trips.indexOf(trip) + 1)) return;
       recomputeRowRate(row);
-
-      if (beforeRouteId !== trip.routeId) logChange(row.dbId, labelForRow(row), "route_id", beforeRouteId, trip.routeId);
-      if (beforeTrailerOut !== trip.trailerOut) logChange(row.dbId, labelForRow(row), "trailer_out", beforeTrailerOut, trip.trailerOut);
-      if (beforeBackhaulTrailerNumber !== trip.backhaulTrailerNumber) logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "backhaul_trailer_number", beforeBackhaulTrailerNumber, trip.backhaulTrailerNumber);
-      if (beforeBackhaulLocation !== trip.backhaulLocation) logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "backhaul_location", beforeBackhaulLocation, trip.backhaulLocation);
-      if (driverNameVal && beforeTripDriverName.toLowerCase() !== driverNameVal.toLowerCase()) {
-        logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "driver_reassigned", beforeTripDriverName, driverNameVal);
+      const after = { ...trip, driverName: findDriver(trip.driverId)?.name || "" };
+      const fields = { ...TRIP_HISTORY_FIELDS, driverName: "driver_reassigned", notes: "notes",
+        ppwkReceived: "ppwk_received", checkedIn: "checked_in", complete: "route_complete", returnDropLocation: "return_drop_location" };
+      for (const [key, fieldName] of Object.entries(fields)) {
+        await logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, fieldName, before[key], after[key], trip.dbId);
       }
-      if (beforePpwkReceived !== trip.ppwkReceived) logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "ppwk_received", beforePpwkReceived, trip.ppwkReceived);
-      if (beforeComplete !== trip.complete) logChange(row.dbId, `${labelForRow(row)} — ${trip.routeId || trip.tripId || "route"}`, "route_complete", beforeComplete, trip.complete);
 
       // Same auto-send gate as the Overview tab — covers the case where the
       // time sheet was already filled in before this was the last trip to
@@ -7908,23 +7974,20 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       const rowId = e.target.dataset && e.target.dataset.row;
       const tripId = e.target.dataset && e.target.dataset.trip;
       if (!rowId) return;
-      if (tripId && (field === "routeId" || field === "trailerOut")) {
-        focusValueSnapshots.set(`${rowId}:${tripId}:${field}`, e.target.value);
-      } else if (!tripId && (field === "notes" || field === "driverName" || field === "rate")) {
-        focusValueSnapshots.set(`${rowId}:${field}`, e.target.value);
-      }
+      boardCellHistory.focus(e.target);
       if (field === "driverName" && e.target.dataset.driverAc === "true") {
         const input = e.target;
         openDriverAutocomplete(input, state.activeLocation, (drv) => {
           input.value = drv.name;
+          boardCellHistory.input(input);
           const found = findRowAnywhere(rowId);
           if (found) {
             found.row.driverNameText = drv.name;
             found.row.driverId = drv.id;
+            markFieldDirty(dirtyShiftFields, rowId, "driverNameText");
+            markFieldDirty(dirtyShiftFields, rowId, "driverId");
             updateDriverLinkedCellsInPlace(rowId);
             scheduleShiftSave(found.row);
-            warnIfDriverAlreadyScheduled(found.row, drv.id);
-            checkDriverComplianceWarning(drv);
           }
         });
       }
@@ -7946,56 +8009,9 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
         }, 0);
       }
 
-      // Trip-level route_id / trailer_out — tracked separately since they're
-      // keyed by trip, not just row.
-      if (rowId && tripId && (field === "routeId" || field === "trailerOut")) {
-        const snapKey = `${rowId}:${tripId}:${field}`;
-        const before = focusValueSnapshots.get(snapKey);
-        focusValueSnapshots.delete(snapKey);
-        if (before !== undefined && before !== t.value) {
-          const foundTrip = findTripAnywhere(tripId);
-          if (foundTrip) {
-            logChange(foundTrip.row.dbId, labelForRow(foundTrip.row), field === "routeId" ? "route_id" : "trailer_out", before, t.value);
-          }
-        }
-      }
-
-      if (rowId && !tripId && (field === "notes" || field === "driverName" || field === "rate")) {
-        const snapKey = `${rowId}:${field}`;
-        const before = focusValueSnapshots.get(snapKey);
-        focusValueSnapshots.delete(snapKey);
-        if (before !== undefined && before !== t.value) {
-          const found = findRowAnywhere(rowId);
-          if (found) {
-            if (field === "notes") {
-              // Notes get tracked in their own permanent log (the Notes
-              // tab) exclusively now — not duplicated into Change History.
-              logBoardNoteToPermanentLog(found.row.dbId, t.value);
-            } else if (field === "rate") {
-              // A manual entry directly into the board's Rate cell — kept
-              // distinct from the Load Details Rate panel's own override
-              // (also logged as "carrier_rate_manual" there, via
-              // commitRateOverride) so both entry points are traceable.
-              logChange(found.row.dbId, labelForRow(found.row), "carrier_rate_manual", before, t.value);
-            } else if (before.trim()) {
-              // driverName: only a REASSIGNMENT if it already had a driver — first-time entry isn't logged as a change
-              logChange(found.row.dbId, labelForRow(found.row), "driver_reassigned", before, t.value);
-            }
-            if (field === "driverName") {
-              // Both driver-assignment warnings run here — once, on
-              // commit, using the FINAL typed value — rather than on
-              // every keystroke while still mid-type, which could fire
-              // against some other driver whose name happened to exactly
-              // match whatever partial text was on screen at that instant.
-              const match = resolveDriverByName(t.value, found.row.location).driver;
-              if (match) {
-                warnIfDriverAlreadyScheduled(found.row, match.id);
-                checkDriverComplianceWarning(match);
-              }
-            }
-          }
-        }
-      }
+      // Wait one task for any redraw to restore the same cell. No history
+      // is emitted while that editing session still has focus.
+      setTimeout(() => boardCellHistory.blur(t, document.activeElement), 0);
       if (field === "routeId") {
         const foundRow = rowId ? findRowAnywhere(rowId) : null;
         const tr = t.closest("tr");
@@ -8073,6 +8089,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     });
     boardTable.addEventListener("input", (e) => {
       const t = e.target;
+      boardCellHistory.input(t);
       if (t.type === "checkbox") return; // checkboxes are handled by the 'change' listener below, via .checked not .value
       const rowId = t.dataset && t.dataset.row;
       if (!rowId) return;
@@ -8147,6 +8164,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     });
     boardTable.addEventListener("change", (e) => {
       const t = e.target;
+      boardCellHistory.input(t);
       if (t.id === "select-all-rows") {
         selectAllRows(t.checked);
         return;
