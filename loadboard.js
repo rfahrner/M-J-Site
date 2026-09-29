@@ -5459,7 +5459,8 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       // flight. Merge by ID so a stale response cannot erase the pushed event.
       loadDetailsState.history = [...new Map([...(history || []), ...loadDetailsState.history].map((h) => [h.id, h])).values()]
         .sort((a, b) => (a.changed_at < b.changed_at ? 1 : -1));
-      loadDetailsState.loadNotes = notesResult.data || [];
+      loadDetailsState.loadNotes = [...new Map([...(notesResult.data || []), ...loadDetailsState.loadNotes].map((n) => [n.id, n])).values()]
+        .sort((a, b) => (a.created_at > b.created_at ? 1 : -1));
       const stopRows = stopsResult.data || [];
       row.trips.forEach((t) => {
         if (!t.dbId) return;
@@ -5809,7 +5810,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
           <textarea class="cell-input" id="ld-note-input" rows="3" style="width:100%;" placeholder="Notes added here stay on this load's permanent log — they won't show up in the board's own Notes field."></textarea>
           <button type="button" class="btn btn-ghost" id="ld-note-submit" style="margin-top:6px;">Add Note</button>
         </div>
-        <div class="calc-note" style="margin:10px 0;">The board's own Notes field is separate and quick-edit — anything typed there is automatically added here too, timestamped and attributed, even if it's later changed or cleared from the board.</div>
+        <div class="calc-note" style="margin:10px 0;">After you leave an edited Notes cell on the board, the finished note is added here with your name and the time. Unchanged or blank cells do not add a note.</div>
         <div style="margin-top:14px;">${notesHtml}</div>
       `;
     } else if (tab.startsWith("trip-")) {
@@ -6778,39 +6779,27 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     }
   }
 
-  // Auto-logs a committed change to the board's Notes column into the
-  // load's permanent notes log. This is the whole point of the two being
-  // separate: the board's field stays quick-edit and disposable, but
-  // whatever passed through it is preserved here forever — even after
-  // it's later changed or cleared from the board itself. Silently skips
-  // empty commits, since clearing the field isn't itself a note worth logging.
-  // Goes through log_board_note() rather than a plain INSERT. This runs on
-  // focusout, which is the right moment in principle -- but the board also
-  // redraws while someone is typing (realtime echoes, debounced saves), and a
-  // redraw replaces the focused input, which fires focusout carrying whatever
-  // partial text was on screen. One sentence became a row per redraw:
-  //
-  //   "store"                                       7:48:54 PM
-  //   "store did not have S"                        7:48:58 PM
-  //   "store did not have Salvage for driver to..." 7:49:10 PM
-  //
-  // Only the last line is the note. The function merges a note that merely
-  // extends (or trims) the same author's board note from the last few minutes
-  // into that row, keeping the newest text and timestamp, and starts a fresh
-  // row for anything that is genuinely a different note. Doing it at the write
-  // rather than at the focusout means it holds whatever causes the duplicate --
-  // see supabase/migrations/20260922_coalesce_keystroke_notes_and_changes.sql.
+  // Called only after leaving a changed board Notes cell and saving it.
+  // The cell-edit session handles typing/redraws; the server appends this
+  // finished note without folding a later, separate edit into it.
   async function logBoardNoteToPermanentLog(shiftDbId, noteText) {
     if (!supabaseClient || !shiftDbId || !String(noteText || "").trim()) return;
     try {
-      const { error } = await supabaseClient.rpc("log_board_note", {
+      const { data, error } = await supabaseClient.rpc("log_committed_board_note", {
         p_shift_id: shiftDbId,
-        p_note_text: noteText,
-        p_created_by: currentUserLabel || "unknown user",
+        p_note_text: String(noteText).trim(),
+        p_created_by: currentUserLabel || null,
       });
       if (error) throw error;
+      if (data?.id && loadDetailsState && String(findRowAnywhere(loadDetailsState.rowId)?.row.dbId) === String(shiftDbId)) {
+        loadDetailsState.loadNotes = [...(loadDetailsState.loadNotes || []).filter((n) => n.id !== data.id), data];
+        // A pending board-note save must not erase a draft being typed in
+        // the modal's separate Add Note field.
+        if (loadDetailsState.activeTab === "notes" && !$("#ld-note-input")?.value && document.activeElement?.id !== "ld-note-input") renderLoadDetailsTabContent();
+      }
     } catch (e) {
       console.error("logBoardNoteToPermanentLog failed:", e);
+      setDriverSyncStatus("The board note was saved, but it could not be added to the Notes tab. Please reload and check the notes.", "error");
     }
   }
 
