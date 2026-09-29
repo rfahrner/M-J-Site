@@ -59,9 +59,25 @@ async function saveAccountingCheckbox(rec, patch, label) {
  * row and compares, so a write blocked by row permissions is reported instead
  * of being assumed.
  */
+/*
+ * `freezes` names a column that records "a person set this figure".
+ *
+ * The customer rate is not a calculated number. In the accounting workbook it
+ * is a value someone enters per load -- 10,882 of those cells hold a number and
+ * only 313 carry a formula. The site treated it as derived and rebuilt it from
+ * the mileage table on every route edit and every rate push, so a rate typed
+ * here survived only until the next change, and a later FSC or rate-table
+ * change silently re-priced months of finished loads.
+ *
+ * Writing revenue_manual alongside the figure is what stops that: both database
+ * functions that recompute revenue check it and leave the money alone. Miles,
+ * stops and fuel still refresh, because those describe the load rather than
+ * price it. Clearing the cell clears the flag, so an emptied rate goes back to
+ * being calculated rather than being frozen at blank.
+ */
 const ACCOUNTING_MONEY_FIELDS = {
   "acct-carrier-pay": { column: "total_carrier_pay", label: "carrier pay" },
-  "acct-customer-rate": { column: "total_revenue", label: "customer rate" },
+  "acct-customer-rate": { column: "total_revenue", label: "customer rate", freezes: "revenue_manual" },
 };
 
 // Number("1,250.00") is NaN and JSON.stringify turns NaN into null, which
@@ -76,9 +92,14 @@ function numOrUndefined(raw) {
 
 async function saveAccountingMoneyField(rec, field, value) {
   try {
-    const saved = await saveAccountingFields(supabaseClient, rec.id, { [field.column]: value });
+    const patch = { [field.column]: value };
+    if (field.freezes) patch[field.freezes] = value !== null && value !== undefined;
+    const saved = await saveAccountingFields(supabaseClient, rec.id, patch);
     const current = getAccountingRecordById(rec.id);
-    if (current) current[field.column] = saved[field.column];
+    if (current) {
+      current[field.column] = saved[field.column];
+      if (field.freezes) current[field.freezes] = saved[field.freezes];
+    }
   } catch (err) {
     setDriverSyncStatus(`Couldn't save ${field.label} (${err.message || err}).`, "error");
   }
@@ -488,7 +509,13 @@ function accountingNoteButton(rec) {
      * value -- is shown as-is and kept selectable, so opening the dropdown can
      * never quietly re-bill a load just by rendering it.
      */
-    const REVENUE_LEVELS = [[1, "1 — Kroger Core"], [2, "2 — KR Holiday"]];
+    // 4 is Market: the customer rate is the carrier cost grossed up to a margin
+    // rather than read off the mileage bands. It is the accounting workbook's
+    // "Revenue Market" column, and about 40% of September's loads are priced
+    // that way -- until now the page had no way to say so, and they came out
+    // billed off miles instead. 3 stays absent: pricing_settings marks it
+    // unconfigured, and an unconfigured level bills zero linehaul.
+    const REVENUE_LEVELS = [[1, "1 — Kroger Core"], [2, "2 — KR Holiday"], [4, "4 — Market"]];
     const COST_LEVELS = [[1, "1 — Carrier Core"], [2, "2 — Carrier Core Plus"], [3, "3 — Carrier Holiday"]];
     const levelSelect = (choices, selected) => {
       const known = choices.some(([n]) => n === Number(selected));
@@ -522,7 +549,7 @@ function accountingNoteButton(rec) {
       <td>${escapeHtml(mdz?.delivery_group || "—")}</td>` : ""}
       ${showLevels ? `
       <td><select class="cell-input" data-action="acct-cost-level" data-id="${rec.id}" title="What D&L pays the carrier">${levelSelect(COST_LEVELS, rec.cost_level ?? 1)}</select></td>
-      <td><select class="cell-input" data-action="acct-revenue-level" data-id="${rec.id}" ${isCancelled ? "disabled" : ""} title="What Kroger is billed. Core unless this load ran at holiday rates.">${levelSelect(REVENUE_LEVELS, rec.revenue_level ?? 1)}</select></td>` : ""}
+      <td><select class="cell-input" data-action="acct-revenue-level" data-id="${rec.id}" ${isCancelled ? "disabled" : ""} title="What Kroger is billed. Core unless this load ran at holiday rates, or Market to price it off the carrier cost.">${levelSelect(REVENUE_LEVELS, rec.revenue_level ?? 1)}</select></td>` : ""}
       ${showLevels ? `<td>${acctRouteIdsHtml(rec)}</td>` : ""}
       ${showRoutesInstead ? `<td>${acctRoutesChipsHtml(rec)}</td>` : ""}
       ${showMilesStops ? `<td>${ms.miles}</td><td>${ms.stops}</td>` : ""}
@@ -643,14 +670,34 @@ export function renderDriverStatsTable() {
       return { id: r.id, linehaul_cost: calc.linehaulCost, stop_charge: calc.stopCharge, total_cost: calc.totalCost, revenue: calc.revenue, stop_charge_revenue: calc.stopChargeRevenue, total_revenue: calc.totalRevenue };
     });
     rec.total_cost = Math.round(totalCost * 100) / 100;
-    rec.total_revenue = Math.round(totalRevenue * 100) / 100;
     if (rec.location === "delaware" && rec.total_miles > 0) {
       rec.total_cost = Math.round(Math.max(1000, rec.total_miles * 4) * 100) / 100;
     }
+
+    // Revenue level 4 is Market: priced off what the carrier is paid, not off
+    // miles, so the per-route sum above does not apply to it.
+    if (Number(rec.revenue_level) === 4) {
+      const divisor = Number(getPricingSettings()?.market_revenue_divisor) || 0;
+      totalRevenue = divisor ? (Number(rec.total_cost) || 0) / divisor : Number(rec.total_revenue) || 0;
+    }
+
+    // This runs from the Cost Level dropdown, which has nothing to say about
+    // what Kroger is billed. A customer rate someone already set is left exactly
+    // as it stands -- recalculating cost must not quietly re-price the load.
+    const revenueIsSet = rec.revenue_manual === true;
+    if (!revenueIsSet) rec.total_revenue = Math.round(totalRevenue * 100) / 100;
+
+    const acctPatch = { cost_level: rec.cost_level, revenue_level: rec.revenue_level, total_cost: rec.total_cost };
+    if (!revenueIsSet) acctPatch.total_revenue = rec.total_revenue;
     try {
-      await supabaseClient.from(ACCOUNTING_TABLE).update({ cost_level: rec.cost_level, revenue_level: rec.revenue_level, total_cost: rec.total_cost, total_revenue: rec.total_revenue }).eq("id", accountingId);
+      await supabaseClient.from(ACCOUNTING_TABLE).update(acctPatch).eq("id", accountingId);
       for (const ru of routeUpdates) {
-        await supabaseClient.from(ACCOUNTING_ROUTES_TABLE).update(ru).eq("id", ru.id);
+        // On Market the per-route revenue split means nothing -- the load is
+        // priced off cost as a whole -- so only the cost side is written back.
+        const routePatch = Number(rec.revenue_level) === 4
+          ? { linehaul_cost: ru.linehaul_cost, stop_charge: ru.stop_charge, total_cost: ru.total_cost }
+          : ru;
+        await supabaseClient.from(ACCOUNTING_ROUTES_TABLE).update(routePatch).eq("id", ru.id);
       }
     } catch (e) {
       console.error("recalcAccountingRecord failed:", e);
