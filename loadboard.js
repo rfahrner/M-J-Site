@@ -3873,10 +3873,10 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     // edit. Rapid Tab navigation keeps its normal focus behavior.
     const prior = cellHistorySaveQueues.get(key) || Promise.resolve();
     const task = prior.then(async () => {
-      await scheduledCellSaves.get(key);
-      const saved = trip
-        ? await saveTripNow(row, trip, row.trips.indexOf(trip) + 1)
-        : await saveShiftNow(row);
+      const saved = await runScheduledCellSave(key, () => {
+        if (!findRowAnywhere(edit.rowId) || (trip && !row.trips.includes(trip))) return null;
+        return trip ? saveTripNow(row, trip, row.trips.indexOf(trip) + 1) : saveShiftNow(row);
+      });
       if (!saved) return; // failed saves are not successful audit events
       if (!trip && edit.field === "notes") {
         await logBoardNoteToPermanentLog(row.dbId, edit.value);

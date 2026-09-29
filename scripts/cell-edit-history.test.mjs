@@ -113,7 +113,7 @@ test('history waits for final successful save, skips failed writes, and identifi
     logChange: async (...args) => entries.push(args), logBoardNoteToPermanentLog: async (...args) => notes.push(args),
     labelForRow: () => '1997623', resolveDriverByName: () => ({}), warnIfDriverAlreadyScheduled() {}, checkDriverComplianceWarning() {},
   };
-  const commit = new Function(...Object.keys(env), `${extract('commitBoardCellEdit')};return commitBoardCellEdit`)(...Object.values(env));
+  const commit = new Function(...Object.keys(env), `${extract('runScheduledCellSave')};${extract('commitBoardCellEdit')};return commitBoardCellEdit`)(...Object.values(env));
   const edit = { rowId: 'row1', field: 'proNumber', fieldName: 'pro_number', before: '1997', value: '1997623' };
   const pending = commit(edit);
   await new Promise(resolve => setImmediate(resolve));
@@ -129,6 +129,22 @@ test('history waits for final successful save, skips failed writes, and identifi
   const note = commit({ ...edit, field: 'notes', value: 'Final note' });
   await new Promise(resolve => setImmediate(resolve)); completeSave(); await note;
   assert.equal(entries.length, 2); assert.equal(notes.length, 1);
+});
+
+test('a completed edit and the next autosave cannot overtake an in-flight save', async () => {
+  const scheduledCellSaves = new Map();
+  const queue = new Function('scheduledCellSaves', `${extract('runScheduledCellSave')};return runScheduledCellSave`)(scheduledCellSaves);
+  let release;
+  const calls = [];
+  const first = queue('row1:', async () => { calls.push('partial'); await new Promise(resolve => { release = resolve; }); });
+  const second = queue('row1:', async () => { calls.push('committed'); });
+  const third = queue('row1:', async () => { calls.push('next cell'); });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls, ['partial']);
+  release();
+  await Promise.all([first, second, third]);
+  assert.deepEqual(calls, ['partial', 'committed', 'next cell']);
+  assert.equal(scheduledCellSaves.size, 0);
 });
 
 test('production wiring has explicit input/selection hooks and no catch-all SQL history triggers', () => {
