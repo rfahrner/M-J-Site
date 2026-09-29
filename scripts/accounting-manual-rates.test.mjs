@@ -89,7 +89,10 @@ check('a route change re-reads that load\'s routes',
   /eq\("accounting_id", accountingId\)/.test(SYNC), true);
 check('a deleted route is dropped rather than left behind',
   /delete acctRoutesByAccountingId\[accountingId\]/.test(SYNC), true);
-check('both handlers repaint', (SYNC.match(/renderAccountingTable\(\)/g) || []).length, 2);
+// Three handlers now, not two: the accounting row, its route rows, and load
+// notes. Each has to repaint, because a payload that arrives while the sheet is
+// open is only useful if the sheet redraws.
+check('every handler repaints', (SYNC.match(/renderAccountingTable\(\)/g) || []).length, 3);
 
 console.log(failures ? `\n  ${failures} check(s) FAILED\n` : '\n  All checks passed.\n');
 process.exit(failures ? 1 : 0);
