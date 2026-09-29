@@ -84,20 +84,9 @@ for (const bogus of ['from=', 'sender=', 'TEXT_FROM_MAILBOX']) {
   check(`no ${bogus} smuggled into the mailto`, MAILTO.includes(bogus), false);
 }
 
-console.log('\n6. the screen says which mailbox to send from');
-check('there is a reminder', /function sendFromReminderHtml\(\)/.test(BOARD), true);
+console.log('\n6. the send-text modal omits the mailbox reminder');
 const NOTE = /function sendFromReminderHtml\(\)[\s\S]*?\n  \}/.exec(BOARD)[0];
-check('it names the mailbox', /\$\{escapeHtml\(box\)\}/.test(NOTE), true);
-check('and it is escaped, not interpolated raw', NOTE.includes('${box}'), false);
-check('it tells you to change the From for the desktop button', /change the <strong>From<\/strong>/.test(NOTE), true);
-check('blank mailbox says nothing at all', /if \(!box\) return "";/.test(NOTE), true);
-// Both flows reveal the Outlook buttons in different places, so both need it.
-check('the single-send modal shows it', BOARD.includes('id="send-text-send-from"'), true);
-check('and clears it when the modal resets', /\$\("#send-text-send-from"\)\?\.remove\(\);/.test(BOARD), true);
-// The group modal rebuilds its body on every render, so the note has to be part
-// of the template rather than appended to it.
-check('the group modal renders it inside the progress body',
-  /\$\{s\.outlookOnly \? sendFromReminderHtml\(\) : ""\}/.test(BOARD), true);
+check('the reminder renders no content', new Function(`${NOTE}; return sendFromReminderHtml();`)(), '');
 
 console.log(failures ? `\n  ${failures} check(s) FAILED\n` : '\n  All checks passed.\n');
 process.exit(failures ? 1 : 0);
