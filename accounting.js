@@ -172,6 +172,7 @@ async function dismissAccountingPushNote(id) {
 }
 
 let accountingRecords = [];
+let accountingLoadError = "";
 const accountingLoadNoteFlags = new Map();
 async function refreshAccountingLoadNotes(ids) {
   const unique = [...new Set(ids.filter(Boolean).map(String))];
@@ -254,10 +255,33 @@ function accountingNoteButton(rec) {
   // failure mode we already hit once with the drivers table), on top of
   // just getting slower to load and render as years of history pile up.
   async function loadAccountingRecordsForRange(fromKey, toKey, replaceExisting) {
-    const { data, error } = await supabaseClient.from(ACCOUNTING_TABLE).select("*").gte("shift_date", fromKey).lte("shift_date", toKey);
-    if (error) { console.error("Failed to load accounting records:", error); setDriverSyncStatus(`Couldn't load Accounting (${error.message}).`, "error"); return; }
-    const fresh = data || [];
-    accountingRecords = (replaceExisting ? fresh : [...accountingRecords, ...fresh]).sort(acctSortCompare);
+    const fresh = [];
+    const pageSize = 500;
+    accountingLoadError = "";
+    try {
+      let lastId = null;
+      for (;;) {
+        let query = supabaseClient.from(ACCOUNTING_TABLE).select("*")
+          .gte("shift_date", fromKey).lte("shift_date", toKey)
+          .order("id", { ascending: true }).limit(pageSize);
+        if (lastId !== null) query = query.gt("id", lastId);
+        const { data, error } = await query;
+        if (error) throw error;
+        const page = data || [];
+        fresh.push(...page);
+        if (page.length < pageSize) break;
+        lastId = page[page.length - 1].id;
+      }
+    } catch (error) {
+      accountingLoadError = `Couldn't load Accounting (${error.message || error}). Refresh to try again.`;
+      console.error("Failed to load accounting records:", error);
+      setDriverSyncStatus(accountingLoadError, "error");
+      renderAccountingTable();
+      return;
+    }
+    const merged = new Map((replaceExisting ? [] : accountingRecords).map((r) => [String(r.id), r]));
+    for (const rec of fresh) merged.set(String(rec.id), rec);
+    accountingRecords = [...merged.values()].sort(acctSortCompare);
 
     // A single .in() query with a very long id list can silently fail or
     // truncate well before it's obvious something's wrong — and that list
@@ -583,6 +607,10 @@ function accountingNoteButton(rec) {
   export function renderAccountingTable() {
     const body = $("#accounting-table-body");
     if (!body) return;
+    if (accountingLoadError) {
+      body.innerHTML = `<tr><td colspan="40" role="alert" style="padding:16px;color:#b42318;">${escapeHtml(accountingLoadError)}</td></tr>`;
+      return;
+    }
     const filtered = getFilteredAccountingRecords();
     const loc = state.acctLocationTab || "atlanta";
     const headerHtml = acctTableHeaderHtml();
