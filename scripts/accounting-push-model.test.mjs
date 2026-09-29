@@ -63,7 +63,7 @@ const DRIVER_CELL = /<td>\$\{escapeHtml\(rec\.driver_name_text[\s\S]*?<\/td>/.ex
 check('it sits in the driver name cell', /\$\{acctPushStickyHtml\(rec\)\}/.test(DRIVER_CELL), true);
 check('after the name, not before it',
   DRIVER_CELL.indexOf('acctPushStickyHtml') > DRIVER_CELL.indexOf('driver_name_text'), true);
-check('clicking it clears the note', /data-acct-dismiss-push/.test(ACCT), true);
+check('clicking it opens the alert', /data-acct-open-push/.test(ACCT), true);
 const DISMISS = /async function dismissAccountingPushNote[\s\S]*?\n\}/.exec(ACCT)[0];
 // Only the flag is cleared. The figure the push wrote stays.
 check('dismissing clears only the note', /\{ push_note: null \}/.test(DISMISS), true);
