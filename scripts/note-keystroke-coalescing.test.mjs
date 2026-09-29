@@ -14,13 +14,9 @@
  * Only the last line is the note. In load_change_history the same thing made
  * 740 of 36,352 entries keystroke fragments rather than changes.
  *
- * The merge itself lives in SQL (log_board_note / log_load_change) because it
- * has to be atomic and has to hold for any caller -- see
- * supabase/migrations/20260922_coalesce_keystroke_notes_and_changes.sql, which
- * records the checks run against the live database. What this test pins is the
- * browser half: that these two functions go through those RPCs and never back
- * to a bare INSERT, that they pass the arguments the functions expect, and that
- * the guards which avoid a pointless round trip are still there.
+ * Board notes still use their note RPC. Change history now uses the separate
+ * committed-edit RPC: initial values count, and distinct completed edits are
+ * never coalesced. The cell-session behavior is tested in cell-edit-history.test.mjs.
  *
  * Run: npm i --no-save jsdom && node scripts/note-keystroke-coalescing.test.mjs
  */
@@ -70,6 +66,8 @@ async function run(fnSource, fnName, call, { label = 'user one' } = {}) {
   const sandbox = {
     supabaseClient: makeClient(recorder),
     currentUserLabel: label,
+    loadDetailsState: null,
+    setDriverSyncStatus: (...a) => recorder.errors.push(a.join(' ')),
     LOAD_NOTES_TABLE: 'load_notes',
     console: { error: (...a) => recorder.errors.push(a.join(' ')) },
   };
@@ -109,7 +107,7 @@ for (const [what, args] of [
 }
 
 // ---------------------------------------------------------------------------
-console.log('\n3. a change-history entry goes through log_load_change');
+console.log('\n3. a change-history entry goes through log_committed_load_change');
 
 const changeSrc = extractFunction(SRC, 'logChange');
 r = await run(changeSrc, 'logChange',
@@ -117,7 +115,7 @@ r = await run(changeSrc, 'logChange',
 
 check('no bare INSERT into load_change_history', r.inserts.length, 0);
 check('one rpc call', r.rpc.length, 1);
-check('it is log_load_change', r.rpc[0]?.name, 'log_load_change');
+check('it is log_committed_load_change', r.rpc[0]?.name, 'log_committed_load_change');
 check('shift id', r.rpc[0]?.args?.p_shift_id, 16118);
 check('label', r.rpc[0]?.args?.p_load_label, 'PRO 884512');
 check('field name', r.rpc[0]?.args?.p_field_name, 'route_id');
@@ -127,13 +125,17 @@ check('author', r.rpc[0]?.args?.p_changed_by, 'molly');
 
 console.log('\n4. and it still does not log a non-change');
 for (const [what, args] of [
-  ['first entry into a blank field', [16118, 'L', 'route_id', '', 'FRGT']],
-  ['blank-ish before', [16118, 'L', 'route_id', '   ', 'FRGT']],
-  ['null before', [16118, 'L', 'route_id', null, 'FRGT']],
+  ['blank stays blank', [16118, 'L', 'route_id', null, '   ']],
+  ['whitespace only', [16118, 'L', 'route_id', 'FRGT ', ' FRGT']],
   ['value unchanged', [16118, 'L', 'route_id', 'FRGT', 'FRGT']],
 ]) {
   const rr = await run(changeSrc, 'logChange', (fn) => fn(...args));
   check(`${what}: no rpc, no insert`, rr.rpc.length + rr.inserts.length, 0);
+}
+
+for (const before of ['', '   ', null]) {
+  const rr = await run(changeSrc, 'logChange', (fn) => fn(16118, 'L', 'pro_number', before, '1997623'));
+  check('initial committed value is recorded once', rr.rpc.length, 1);
 }
 
 // ---------------------------------------------------------------------------
