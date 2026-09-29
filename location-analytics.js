@@ -214,9 +214,19 @@ async function fetchRangeData(startDate, endDate, location) {
     trips.push(...await fetchAllRows(TRIPS_TABLE, 'shift_id, route_id, trip_id, route_miles, stop_count, salvage, backhaul', (q) => q.in('shift_id', idChunk)));
   }
 
+  // A load deleted from the board keeps its Accounting record, struck through
+  // on the sheet, so the money is still traceable -- but it must not count
+  // here. Excluded at the query rather than in the reduce, so every figure
+  // built from these rows (revenue, cost, margin, GM%, and the four per-unit
+  // ratios) drops it together. Restoring the record on the Accounting sheet
+  // sets status back to 'active' and it returns to these totals.
+  //
+  // A plain neq is safe here only because status is NOT NULL with a default of
+  // 'active' -- on a nullable column neq would silently drop every null row too.
   const accountingRows = await fetchAllRows(
     ACCOUNTING_TABLE, 'shift_date, total_cost, total_revenue',
     (q) => q.eq('location', location).gte('shift_date', startDate).lte('shift_date', endDate)
+            .neq('status', 'deleted')
   );
 
   laState.loadError = fetchBatchError();

@@ -125,8 +125,14 @@ jobs:
       - name: Test backhaul location prompt
         run: node scripts/backhaul-location.test.mjs
 
+      - name: Test bulk delete names what it removes
+        run: node scripts/bulk-delete-loads.test.mjs
+
       - name: Test Available list keeps driver info
         run: node scripts/available-list-driver-info.test.mjs
+
+      - name: Test a deleted load stays on the Accounting sheet
+        run: node scripts/deleted-load-stays-on-accounting.test.mjs
 
       - name: Test archive documents and Outlook fallback
         run: node --test scripts/archive-documents.test.mjs scripts/text-outlook-fallback.test.mjs

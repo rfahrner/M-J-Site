@@ -4090,8 +4090,10 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     if (billedRows.length && !confirm(
       `${billedRows.length} of these ${billedRows.length === 1 ? "is" : "are"} already on the Accounting sheet:\n\n` +
       billedRows.map((r) => `  • ${labelFor(r)}`).join("\n") + `\n\n` +
-      `Deleting the load here does NOT remove it from Accounting. The billing record stays, ` +
-      `still counted in the totals, with nothing left linking it back to this load.\n\n` +
+      `${billedRows.length === 1 ? "That record stays" : "Those records stay"} on the sheet, marked deleted — ` +
+      `struck through, faded, and left out of the analytics totals. ` +
+      `${billedRows.length === 1 ? "It" : "They"} can be restored from the Accounting sheet if this is a mistake, ` +
+      `but the load itself will not come back.\n\n` +
       `Delete anyway?`
     )) return;
 
@@ -4100,6 +4102,29 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     for (const row of rows) {
       cancelPendingSaves(row.id, (row.trips || []).map((t) => t.id));
       logChange(row.dbId, labelFor(row), "deleted", "active", "deleted");
+    }
+
+    // Mark the Accounting rows BEFORE the shifts go. source_shift_id is
+    // ON DELETE SET NULL, so once the shift is deleted there is nothing left to
+    // find them by -- this is the only moment the link still exists.
+    //
+    // The row stays on the sheet, struck through and faded, and drops out of
+    // the analytics totals. It can be put back from the sheet if this was a
+    // mistake, which is why the money is left untouched: restoring must return
+    // the real figures, not zeroes.
+    if (dbIds.length && supabaseClient) {
+      try {
+        const { error } = await supabaseClient.from(ACCOUNTING_TABLE)
+          .update({ status: "deleted", deleted_at: new Date().toISOString() })
+          .in("source_shift_id", dbIds);
+        if (error) throw error;
+      } catch (e) {
+        console.error("Couldn't mark Accounting rows as deleted:", e);
+        if (!confirm(
+          `Couldn't mark these on the Accounting sheet (${e.message || e}).\n\n` +
+          `Delete the loads anyway? Any billing rows would stay on the sheet looking live.`
+        )) return;
+      }
     }
 
     // Chunked: a very long .in() list is the failure mode this file already
@@ -4426,6 +4451,20 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     renderBoardTable();
 
     if (row.dbId && supabaseClient) {
+      try {
+        // Mark Accounting first: source_shift_id is ON DELETE SET NULL, so the
+        // link is gone the moment the shift is. The billing row stays on the
+        // sheet struck through and out of the analytics totals, restorable from
+        // there. A failure here is reported but does not stop the delete --
+        // this row is already off the board.
+        const { error: acctErr } = await supabaseClient.from(ACCOUNTING_TABLE)
+          .update({ status: "deleted", deleted_at: new Date().toISOString() })
+          .eq("source_shift_id", row.dbId);
+        if (acctErr) throw acctErr;
+      } catch (e) {
+        console.error("deleteRow: couldn't mark the Accounting row as deleted:", e);
+        setDriverSyncStatus(`Load deleted, but its Accounting record couldn't be marked (${e.message || e}) — it may still look live on the sheet.`, "error");
+      }
       try {
         const { error } = await supabaseClient.from(SHIFTS_TABLE).delete().eq("id", row.dbId);
         if (error) throw error;

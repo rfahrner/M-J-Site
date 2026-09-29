@@ -56,8 +56,12 @@ check('and that paperwork and history go too', /paperwork and change history/.te
 console.log('\n4. a billed load gets its own warning');
 check('Accounting is checked before deleting', /from\(ACCOUNTING_TABLE\)\.select\("source_shift_id"\)/.test(FN), true);
 check('those loads are named separately', /billedRows\.map/.test(FN), true);
-check('and the orphaned billing row is spelled out',
-  /does NOT remove it from Accounting/.test(FN), true);
+// The consequence changed once deleting started marking the row rather than
+// orphaning it: it now stays visible and out of the totals, and can be undone.
+check('what happens to the billing row is spelled out',
+  /marked deleted/.test(FN) && /left out of the analytics totals/.test(FN), true);
+check('and that it is recoverable, but the load is not',
+  /can be restored from the Accounting sheet/.test(FN) && /load itself will not come back/.test(FN), true);
 // If that check itself fails we must not silently assume "none are billed".
 check('a failed check still asks rather than assuming',
   /Couldn't check whether any of these have reached Accounting/.test(FN), true);
