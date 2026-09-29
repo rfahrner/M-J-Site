@@ -42,6 +42,31 @@ test('partial driver name and dropdown selection stay silent until leaving; one 
   assert.equal(entries[0].fieldName, 'driver_reassigned');
 });
 
+test('Notes pushes only the final corrected sentence on leaving, including across a redraw', () => {
+  const { history, entries } = setup();
+  const note = cell('notes');
+  history.focus(note);
+  type(history, note, '2337 txr');
+  const restored = cell('notes', '2337 txr');
+  history.focus(restored);
+  history.blur(note, restored);
+  assert.equal(entries.length, 0);
+  type(history, restored, '2337 txt for dl');
+  assert.equal(entries.length, 0);
+  history.focus(cell('proNumber', '1997623'));
+  history.blur(restored, cell('proNumber', '1997623'));
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].field, 'notes');
+  assert.deepEqual([entries[0].before, entries[0].value], ['', '2337 txt for dl']);
+  history.focus(restored); history.blur(restored, null);
+  assert.equal(entries.length, 1); // just visiting the Notes cell adds nothing
+  history.focus(restored);
+  type(history, restored, '2337 txt for dl again');
+  type(history, restored, '2337 txt for dl');
+  history.blur(restored, null);
+  assert.equal(entries.length, 1); // undoing the edit adds nothing
+});
+
 test('PRO fragments are never recorded, even across a redraw restoring focus', () => {
   const { history, entries } = setup();
   const pro = cell('proNumber');

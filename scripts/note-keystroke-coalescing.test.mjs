@@ -14,8 +14,7 @@
  * Only the last line is the note. In load_change_history the same thing made
  * 740 of 36,352 entries keystroke fragments rather than changes.
  *
- * Board notes still use their note RPC. Change history now uses the separate
- * committed-edit RPC: initial values count, and distinct completed edits are
+ * Board notes and change history now use explicit committed-edit RPCs: initial values count, and distinct completed edits are
  * never coalesced. The cell-session behavior is tested in cell-edit-history.test.mjs.
  *
  * Run: npm i --no-save jsdom && node scripts/note-keystroke-coalescing.test.mjs
@@ -81,7 +80,7 @@ async function run(fnSource, fnName, call, { label = 'user one' } = {}) {
 }
 
 // ---------------------------------------------------------------------------
-console.log('1. a board note is logged through log_board_note, not an INSERT');
+console.log('1. a board note is logged through log_committed_board_note, not an INSERT');
 
 const noteSrc = extractFunction(SRC, 'logBoardNoteToPermanentLog');
 let r = await run(noteSrc, 'logBoardNoteToPermanentLog',
@@ -89,10 +88,10 @@ let r = await run(noteSrc, 'logBoardNoteToPermanentLog',
 
 check('no bare INSERT into load_notes', r.inserts.length, 0);
 check('one rpc call', r.rpc.length, 1);
-check('it is log_board_note', r.rpc[0]?.name, 'log_board_note');
+check('it is log_committed_board_note', r.rpc[0]?.name, 'log_committed_board_note');
 check('shift id passed as p_shift_id', r.rpc[0]?.args?.p_shift_id, 16118);
 check('text passed as p_note_text', r.rpc[0]?.args?.p_note_text,
-  'store did not have Salvage for driver to take back. ');
+  'store did not have Salvage for driver to take back.');
 check('author passed as p_created_by', r.rpc[0]?.args?.p_created_by, 'molly');
 check('nothing was logged as an error', r.errors.length, 0);
 
