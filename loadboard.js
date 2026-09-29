@@ -4362,17 +4362,8 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     window.open(url, "_blank", "noopener");
   }
 
-  // Nothing here can make the desktop button obey the shared mailbox. A mailto:
-  // has no sender field -- RFC 6068 does not define one -- so Windows hands the
-  // draft to Outlook's default sending account and that is the end of it. The
-  // honest answer is to say so at the point of use, next to the button that
-  // does get it right.
   function sendFromReminderHtml() {
-    const box = String(TEXT_FROM_MAILBOX || "").trim();
-    if (!box) return "";
-    return `<div class="calc-note" style="margin-top:8px;">Send from <strong>${escapeHtml(box)}</strong>.
-      <em>Open in Outlook Web</em> opens the draft in that mailbox already.
-      <em>Open in Outlook</em> opens it under your own address — change the <strong>From</strong> before sending.</div>`;
+    return "";
   }
 
   function textDraftControlsHtml(idPrefix) {
