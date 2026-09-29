@@ -31,7 +31,10 @@ const accountingRows=[
  {shift_date:'2026-09-22',total_revenue:0,total_cost:150},
 ];
 const data={shifts,trips,accountingRows};
-const expected={drivers:4,mileage:350,routes:3,stops:6,turn:.75,salvage:1,backhauls:1,tonu:2,revenue:1500,cost:1050,margin:450,gmPct:30,revPerMile:1500/350,revPerRoute:500,revPerDriver:375,avrLoh:350/3,marginPerDriver:112.5,revPerStop:250,marginPerRoute:150};
+// Location Analytics counts drivers who RAN, so the two TONU rows (ids 4 and
+// 5) drop out: only person 7 on 09-20 and person 7 again on 09-21 remain.
+// Volume's driversRequested still sees 4 -- see the assertion below it.
+const expected={drivers:2,mileage:350,routes:3,stops:6,turn:1.5,salvage:1,backhauls:1,tonu:2,revenue:1500,cost:1050,margin:450,gmPct:30,revPerMile:1500/350,revPerRoute:500,revPerDriver:750,avrLoh:350/3,marginPerDriver:225,revPerStop:250,marginPerRoute:150};
 assert.deepEqual(location.computeMetricsFromRows(shifts,trips,accountingRows),expected);
 assert.deepEqual(new Set(location.fields.map(f=>f.key)),new Set(Object.keys(expected)),'every displayed column covered');
 assert.deepEqual(volume.computeMetricsFromRows(shifts,trips),{driversRequested:4,tonu:2,routesRan:3});
@@ -40,7 +43,10 @@ for (const page of [location,volume]) {
  const recap=rows.find(r=>r.rowType==='weekRecap');
  assert.equal(recap.rangeStart,'2026-09-21');
  assert.equal(recap.rangeEnd,'2026-09-22');
- assert.equal(recap[page===location?'drivers':'driversRequested'],3,'hidden Sunday excluded');
+ // 09-21..09-22 holds one running driver (person 7 on 09-21); the rest of the
+ // window is two TONUs, a call-off and a row with nobody on it. Volume counts
+ // the TONUs as requested, so it still sees 3.
+ assert.equal(recap[page===location?'drivers':'driversRequested'],page===location?1:3,'hidden Sunday excluded');
  const additive=page===location?['drivers','mileage','routes','stops','salvage','backhauls','tonu','revenue','cost','margin']:['driversRequested','tonu','routesRan'];
  for(const key of additive) assert.equal(recap[key],rows.filter(r=>r.rowType==='day').reduce((n,r)=>n+r[key],0),key);
  const crossing=page.buildDisplayRows(data,'2026-09-30','2026-10-04');
@@ -53,9 +59,11 @@ for (const page of [location,volume]) {
  const empty=page.computeMetricsFromRows([],[],[]);
  assert.ok(Object.values(empty).every(v=>v===0),'empty range has finite zero metrics');
 }
-// Regression shape: 57 distinct people, 123 daily driver attendances.
+// Regression shape: 57 distinct people across three days -- 57 + 57 running, plus
+// 9 TONU'd on the third day. 123 driver-days were requested; 114 of them ran.
+// This is the case that shows the two pages must not share a number.
 const week=[];
 for(let day=0;day<3;day++) for(let person=0;person<(day===2?9:57);person++) week.push({shift_date:`2026-09-${20+day}`,driver_id:person,tonu:day===2});
-assert.equal(location.computeMetricsFromRows(week,[],[]).drivers,123);
+assert.equal(location.computeMetricsFromRows(week,[],[]).drivers,114);
 assert.equal(volume.computeMetricsFromRows(week,[]).driversRequested,123);
-console.log('All analytics columns, daily totals, TONUs, partial weeks, quarter boundaries, and box grouping passed.');
+console.log('All analytics columns, daily totals, TONUs (excluded from Drivers, kept in Drivers Requested), partial weeks, quarter boundaries, and box grouping passed.');

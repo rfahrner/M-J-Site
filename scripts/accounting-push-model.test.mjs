@@ -82,8 +82,11 @@ const shift = (o) => ({ driver_id: null, driver_name_text: '', load_cancelled: f
 
 check('a driver with several shifts counts once',
   countDrivers([shift({ driver_id: 7 }), shift({ driver_id: 7 }), shift({ driver_id: 9 })]), 2);
-// He was there. Whether the load earned anything is a different question.
-check('a TONU still counts', countDrivers([shift({ driver_id: 7, tonu: true })]), 1);
+// He was requested and paid, but he did not run -- and this column feeds
+// Rev/Driver, so counting him understates what the drivers who ran produced.
+// Volume's Drivers Requested still counts him; see analytics-tonu-drivers.
+check('a TONU does not count as a driver who ran',
+  countDrivers([shift({ driver_id: 7, tonu: true })]), 0);
 check('a cancelled load does not', countDrivers([shift({ driver_id: 7, load_cancelled: true })]), 0);
 check('nor does a call-off', countDrivers([shift({ driver_id: 7, called_off: true })]), 0);
 check('but one cancelled shift does not erase a driver who also worked',
