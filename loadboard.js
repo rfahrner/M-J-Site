@@ -3786,12 +3786,13 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     logChange(found.row.dbId, labelForRow(found.row), "hostler_hours", before, rawValue);
   }
 
-  // Local-only, not persisted to Supabase — this is a per-user selection
-  // state for a bulk-action feature that hasn't been designed yet.
+  // Local-only, not persisted to Supabase — a per-user selection that drives
+  // the bulk actions: Complete Selected, Text Selected and Delete Selected.
   function updateBulkActionButtonsVisibility() {
     const anySelected = getVisibleBoardRows().some((r) => r.selected);
     if ($("#btn-complete-selected")) $("#btn-complete-selected").classList.toggle("hidden", !anySelected);
     if ($("#btn-text-selected")) $("#btn-text-selected").classList.toggle("hidden", !anySelected);
+    if ($("#btn-delete-selected")) $("#btn-delete-selected").classList.toggle("hidden", !anySelected);
   }
 
   function updateBoardSelectCount() {
@@ -4023,6 +4024,120 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   function skipTimesheetModal() {
     // Cancel just skips THIS row (it stays incomplete) but continues the queue for bulk-complete
     advanceTimesheetQueue();
+  }
+
+  /*
+   * Bulk delete. The single-load path already spells out what is going, and
+   * this has to say more, not less, because one click can take a dozen loads.
+   *
+   * What actually disappears, from the foreign keys on loads_shifts:
+   *   loads_trips          CASCADE   -- every route on every load
+   *   load_attachments     CASCADE   -- their paperwork and images
+   *   load_change_history  CASCADE   -- and the audit trail, including the
+   *                                     record of this deletion itself
+   *   loads_accounting     SET NULL  -- the billing row SURVIVES, orphaned
+   *
+   * That last one is the dangerous one and it is invisible from the board. A
+   * load that has reached Accounting leaves its record on the sheet with
+   * source_shift_id set to null -- still billed, still counted, and with
+   * nothing left to trace it back to. So those loads get their own second
+   * confirmation naming them, rather than being swept along with the rest.
+   *
+   * Deletion happens in the database FIRST and rows leave the board only once
+   * the server has agreed. The single-load path does it the other way for
+   * responsiveness, which is fine for one row; doing that to twelve would risk
+   * showing an empty board while the loads are all still there.
+   */
+  async function deleteSelectedRows() {
+    const rows = getVisibleBoardRows().filter((r) => r.selected);
+    if (!rows.length) { setDriverSyncStatus("Nothing is selected — tick a load first.", "error"); return; }
+
+    const labelFor = (row) => {
+      const drv = row.driverId ? findDriver(row.driverId) : null;
+      return [row.proNumber, drv ? drv.name : row.driverNameText].filter(Boolean).join(" — ") || "(no PRO#)";
+    };
+    const routeCount = rows.reduce((n, r) =>
+      n + (r.trips || []).filter((t) => String(t.routeId || t.tripId || "").trim()).length, 0);
+    const listed = rows.map((r) => `  • ${labelFor(r)}`).join("\n");
+
+    if (!confirm(
+      `Delete ${rows.length} load${rows.length === 1 ? "" : "s"}` +
+      (routeCount ? ` and all ${routeCount} route${routeCount === 1 ? "" : "s"} on them` : "") + `?\n\n` +
+      `${listed}\n\n` +
+      `Their paperwork and change history go too. This can't be undone.`
+    )) return;
+
+    // Which of these are already on the Accounting sheet? The board cannot
+    // know -- sentToAccounting only covers loads pushed from here, not the ones
+    // the 04:00 sweep picked up -- so ask the server.
+    const dbIds = rows.map((r) => r.dbId).filter(Boolean);
+    let billedRows = [];
+    if (dbIds.length && supabaseClient) {
+      try {
+        const { data, error } = await supabaseClient
+          .from(ACCOUNTING_TABLE).select("source_shift_id").in("source_shift_id", dbIds);
+        if (error) throw error;
+        const billed = new Set((data || []).map((a) => a.source_shift_id));
+        billedRows = rows.filter((r) => billed.has(r.dbId));
+      } catch (e) {
+        console.error("Couldn't check Accounting before deleting:", e);
+        if (!confirm(
+          `Couldn't check whether any of these have reached Accounting (${e.message || e}).\n\n` +
+          `Delete anyway? Any that were billed will leave a record behind on the sheet.`
+        )) return;
+      }
+    }
+    if (billedRows.length && !confirm(
+      `${billedRows.length} of these ${billedRows.length === 1 ? "is" : "are"} already on the Accounting sheet:\n\n` +
+      billedRows.map((r) => `  • ${labelFor(r)}`).join("\n") + `\n\n` +
+      `Deleting the load here does NOT remove it from Accounting. The billing record stays, ` +
+      `still counted in the totals, with nothing left linking it back to this load.\n\n` +
+      `Delete anyway?`
+    )) return;
+
+    // Stop every debounced write first. A timer that fires after the delete
+    // takes the INSERT path and quietly recreates what was just removed.
+    for (const row of rows) {
+      cancelPendingSaves(row.id, (row.trips || []).map((t) => t.id));
+      logChange(row.dbId, labelFor(row), "deleted", "active", "deleted");
+    }
+
+    // Chunked: a very long .in() list is the failure mode this file already
+    // guards against everywhere else it builds one.
+    const deleted = new Set(rows.filter((r) => !r.dbId).map((r) => r.id));
+    let failed = 0;
+    if (dbIds.length && supabaseClient) {
+      const CHUNK = 100;
+      for (let i = 0; i < dbIds.length; i += CHUNK) {
+        const chunk = dbIds.slice(i, i + CHUNK);
+        try {
+          const { error } = await supabaseClient.from(SHIFTS_TABLE).delete().in("id", chunk);
+          if (error) throw error;
+          rows.filter((r) => chunk.includes(r.dbId)).forEach((r) => deleted.add(r.id));
+        } catch (e) {
+          console.error("deleteSelectedRows chunk failed:", e);
+          failed += chunk.length;
+        }
+      }
+    }
+
+    // Only the loads the server actually deleted leave the board.
+    for (const row of rows) {
+      if (!deleted.has(row.id)) continue;
+      const sheet = getSheet(row.location || state.activeLocation, row.shiftDate || state.activeDate);
+      const idx = sheet.findIndex((r) => r.id === row.id);
+      if (idx !== -1) sheet.splice(idx, 1);
+      forgetDirtyFields(row.id, (row.trips || []).map((t) => t.id));
+    }
+    renderBoardTable();
+    updateBulkActionButtonsVisibility();
+    updateBoardSelectCount();
+
+    if (failed) {
+      setDriverSyncStatus(`Deleted ${deleted.size}, but ${failed} couldn't be removed from the database — they're still on the board.`, "error");
+    } else {
+      setDriverSyncStatus(`Deleted ${deleted.size} load${deleted.size === 1 ? "" : "s"}.`, "success");
+    }
   }
 
   async function completeSelectedRows() {
@@ -7815,6 +7930,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     if ($("#btn-add-load")) $("#btn-add-load").addEventListener("click", () => openAddLoadModal());
     if ($("#btn-complete-selected")) $("#btn-complete-selected").addEventListener("click", completeSelectedRows);
     if ($("#btn-text-selected")) $("#btn-text-selected").addEventListener("click", openTextSelectedModal);
+    if ($("#btn-delete-selected")) $("#btn-delete-selected").addEventListener("click", deleteSelectedRows);
 
     if ($("#modal-text-group")) {
       on("tg-close", "click", () => $("#modal-text-group").classList.add("hidden"));
