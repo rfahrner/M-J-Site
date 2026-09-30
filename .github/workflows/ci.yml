@@ -101,6 +101,9 @@ jobs:
       - name: Test analytics pages only select columns their view has
         run: node scripts/analytics-view-columns.test.mjs
 
+      - name: Test the driver-count rule on both analytics pages
+        run: node scripts/analytics-driver-count-rule.test.mjs
+
       - name: Test Atlanta and Delaware rounded-down mileage tiers
         run: node --test scripts/carrier-mileage-tiers.test.mjs
 

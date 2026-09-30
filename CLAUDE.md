@@ -449,7 +449,12 @@ a screen someone already has open -- delivery, not a second source of change.
 
 Location Analytics and Volume add the daily driver counts for weekly, period,
 and running totals. Deduplicate a person within a date, not across the whole
-range. TONUs count even when cancellation/call-off flags are also set. Typed
+range. The owner's ruling: a shift marked cancelled or called off does NOT
+count; a shift marked TONU DOES count, even when a cancellation or call-off
+flag is also set on the same row. Both pages follow the same rule. This was
+briefly reversed on Location Analytics (PR #176) and reverted; it is a business
+definition, so do not change it again without the owner saying so.
+`scripts/analytics-driver-count-rule.test.mjs` pins it on both pages. Typed
 names count too. Ratios are recomputed from totals, not summed or averaged.
 Each thick black weekly box includes its displayed daily rows and its recap;
 partial-week recaps and reports use those exact dates.
