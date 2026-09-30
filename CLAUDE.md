@@ -473,6 +473,36 @@ historical validity. The historical membership reconciliation is still pending;
 do not replace it with a start-time-plus-route filter or assume missing site
 Accounting rows prove invalidity. The site ledger has historical gaps.
 
+## Refresh re-reads; it never re-pushes
+
+The Accounting sheet's Refresh button (`refreshAccountingSheet()`) is a READ.
+It re-pulls the accounting rows, routes, notes, driver contacts,
+shift-complete status, pricing/FSC and location notes, empties the per-id
+caches in `accounting-columns.js` and
+`accounting-applied-and-aljex-status.js`, and replaces the realtime channel.
+It writes nothing.
+
+The owner chose that over a version that also re-syncs from the load board.
+A re-push can overwrite a figure an accountant typed, and the "Push to
+Accounting" button was built and removed once already for its own reasons
+(see above). `scripts/accounting-refresh.test.mjs` asserts the absence of
+every write path inside the function, not just the presence of the reads --
+turning Refresh into a sync is the regression it exists to catch.
+
+Three things go stale independently and none of them look wrong on screen:
+the two helper modules fetch only ids they have not seen, so a Trip ID edited
+on the board keeps its page-load value until the cache is emptied; and the
+realtime channel can be dead after a laptop sleeps while the page looks
+normal. Subscribing again without `removeChannel` first double-handles every
+row.
+
+Those modules are told with a `document`-level `accounting:refresh` event.
+They already import from `accounting.js`, so an import the other way closes a
+cycle that has broken startup before.
+
+Refresh uses `state.minDate`, not a fresh 60-day window -- "Load Earlier
+Records" moves it, and a refresh must not throw away rows the user asked for.
+
 ## Accounting revenue levels
 
 Customer billing comes from `pricing_tiers`: `revenue_1` is Kroger Core

@@ -173,6 +173,12 @@ function init() {
     subtree: true,
   });
   document.getElementById('acct-location-tabs')?.addEventListener('click', scheduleNormalize);
+
+  // The Refresh button. shiftStatusById is keyed by shift and only filled
+  // once per shift, so without this the Aljex/applied pills keep whatever
+  // they were when the page opened.
+  document.addEventListener('accounting:refresh', invalidateShiftStatus);
+
   setupRealtime();
   scheduleNormalize();
 }
