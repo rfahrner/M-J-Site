@@ -5420,21 +5420,21 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     const row = found.row;
     const trip = tripId ? (row.trips || []).find((t) => t.id === tripId) : null;
     const canDeleteRoute = !!trip && (row.trips || []).length > 1;
+    const completionLabel = row.location === "delaware"
+      ? (row.shiftComplete ? "Mark Updated Ratecon Not Sent" : "Updated Ratecon Sent")
+      : (row.shiftComplete ? "Mark Shift Incomplete" : "Shift Complete");
     const items = [
       { label: row.tonu ? "Un-TONU" : "TONU", action: () => toggleTonu(rowId) },
-      { label: row.calledOff ? "Un-mark Cancellation" : "Cancellation", action: () => row.calledOff ? unmarkDriverCalledOff(rowId) : openCalledOffModal(rowId) },
-      { label: row.loadCancelled ? "Un-cancel Load" : "Cancel Load", action: () => row.loadCancelled ? unmarkLoadCancelled(rowId) : openCancelLoadModal(rowId) },
-      { label: row.highlighted ? "Remove Highlight" : "Highlight", action: () => toggleRowPin(rowId) },
-      { label: row.shiftComplete ? "Mark Shift Incomplete" : "Shift Complete", action: () => toggleShiftComplete(rowId) },
-      { label: "Load Details", action: () => openLoadDetailsModal(rowId) },
-      { label: "Text Now", action: () => textDriverForRow(rowId) },
+      { label: row.calledOff ? "Un-mark driver fall off" : "Cancellation - driver fall off", action: () => row.calledOff ? unmarkDriverCalledOff(rowId) : openCalledOffModal(rowId) },
+      { label: row.loadCancelled ? "Un-mark Kroger cancellation" : "Kroger cancellation - non-TONU", action: () => row.loadCancelled ? unmarkLoadCancelled(rowId) : openCancelLoadModal(rowId) },
       ...(canDeleteRoute ? [{ label: `Delete route ${routeLabelForConfirm(trip)} only`, action: () => deleteTrip(rowId, trip.id), danger: true }] : []),
+      { label: completionLabel, action: () => toggleShiftComplete(rowId), success: true },
       { label: `Delete entire load ${loadLabelForConfirm(row)}`, action: () => deleteRow(rowId), danger: true },
     ];
     const menu = document.createElement("div");
     menu.className = "row-context-menu";
     menu.id = "row-context-menu";
-    menu.innerHTML = items.map((it, i) => `<button class="context-menu-item${it.danger ? " context-menu-item-danger" : ""}" data-idx="${i}">${escapeHtml(it.label)}</button>`).join("");
+    menu.innerHTML = items.map((it, i) => `<button class="context-menu-item${it.danger ? " context-menu-item-danger" : ""}${it.success ? " context-menu-item-success" : ""}" data-idx="${i}">${escapeHtml(it.label)}</button>`).join("");
     document.body.appendChild(menu);
     menu.style.left = x + "px";
     menu.style.top = y + "px";
