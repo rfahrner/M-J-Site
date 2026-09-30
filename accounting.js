@@ -105,6 +105,63 @@ async function saveAccountingMoneyField(rec, field, value) {
   }
 }
 
+async function saveAccountingAljexNumber(rec, value) {
+  const previous = rec.aljex_load_number == null ? "" : String(rec.aljex_load_number);
+  if (value === previous) return;
+  try {
+    const saved = await saveAccountingFields(supabaseClient, rec.id, { aljex_load_number: value || null });
+    const current = getAccountingRecordById(rec.id);
+    if (current) current.aljex_load_number = saved.aljex_load_number;
+    setDriverSyncStatus("ALJEX # saved.", "success");
+  } catch (err) {
+    setDriverSyncStatus(`Couldn't save ALJEX # (${err.message || err}).`, "error");
+    renderAccountingTable();
+  }
+}
+
+function copyTextFallback(text) {
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0;";
+  document.body.appendChild(area);
+  area.select();
+  try { document.execCommand("copy"); } finally { area.remove(); }
+}
+
+function openAccountingCopyMenu(text, x, y) {
+  document.getElementById("accounting-copy-menu")?.remove();
+  const menu = document.createElement("div");
+  menu.id = "accounting-copy-menu";
+  menu.className = "row-context-menu";
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "context-menu-item";
+  copy.textContent = "Copy";
+  copy.addEventListener("click", async () => {
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+      else copyTextFallback(text);
+      setDriverSyncStatus("Copied.", "success");
+    } catch {
+      copyTextFallback(text);
+      setDriverSyncStatus("Copied.", "success");
+    }
+    menu.remove();
+  });
+  menu.appendChild(copy);
+  document.body.appendChild(menu);
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) menu.style.left = `${Math.max(4, window.innerWidth - rect.width - 8)}px`;
+  if (rect.bottom > window.innerHeight) menu.style.top = `${Math.max(4, window.innerHeight - rect.height - 8)}px`;
+  const dismiss = (event) => {
+    if (!menu.contains(event.target)) { menu.remove(); document.removeEventListener("mousedown", dismiss); }
+  };
+  document.addEventListener("mousedown", dismiss);
+}
+
 /*
  * A push from the load board overwrites what Accounting has -- including a rate
  * they typed. That is deliberate (the board is the operational truth), but it
@@ -639,7 +696,7 @@ function accountingNoteButton(rec) {
     return `<tr id="acct-${rec.id}" class="${rec.highlighted ? "acct-highlighted" : ""}"${rowStyle}${cancelTitle}>
       <td>${escapeHtml(rec.shift_date)}</td>
       ${showMdz ? `<td>${escapeHtml(mondelezSiteLabel(mdz?.location))}</td>` : ""}
-      <td>${rec.aljex_load_number ? `<span class="acct-load-reference"><span class="acct-load-text">${escapeHtml(rec.aljex_load_number)}</span><button type="button" class="cell-link-btn" style="width:auto; padding:2px 6px;" data-open-acct-load="${rec.id}" aria-label="Open load ${escapeHtml(rec.aljex_load_number)}" title="Open load">↗</button></span>` : "—"}</td>
+      <td><span class="acct-load-reference"><span class="acct-load-text" contenteditable="true" spellcheck="false" data-action="acct-aljex-number" data-id="${rec.id}" aria-label="ALJEX number">${escapeHtml(rec.aljex_load_number || "")}</span><button type="button" class="cell-link-btn" style="width:auto; padding:2px 6px;" data-open-acct-load="${rec.id}" aria-label="Open load${rec.aljex_load_number ? ` ${escapeHtml(rec.aljex_load_number)}` : ""}" title="Open load">↗</button></span></td>
       <td>${escapeHtml(rec.driver_name_text || "—")} ${accountingNoteButton(rec)}${acctPushStickyHtml(rec)}${isCancelled ? `<div class="subtext" style="text-decoration:none; color:var(--slate-500);">Cancelled — ${escapeHtml(rec.cancelled_reason || "no reason recorded")}</div>` : ""}${isDeleted ? `<div class="subtext" style="text-decoration:none; color:var(--slate-500);">Deleted from the board — not in Analytics. <button type="button" class="cell-link-btn" style="width:auto; padding:1px 6px; text-decoration:none;" data-action="acct-restore-deleted" data-id="${rec.id}" title="Put this record back into Analytics. The load itself does not come back.">Restore</button></div>` : ""}</td>
       ${showEmail ? `<td>${acctCarrierEmailHtml(rec)}</td>` : ""}
       <td>${escapeHtml(rec.mc_dot || "—")}</td>
@@ -999,6 +1056,7 @@ export function renderDriverStatsTable() {
       });
       table.addEventListener("input", (e) => {
         const t = e.target;
+        if (t.dataset.action === "acct-aljex-number") return;
         const field = ACCOUNTING_MONEY_FIELDS[t.dataset.action];
         if (!field) return;
         const rec = accountingRecords.find((r) => r.id == t.dataset.id);
@@ -1013,12 +1071,37 @@ export function renderDriverStatsTable() {
         clearTimeout(t._saveTimer);
         t._saveTimer = setTimeout(() => void saveAccountingMoneyField(rec, field, val), SAVE_DEBOUNCE_MS);
       });
-        table.addEventListener("focusout", (e) => {
+      table.addEventListener("focusout", (e) => {
         const t = e.target;
+        if (t.dataset.action === "acct-aljex-number") {
+          const rec = accountingRecords.find((r) => r.id == t.dataset.id);
+          if (rec) void saveAccountingAljexNumber(rec, t.textContent.trim());
+          return;
+        }
         if ((t.dataset.action === "acct-carrier-pay" || t.dataset.action === "acct-customer-rate") && t.value !== "") {
           const num = Number(t.value);
           if (!isNaN(num)) t.value = num.toFixed(2);
         }
+      });
+      table.addEventListener("dblclick", (e) => {
+        const cell = e.target.closest('[data-action="acct-aljex-number"]');
+        if (!cell) return;
+        e.preventDefault();
+        const range = document.createRange();
+        range.selectNodeContents(cell);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+      });
+      table.addEventListener("keydown", (e) => {
+        const cell = e.target.closest('[data-action="acct-aljex-number"]');
+        if (cell && e.key === "Enter") { e.preventDefault(); cell.blur(); }
+      });
+      table.addEventListener("contextmenu", (e) => {
+        const copyTarget = e.target.closest('.acct-load-text, .trip-chip');
+        if (!copyTarget || !table.contains(copyTarget)) return;
+        e.preventDefault();
+        openAccountingCopyMenu(copyTarget.textContent.trim(), e.clientX, e.clientY);
       });
       table.addEventListener("click", (e) => {
         const sticky = e.target.closest("[data-acct-open-push]");
