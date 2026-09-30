@@ -283,6 +283,28 @@ carry both as `data-acct-route-number` / `data-acct-source-trip`;
 them. Matching on the text is a last-resort fallback for rows old enough to
 predate `route_number`, and only when the name is unambiguous.
 
+## Right-click menus live per page, not globally
+
+Right-clicking a Trip ID pill on Accounting copies it
+(`accounting-trip-id-copy.js`). The pill's left-click already opens the route's
+details, so the copy had to go on the context menu.
+
+The menu markup and CSS classes are shared with the board's
+(`.row-context-menu` / `.context-menu-item` in `loadboard.css`), but the
+behaviour is not. `loadboard.js` wires its close-on-click, Escape and scroll
+handlers inside `initBoardPage()`, and Accounting runs `initAccountingPage()`
+instead -- so those handlers do not exist there. Every page that opens a
+context menu owns its own closers; they are not duplicates to be consolidated.
+
+What lands on the clipboard is the pill's `textContent`, not a dataset value,
+because `accounting-columns.js` relabels Atlanta's pill to the `trip_id` after
+the routes load while Delaware's keeps the `route_id`. The menu item names
+whichever column it is standing on. Right-clicking anywhere else on the sheet
+leaves the browser's own menu alone, and a pill with no Trip ID recorded is
+disabled, so it never reaches the handler.
+`scripts/accounting-trip-id-copy.test.mjs` pins all of it (jsdom; not in CI --
+CI syntax-checks the module, as it does for `accounting-load-search.js`).
+
 ## An empty rate table is not a cheaper rate
 
 `boardrates.js` caches `board_rate_tiers` in `cachedTiers`, which starts null,
