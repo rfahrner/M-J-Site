@@ -237,29 +237,11 @@ async function fetchRangeData(startDate, endDate, location) {
 // for a single day, a week, a quarter, or the overall aggregate, just
 // called with different scopes.
 // Recaps add daily driver counts; a person working three days counts three.
-//
-// A TONU is not a driver count here.
-//
-// This column answers "how many drivers ran that day", and a driver who was
-// paid a TONU did not run -- he was requested, turned away, and compensated.
-// Counting him inflated Drivers, and every ratio built on it: Turn, Rev/Driver
-// and Margin/DR are all divided by this number, so a TONU-heavy day looked
-// worse per driver than it was. The accounting workbook keeps Drivers and
-// TONU's as two separate columns for the same reason.
-//
-// Nothing is lost by excluding them: TONU is still its own metric on this page,
-// so a day with ten TONUs still says so. And Volume's "Drivers Requested"
-// deliberately still counts them -- that column means who was asked for, which
-// is a different question and one where a TONU absolutely belongs.
-//
-// This reverses the earlier rule that TONUs count as attendance. The owner's
-// definition is the one that matters, and it is: requested is not the same as
-// ran. scripts/analytics-tonu-drivers.test.mjs pins it.
+// TONU is attendance even if cancellation/call-off flags are also present.
 function countDrivers(shiftsInScope) {
   const keys = new Set();
   for (const s of shiftsInScope) {
-    if (s.tonu) continue;
-    if (s.load_cancelled || s.called_off) continue;
+    if (!s.tonu && (s.load_cancelled || s.called_off)) continue;
     const day = s.shift_date || '';
     if (s.driver_id != null) { keys.add(`${day}:id:${s.driver_id}`); continue; }
     const name = String(s.driver_name_text || '').trim().replace(/\s+/g, ' ').toLowerCase();
