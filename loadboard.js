@@ -3836,10 +3836,10 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     shiftStart: "shift_start", etaShiftReport: "eta_shift_report", revLevel: "rev_level",
     schneider: "schneider", preShiftTextSent: "pre_shift_text_sent", notes: "notes",
   };
+  // Only intentional identifiers and operational decisions belong in
+  // Change History. Routine route-entry fields stay out of the audit trail.
   const TRIP_HISTORY_FIELDS = {
-    routeId: "route_id", tripId: "trip_id", trailerOut: "trailer_out",
-    routeMiles: "route_miles", stopCount: "stop_count", dispatchTime: "dispatch_time",
-    lastStopDepart: "last_stop_depart", returnToDC: "return_to_dc", salvage: "salvage",
+    routeId: "route_id", tripId: "trip_id",
     backhaul: "backhaul", backhaulLocation: "backhaul_location",
     backhaulTrailerNumber: "backhaul_trailer_number", salvageBhaulRefusedBy: "salvage_bhaul_refused_by",
     returnEtaToDc: "return_eta_to_dc", routeEstHours: "route_est_hours", backhaulType: "backhaul_type",
