@@ -554,18 +554,26 @@ function accountingNoteButton(rec) {
     // driver, their details, and why it was cancelled -- the reason rides
     // along in the title so it's one hover away without widening the table.
     const isCancelled = rec.status === "cancelled";
+    // A load deleted from the board keeps its record here rather than vanishing
+    // -- struck through like a cancellation AND faded like a released row, so it
+    // reads as gone at a glance without being hidden. Its money is left intact
+    // and simply left out of the analytics totals, because Restore has to put
+    // the real figures back, not zeroes.
+    const isDeleted = rec.status === "deleted";
     const styleBits = [];
-    if (isDimmed) styleBits.push("opacity:0.5;");
-    if (isCancelled) styleBits.push("text-decoration:line-through; color:var(--slate-500);");
+    if (isDimmed || isDeleted) styleBits.push("opacity:0.5;");
+    if (isCancelled || isDeleted) styleBits.push("text-decoration:line-through; color:var(--slate-500);");
     const rowStyle = styleBits.length ? ` style="${styleBits.join(" ")}"` : "";
     const cancelTitle = isCancelled
       ? ` title="Load cancelled — ${escapeHtml(rec.cancelled_reason || "no reason recorded")}"`
-      : "";
+      : isDeleted
+        ? ` title="Deleted from the load board${rec.deleted_at ? ` on ${escapeHtml(String(rec.deleted_at).slice(0, 10))}` : ""} — left out of Analytics until restored"`
+        : "";
     return `<tr id="acct-${rec.id}" class="${rec.highlighted ? "acct-highlighted" : ""}"${rowStyle}${cancelTitle}>
       <td>${escapeHtml(rec.shift_date)}</td>
       ${showMdz ? `<td>${escapeHtml(mondelezSiteLabel(mdz?.location))}</td>` : ""}
       <td>${rec.aljex_load_number ? `<span class="acct-load-reference"><span class="acct-load-text">${escapeHtml(rec.aljex_load_number)}</span><button type="button" class="cell-link-btn" style="width:auto; padding:2px 6px;" data-open-acct-load="${rec.id}" aria-label="Open load ${escapeHtml(rec.aljex_load_number)}" title="Open load">↗</button></span>` : "—"}</td>
-      <td>${escapeHtml(rec.driver_name_text || "—")} ${accountingNoteButton(rec)}${acctPushStickyHtml(rec)}${isCancelled ? `<div class="subtext" style="text-decoration:none; color:var(--slate-500);">Cancelled — ${escapeHtml(rec.cancelled_reason || "no reason recorded")}</div>` : ""}</td>
+      <td>${escapeHtml(rec.driver_name_text || "—")} ${accountingNoteButton(rec)}${acctPushStickyHtml(rec)}${isCancelled ? `<div class="subtext" style="text-decoration:none; color:var(--slate-500);">Cancelled — ${escapeHtml(rec.cancelled_reason || "no reason recorded")}</div>` : ""}${isDeleted ? `<div class="subtext" style="text-decoration:none; color:var(--slate-500);">Deleted from the board — not in Analytics. <button type="button" class="cell-link-btn" style="width:auto; padding:1px 6px; text-decoration:none;" data-action="acct-restore-deleted" data-id="${rec.id}" title="Put this record back into Analytics. The load itself does not come back.">Restore</button></div>` : ""}</td>
       ${showEmail ? `<td>${acctCarrierEmailHtml(rec)}</td>` : ""}
       <td>${escapeHtml(rec.mc_dot || "—")}</td>
       ${showMdz ? `<td>${escapeHtml(acctDriverCell(rec) || "—")}</td>
@@ -669,6 +677,39 @@ export function renderDriverStatsTable() {
     renderAcctDateChrome();
     renderAccountingTable();
   }
+  /*
+   * Put a deleted record back into the totals.
+   *
+   * This restores the Accounting row only -- the load it came from was deleted
+   * from the board and does not come back, so the button says so. What returns
+   * is the money: the row leaves the struck-through state and counts in
+   * Analytics again, with the figures it always had.
+   *
+   * status goes back to 'active' rather than to whatever it was before. A row
+   * that was 'released' and then deleted is the one case that loses something,
+   * and it is worth the simplicity: released is a billing state someone sets
+   * deliberately and can set again, while guessing wrong would silently
+   * re-release an invoice.
+   */
+  async function restoreDeletedAccountingRecord(accountingId) {
+    const rec = getAccountingRecordById(accountingId);
+    if (!rec || rec.status !== "deleted") return;
+    const label = [rec.aljex_load_number, rec.driver_name_text].filter(Boolean).join(" — ") || "this record";
+    if (!confirm(
+      `Restore ${label} to Analytics?\n\n` +
+      `The record starts counting in the totals again. The load itself stays deleted from the board.`
+    )) return;
+    try {
+      const saved = await saveAccountingFields(supabaseClient, rec.id, { status: "active", deleted_at: null });
+      rec.status = saved.status;
+      rec.deleted_at = saved.deleted_at;
+      setDriverSyncStatus(`${label} is back in Analytics.`, "success");
+    } catch (err) {
+      setDriverSyncStatus(`Couldn't restore ${label} (${err.message || err}).`, "error");
+    }
+    renderAccountingTable();
+  }
+
   async function changeAccountingRevenueRate(accountingId, level) {
     try {
       const { data, error } = await supabaseClient.rpc("set_accounting_revenue_rate", {
@@ -916,6 +957,8 @@ export function renderDriverStatsTable() {
         if (sticky) { openAccountingPushNote(sticky.dataset.acctOpenPush); return; }
         const noteBtn = e.target.closest('[data-acct-load-notes]');
         if (noteBtn) { void openLoadDetailsFromAccounting(noteBtn.dataset.acctLoadNotes, null, null, 'notes'); return; }
+        const restoreBtn = e.target.closest('[data-action="acct-restore-deleted"]');
+        if (restoreBtn) { void restoreDeletedAccountingRecord(restoreBtn.dataset.id); return; }
         const openBtn = e.target.closest("[data-open-acct-load]");
         if (!openBtn) return;
         // Prefer the exact loads_trips id the chip carries. Falling back to

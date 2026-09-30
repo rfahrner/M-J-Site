@@ -493,6 +493,34 @@ deliberately not offered because `pricing_settings` marks it unconfigured.
 board column, and is read by nothing. It is null on every shift. Either wire it
 up or remove it; do not assume it carries the level.
 
+## A deleted load keeps its Accounting record
+
+`loads_accounting.source_shift_id` is **ON DELETE SET NULL**, so deleting a
+shift never removed its billing row -- it just orphaned it, silently, still
+counted in every total with nothing pointing back at the load. That was
+invisible from both screens.
+
+Deleting a load now sets that row to `status = 'deleted'` with a `deleted_at`
+stamp, **before** the shift goes, because `source_shift_id` is the only link and
+it is gone a moment later. Both delete paths do it: the right-click
+`deleteRow()` and the board's `deleteSelectedRows()`.
+
+- The Accounting sheet draws it struck through **and** faded -- cancelled
+  styling plus released styling -- with a **Restore** control beside the driver
+  name. Restore sets `status` back to `'active'` and clears `deleted_at`.
+- Location Analytics excludes it at the query (`.neq('status','deleted')`), so
+  revenue, cost, margin, GM% and every per-unit ratio drop it together. The
+  plain `neq` is only safe because `status` is NOT NULL with a default.
+- **The figures are never zeroed on the way out.** Restore has to give back the
+  real numbers, not zeroes.
+
+It is not `'cancelled'`: a cancellation is operational and carries no money by
+design, a deletion is record-keeping with money still attached. Restore returns
+the row to `'active'` rather than its previous status -- a released row that was
+deleted loses that one bit, which is preferred over silently re-releasing an
+invoice. `scripts/deleted-load-stays-on-accounting.test.mjs` pins all three
+halves; `scripts/bulk-delete-loads.test.mjs` pins the button.
+
 ## Database rules worth preserving
 
 - `loads_shifts` = standard board shifts.
