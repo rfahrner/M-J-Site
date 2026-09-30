@@ -466,6 +466,25 @@ function initAccountingColumns() {
   if (driverTable) observer.observe(driverTable, { childList: true, subtree: true });
 
   document.getElementById('acct-location-tabs')?.addEventListener('click', scheduleApply);
+
+  /*
+   * The Refresh button. Both caches here only ever fetch ids they have not
+   * seen -- fetchAtlantaRouteIds() skips anything already in
+   * atlantaRoutesByAccountingId, and fetchLiveCompletionStatus() skips any
+   * shift already in liveShiftsById. That is right for scrolling and wrong
+   * for a refresh: a Trip ID edited on the board, or a route closed out,
+   * would keep showing the value cached when the page opened. So a refresh
+   * empties both and lets the re-render pull them again.
+   *
+   * accounting.js sends this rather than calling in, because that module is
+   * imported BY this one and the reverse import would close a cycle.
+   */
+  document.addEventListener('accounting:refresh', () => {
+    atlantaRoutesByAccountingId.clear();
+    invalidateLiveStatus();
+    scheduleApply();
+  });
+
   setupLiveStatusRealtime();
   scheduleApply();
 }

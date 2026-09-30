@@ -362,6 +362,73 @@ function accountingNoteButton(rec) {
     await loadAccountingRecordsForRange(state.minDate, state.maxDate, true);
   }
 
+  /*
+   * Everything this page shows, re-read from the database.
+   *
+   * It is a READ. It writes nothing, recalculates nothing, and does not
+   * re-push from the load board -- see "Refresh re-reads; it never
+   * re-pushes" in CLAUDE.md for why that matters. A refresh can never cost
+   * you a figure someone typed.
+   *
+   * Four separate things go stale independently, which is why this is not
+   * just location.reload():
+   *   - the accounting rows themselves, plus routes, notes, driver contacts
+   *     and shift-complete status (loadAccountingRecordsForRange)
+   *   - the Trip ID column and the green/red completion pills, cached in
+   *     accounting-columns.js, which only ever fetches ids it has not seen
+   *   - the Aljex/applied status, cached the same way
+   *   - the realtime channel, which a sleeping laptop can leave dead while
+   *     the page looks perfectly normal
+   * The last three live in other modules, so they are told through a DOM
+   * event rather than an import -- those modules already import from this
+   * one, and the reverse edge would close a cycle that has broken startup
+   * before.
+   *
+   * Reloading the page would also do all this. It would also throw away the
+   * date and location you were looking at, which on a sheet people keep open
+   * all day is the whole cost.
+   */
+  let accountingRefreshInFlight = false;
+  export async function refreshAccountingSheet() {
+    if (accountingRefreshInFlight || !supabaseClient) return;
+    accountingRefreshInFlight = true;
+    const btn = $("#btn-acct-refresh");
+    const stamp = $("#acct-refreshed-at");
+    if (btn) { btn.disabled = true; btn.textContent = "Refreshing…"; }
+    try {
+      // Tell the other modules to drop their caches BEFORE the re-read, so
+      // the re-render they do afterwards fetches rather than reuses.
+      document.dispatchEvent(new CustomEvent("accounting:refresh"));
+      await loadPricingData();
+      const settings = getPricingSettings();
+      // Someone mid-edit in the FSC box keeps what they typed.
+      if (settings && $("#fsc-rate-input") && document.activeElement !== $("#fsc-rate-input")) {
+        $("#fsc-rate-input").value = settings.fsc_rate || "";
+      }
+      // state.minDate, not a fresh 60-day window: "Load Earlier Records"
+      // moved it, and a refresh must not silently drop the older rows the
+      // user deliberately pulled in.
+      await loadAccountingRecordsForRange(state.minDate, state.maxDate, true);
+      await loadLocationNotes();
+      renderAccountingTable();
+      renderAcctDateChrome();
+      setupAccountingRealtimeSync();
+      if (accountingLoadError) {
+        if (stamp) stamp.textContent = "";
+      } else {
+        const at = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+        if (stamp) stamp.textContent = `Updated ${at}`;
+        setDriverSyncStatus(`Accounting refreshed — ${accountingRecords.length} records re-read.`, "success");
+      }
+    } catch (error) {
+      console.error("Accounting refresh failed:", error);
+      setDriverSyncStatus(`Couldn't refresh (${error.message || error}). Nothing was changed.`, "error");
+    } finally {
+      accountingRefreshInFlight = false;
+      if (btn) { btn.disabled = false; btn.textContent = "Refresh"; }
+    }
+  }
+
   const ACCT_WINDOW_DAYS = 60; // matches the calendar's existing default lookback
 
   // Pulls in the next 60-day window further back than what's currently
@@ -802,6 +869,7 @@ export function renderDriverStatsTable() {
     await loadLocationNotes();
     renderAccountingTable();
     setupAccountingRealtimeSync();
+    on("btn-acct-refresh", "click", () => { void refreshAccountingSheet(); });
     if ($("#acct-location-tabs")) {
       $("#acct-location-tabs").addEventListener("click", (e) => {
         const btn = e.target.closest(".location-tab");
@@ -1025,9 +1093,20 @@ export function renderDriverStatsTable() {
       });
     }
   }
+  let accountingRealtimeChannel = null;
+
   export function setupAccountingRealtimeSync() {
     if (!supabaseClient) return;
+    // A refresh tears the old channel down first. Without this, a second
+    // subscribe leaves the first one attached and every realtime row is
+    // handled twice -- and if the socket had gone stale (a laptop that
+    // slept), the dead channel keeps the page silently not updating.
+    if (accountingRealtimeChannel) {
+      try { supabaseClient.removeChannel(accountingRealtimeChannel); } catch (e) { /* already gone */ }
+      accountingRealtimeChannel = null;
+    }
     const channel = supabaseClient.channel("accounting");
+    accountingRealtimeChannel = channel;
     channel.on("postgres_changes", { event: "*", schema: "public", table: "loads_accounting" }, async (payload) => {
       if (payload.eventType === "DELETE") return;
       if (payload.new.source_shift_id) await refreshAccountingLoadNotes([payload.new.source_shift_id]);

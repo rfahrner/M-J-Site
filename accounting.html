@@ -25,6 +25,11 @@
         <label for="fsc-rate-input" style="font-size:12.5px; font-weight:700;">Current FSC Rate</label>
         <input type="number" id="fsc-rate-input" step="0.01" min="0" style="width:80px; padding:6px 8px; border:1px solid var(--slate-500); border-radius:var(--radius-sm);">
         <button class="btn" id="btn-save-fsc">Save FSC Rate</button>
+        <!-- Re-reads everything on this page from the database. It never
+             writes, recalculates or re-pushes from the board -- see the
+             "Refresh re-reads; it never re-pushes" note in CLAUDE.md. -->
+        <button class="btn" id="btn-acct-refresh" title="Re-read this sheet from the database">Refresh</button>
+        <span class="subtext" id="acct-refreshed-at" style="font-size:11.5px;"></span>
       </div>
     </div>
     <!-- Reaches any load in the database by Trip ID, Route ID, Load # or
