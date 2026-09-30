@@ -98,6 +98,9 @@ jobs:
       - name: Test analytics arithmetic and weekly recap grouping
         run: node scripts/analytics-weekly-totals.test.mjs
 
+      - name: Test how each analytics page counts a TONU
+        run: node scripts/analytics-tonu-drivers.test.mjs
+
       - name: Test analytics pages only select columns their view has
         run: node scripts/analytics-view-columns.test.mjs
 

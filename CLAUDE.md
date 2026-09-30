@@ -449,8 +449,22 @@ a screen someone already has open -- delivery, not a second source of change.
 
 Location Analytics and Volume add the daily driver counts for weekly, period,
 and running totals. Deduplicate a person within a date, not across the whole
-range. TONUs count even when cancellation/call-off flags are also set. Typed
-names count too. Ratios are recomputed from totals, not summed or averaged.
+range. Typed names count too. Ratios are recomputed from totals, not summed or
+averaged.
+
+**The two pages count drivers differently, on purpose.** Location Analytics'
+**Drivers** means drivers who *ran*, so a TONU is excluded -- that driver was
+requested, turned away and paid, and did not run. Volume's **Drivers
+Requested** means who was *asked for*, so a TONU is included there. Turn,
+Rev/Driver and Margin/DR all divide by the Location Analytics figure, which is
+why counting TONUs in it made a TONU-heavy day read worse per driver than it
+was (2026-08-13 Atlanta: 29 drivers against 13 TONUs; the honest number is 19).
+TONU remains its own column on both pages, so nothing is hidden by excluding it.
+`scripts/analytics-tonu-drivers.test.mjs` pins both behaviours, building each
+page's `countDrivers` from its own source so the two cannot quietly converge.
+
+This reverses an earlier note that said TONUs count as attendance. Do not
+restore that without asking -- it is the owner's definition, not a detail.
 Each thick black weekly box includes its displayed daily rows and its recap;
 partial-week recaps and reports use those exact dates.
 
