@@ -1875,9 +1875,36 @@ fieldset.rate-tier-box.is-overridden {
 /* Accounting row marks stay visible across all sheet layouts. */
 #accounting-table-body tr.acct-highlighted > td { background-color: #fff2b3; }
 .acct-load-reference { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-.acct-load-text { user-select: text; cursor: text; min-width: 2ch; display: inline-block; }
+#accounting-table .acct-load-text {
+  border: 1px solid transparent;
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  padding: 2px 3px;
+  border-radius: var(--radius-sm);
+  color: var(--navy-950);
+  user-select: text;
+  cursor: text;
+  min-width: 2ch;
+  display: inline-block;
+}
+#accounting-table .acct-load-text:hover { border-color: var(--line); }
+#accounting-table .acct-load-text:focus {
+  outline: none;
+  border-color: var(--focus);
+  background: #fff;
+  box-shadow: 0 0 0 2px rgba(47,111,237,0.15);
+}
+#accounting-table .cell-input:hover,
+#accounting-table .acct-load-text:hover { border-color: var(--line); }
+#accounting-table .cell-input:focus,
+#accounting-table .acct-load-text:focus {
+  outline: none;
+  border-color: var(--focus);
+  background: #fff;
+  box-shadow: 0 0 0 2px rgba(47,111,237,0.15);
+}
 .acct-load-text:empty::before { content: "—"; color: var(--slate-500); }
-.acct-load-text:focus { outline: 2px solid var(--navy-950); outline-offset: 1px; }
 
 .acct-note-button { border: 0; background: transparent; padding: 2px 4px; color: white; cursor: pointer; vertical-align: middle; }
 .acct-note-button.has-notes { color: #facc15; }
