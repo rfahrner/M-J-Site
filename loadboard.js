@@ -6264,7 +6264,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       }
       if (!await saveShiftNow(row)) return;
       const after = { ...row, driverName: findDriver(row.driverId)?.name || row.driverNameText || "" };
-      for (const [key, fieldName] of Object.entries({ driverName: "driver_reassigned", timesheetReceived: "timesheet_received", timesheetStartTime: "timesheet_start_time", timesheetEndTime: "timesheet_end_time" })) {
+      for (const [key, fieldName] of Object.entries({ driverName: "driver_reassigned", timesheetReceived: "timesheet_received" })) {
         await logChange(row.dbId, labelForRow(row), fieldName, before[key], after[key]);
       }
       // Time sheet start+end both filled in is one of the three auto-send
