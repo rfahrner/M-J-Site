@@ -20,6 +20,7 @@ import { carrierMileageTier, carrierTierLabel } from './carrier-mileage-tiers.js
 import { nextShiftDate, nightShiftRows, shortShiftDate, morningShift } from './night-shift.js';
 import { cancellationNotePayload, sortDriverNotes, driverNoteRowHtml } from './driver-profile-notes.js';
 import { sendShiftToAccounting } from './accountingcalc.js';
+import { markAccountingSentForShift } from './accounting-save.js';
 import { initHoustonBoardPage } from './houston.js';
 import { initMondelezPage } from './mondelez.js';
 import { initDriverAnalyticsPage } from './analytics-drivers.js';
@@ -3966,14 +3967,28 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   }
 
   async function finalizeShiftCompletion(row) {
+    const previousCompleteAt = row.shiftCompleteAt;
     row.shiftComplete = true;
     row.shiftCompleteAt = new Date().toISOString();
-    await saveShiftNow(row);
+    if (!await saveShiftNow(row)) {
+      row.shiftComplete = false;
+      row.shiftCompleteAt = previousCompleteAt;
+      return;
+    }
     logChange(row.dbId, labelForRow(row), "shift_complete", "false", "true");
     await discardBlankTrips(row);
     await minimizeAllTrips(row);
     recomputeRowRate(row);
     await maybeSendToAccounting(row);
+    if ((row.location || state.activeLocation) === "delaware") {
+      try {
+        await markAccountingSentForShift(supabaseClient, row.dbId);
+      } catch (e) {
+        console.error("Updated ratecon Accounting Sent sync failed:", e);
+        setDriverSyncStatus("Updated Ratecon Sent saved, but Accounting Sent could not be checked.", "error");
+        alert(`Updated Ratecon Sent was marked, but Accounting's Sent checkbox could not be saved. Check Sent on the Accounting sheet or unmark and retry. ${e.message}`);
+      }
+    }
   }
 
   function openTimesheetModal(rowId, queue) {
