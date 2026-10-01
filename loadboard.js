@@ -5476,7 +5476,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       refreshDriverDatalist();
       let targetTrip = tripDbId ? row.trips.find((t) => String(t.dbId) === String(tripDbId)) : null;
       if (!targetTrip && routeIdText) targetTrip = row.trips.find((t) => String(t.routeId || "").trim() === String(routeIdText).trim());
-      await openLoadDetailsModal(row.id, targetTrip ? targetTrip.id : null);
+      await openLoadDetailsModal(row.id, targetTrip ? targetTrip.id : null, null, String(accountingRecordId));
       if (initialTab === 'notes' && loadDetailsState?.rowId === row.id) {
         loadDetailsState.activeTab = 'notes';
         renderLoadDetailsTabs();
@@ -5534,13 +5534,14 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     await openLoadStandalone(dbId, { inFront: true });
   }
 
-  async function openLoadDetailsModal(rowId, jumpToTripId, forceTab) {
+  async function openLoadDetailsModal(rowId, jumpToTripId, forceTab, accountingId = null) {
     const found = findRowAnywhere(rowId);
     const modal = $("#modal-load-details");
     if (!found || !modal) return;
     const row = found.row;
     loadDetailsState = {
       rowId,
+      accountingId,
       activeTab: forceTab || (jumpToTripId ? `trip-${jumpToTripId}` : "overview"),
       attachments: [],
       history: [],

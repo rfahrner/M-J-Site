@@ -34,7 +34,7 @@ function sameIds(a, b) {
 }
 
 function applySnapshotsToOpenLoad() {
-  if (applying || !activeAccountingId || !loadDetailsState) return;
+  if (applying || !activeAccountingId || !loadDetailsState || loadDetailsState.accountingId !== activeAccountingId) return;
 
   const mergedNotes = mergeRows(
     loadDetailsState.loadNotes || [],
@@ -99,9 +99,10 @@ function init() {
   if ((location.pathname.split('/').pop() || '') !== 'accounting.html') return;
 
   document.addEventListener('click', (event) => {
-    const btn = event.target.closest('[data-open-acct-load]');
-    if (btn && btn.dataset.openAcctLoad) {
-      loadAccountingAuditSnapshot(btn.dataset.openAcctLoad);
+    const btn = event.target.closest('[data-open-acct-load], [data-acct-load-notes]');
+    const accountingId = btn?.dataset.openAcctLoad || btn?.dataset.acctLoadNotes;
+    if (accountingId) {
+      loadAccountingAuditSnapshot(accountingId);
       return;
     }
 
