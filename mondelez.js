@@ -944,6 +944,12 @@ export async function initMondelezPage() {
   } else {
     loadAndRenderMondelez();
   }
+  // Same race as Houston: the driver pool lands after this board has drawn,
+  // and the MC column comes off the profile. See the note in houston.js.
+  document.addEventListener("drivers:loaded", () => {
+    if (state.activeLocation !== "mondelez") return;
+    renderMondelezTable();
+  });
   setupMondelezRealtimeSync();
   loadMondelezDatesWithData().catch((e) => console.error("loadMondelezDatesWithData() failed:", e));
   renderMondelezTabs();

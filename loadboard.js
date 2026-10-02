@@ -1184,6 +1184,16 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     Object.entries(state.sheets).forEach(([k, rows]) => healUnlinkedDriverRows(rows, k.split("__")[0]));
     if (currentFile() === "driverlist.html") renderDriverList();
     else if (state.activeLocation && state.sheets[sheetKey(state.activeLocation, state.activeDate)]) renderBoardTable();
+    // Houston and Mondelez keep their own rows and their own renderers, so
+    // the line above never redrew them and they lost this race in exactly the
+    // way described below -- the driver name, and then six dashes.
+    //
+    // A DOM event rather than direct calls. This file already imports each
+    // board's init(), so the edge exists -- the reason is that one dispatch
+    // does not grow as boards are added, and each board decides for itself
+    // whether a redraw is wanted. Each listens only on its own page, so this
+    // reaches whichever one is open and nothing else.
+    document.dispatchEvent(new CustomEvent("drivers:loaded"));
     // And the Available list, which was the one thing this did not redraw.
     //
     // Every column of it except the name comes off the driver profile --

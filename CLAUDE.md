@@ -585,6 +585,33 @@ deleted loses that one bit, which is preferred over silently re-releasing an
 invoice. `scripts/deleted-load-stays-on-accounting.test.mjs` pins all three
 halves; `scripts/bulk-delete-loads.test.mjs` pins the button.
 
+## The driver pool lands after the board draws
+
+`init()` does not await `loadDriversFromSupabase()`, and there are 5,700+
+driver rows paging in 1,000 at a time. Every board therefore renders before
+the pool exists, and every column that comes off a driver profile -- phone,
+dispatcher phone, carrier, MC, rating, carrier rate, email -- draws a dash.
+The NAME survives, because it falls back to `row.driverName` stored on the row
+itself. **Name plus a line of dashes is the signature of this bug**, and it
+reads as lost data rather than a lookup that has not happened yet.
+
+It is a race, and a cached page loses it more often than a cold one, which is
+why it gets reported as "navigate away and come back".
+
+`loadDriversFromSupabase()` finishes by redrawing: the driver list, the
+standard board, the Available section, and then dispatching a `document`-level
+**`drivers:loaded`**. Houston and Mondelez listen for it and redraw their own
+tables -- each keeps its own rows and its own renderer, so the three earlier
+repairs (made one at a time, as each was reported) never reached them.
+
+The event is not about avoiding an import; `loadboard.js` already imports each
+board's `init()`. It is so that one dispatch does not grow as boards are
+added, and each board decides for itself whether a redraw is wanted. Register
+the listener inside the page's init, never at module scope: `loadboard.js`
+imports these modules on every page, and a listener firing on Accounting would
+call a renderer whose table is not in the document.
+`scripts/drivers-loaded-redraw.test.mjs` pins it.
+
 ## Calendar dots: one paged helper, not one query per board
 
 The red dots come from every `shift_date` in the browsable range, which is two
