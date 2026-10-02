@@ -179,6 +179,27 @@ and filters it out of every scan. Repeating rules roll a tier into their key, so
 the next reminder is a new key and still arrives; dismissing never switches a
 rule off.
 
+## Change History records decisions, not data entry
+
+`b439422` narrowed it: "only intentional identifiers and operational decisions
+belong in Change History. Routine route-entry fields stay out of the audit
+trail." `salvage`, `trailer_out`, `route_miles`, `stop_count`,
+`dispatch_time`, `last_stop_depart` and `return_to_dc` came out of
+`TRIP_HISTORY_FIELDS` and are not logged.
+
+What remains: `route_id`, `trip_id`, the backhaul fields,
+`salvage_bhaul_refused_by`, `return_eta_to_dc`, `route_est_hours`,
+`eta_to_final_stop`, `est_route_complete` on a route; `pro_number`,
+`driver_reassigned`, `carrier_rate_manual`, `shift_start`, `eta_shift_report`,
+`rev_level`, `schneider`, `pre_shift_text_sent`, `notes` on a shift. Status
+events (TONU, cancellation, complete, deleted) are separate and unaffected.
+
+`scripts/cell-edit-history.test.mjs` asserts both halves -- the fields that
+must stay out and the ones that must stay in -- because the trimmed list is a
+decision, and a red test looks like a bug worth "fixing" by putting a field
+back. It was exactly that: the test still drove `salvage` and left main's CI
+red from 2026-10-01.
+
 ## Deleting a load vs. deleting a route
 
 The ROUTES column's pills are rendered inside a load's FIRST `<tr>`, and routes
