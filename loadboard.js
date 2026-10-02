@@ -2648,30 +2648,47 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
 
   /* ---------------- date dropdown — greys out days with no loads ---------------- */
 
-  async function loadDatesWithData(locationKey) {
-    if (!supabaseClient) return;
-
-    // Atlanta has far more than Supabase/PostgREST's 1,000-row response
-    // limit. Page through the same date-only query so the calendar receives
-    // every shift date instead of an arbitrary first slice.
+  /*
+   * Which days in the browsable range have any loads -- the red dots on the
+   * calendar.
+   *
+   * PostgREST caps a response at 1,000 rows and says nothing about it: the
+   * array just arrives short. The browsable range is two years, so every
+   * board crosses that, and the dates in the rows past the cap simply lose
+   * their dot. Atlanta was paged for this reason; Houston and Mondelez each
+   * kept their own unpaged copy and were quietly wrong -- Houston had 1,165
+   * rows across 104 days and only 88 of them got a dot, all 16 missing ones
+   * recent. Hence one helper rather than three.
+   *
+   * Returns null on failure so the caller keeps whatever it had. A blank
+   * calendar reads as "no loads ran", which is a worse lie than a stale one.
+   */
+  export async function fetchDatesWithData(table, applyFilters) {
+    if (!supabaseClient) return null;
     const PAGE_SIZE = 1000;
     const dates = new Set();
     let from = 0;
-    while (true) {
-      const { data, error } = await supabaseClient
-        .from(SHIFTS_TABLE)
+    for (;;) {
+      let query = supabaseClient
+        .from(table)
         .select("shift_date")
-        .eq("location", locationKey)
         .gte("shift_date", state.minDate)
         .lte("shift_date", state.maxDate)
         .order("shift_date", { ascending: true })
         .range(from, from + PAGE_SIZE - 1);
-      if (error) { console.error("Failed to load date-availability info:", error); return; }
+      if (applyFilters) query = applyFilters(query);
+      const { data, error } = await query;
+      if (error) { console.error(`Failed to load date-availability info for ${table}:`, error); return null; }
       (data || []).forEach((row) => dates.add(row.shift_date));
       if (!data || data.length < PAGE_SIZE) break;
       from += PAGE_SIZE;
     }
+    return dates;
+  }
 
+  async function loadDatesWithData(locationKey) {
+    const dates = await fetchDatesWithData(SHIFTS_TABLE, (q) => q.eq("location", locationKey));
+    if (!dates) return;
     state.datesWithData = dates;
     const dropdown = $("#date-dropdown");
     if (dropdown && !dropdown.classList.contains("hidden")) {

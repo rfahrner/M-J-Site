@@ -19,7 +19,7 @@
 import {
   state, supabaseClient, uid, findDriver, driversForLocation, setDriverSyncStatus,
   SAVE_DEBOUNCE_MS, escapeHtml, $, $all, keyToDate, addDays, dateKey, on,
-  refreshDriverDatalist, closeDateDropdown, renderCalendarGrid, resetCalendarViewMonth,
+  refreshDriverDatalist, closeDateDropdown, renderCalendarGrid, fetchDatesWithData, resetCalendarViewMonth,
   closeContextMenu, handleRealtimeDriverChange, pick, textDriverPhone, openAddDriverModal,
   openDriverAutocomplete, updateDriverAutocomplete, closeDriverAutocomplete, captureFocusForRerender,
   handleRowAwareTab, openEditDriverModal, batchSignImageUrls, wireImageViewer,
@@ -244,13 +244,11 @@ async function ensureMondelezDateLoaded(dKey) {
   imageTargets.forEach((target) => { if (target.routeImageUrl) { target.row.routeImageUrls[target.index] = target.routeImageUrl; if (!target.row.routeImageUrl) target.row.routeImageUrl = target.routeImageUrl; } });
   mondelezState.rowsByDate[dKey] = rows;
 }
+// Same 1,000-row cap as Houston, same two-year range, same shared helper.
 export async function loadMondelezDatesWithData() {
-  if (!supabaseClient) return;
-  const { data, error } = await supabaseClient
-    .from(MONDELEZ_TABLE).select("shift_date")
-    .gte("shift_date", state.minDate).lte("shift_date", state.maxDate);
-  if (error) { console.error("Failed to load Mondelez date-availability info:", error); return; }
-  mondelezState.datesWithData = new Set((data || []).map((r) => r.shift_date));
+  const dates = await fetchDatesWithData(MONDELEZ_TABLE);
+  if (!dates) return;
+  mondelezState.datesWithData = dates;
 }
 async function saveMondelezRowNow(row) {
   if (!supabaseClient) return null;

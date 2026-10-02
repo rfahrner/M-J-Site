@@ -4,7 +4,7 @@
      split) with entirely different columns. See chat for why this
      isn't just another branch in the existing board code.
      ================================================================ */
-import { state, parseHHMM, supabaseClient, uid, findDriver, driversForLocation, setDriverSyncStatus, SAVE_DEBOUNCE_MS, escapeHtml, $, $all, addDays, keyToDate, dateKey, on, refreshDriverDatalist, renderBoardChrome, beginTextBatchFlow, textDriverPhone, openAddDriverModal, openAddLoadModal, closeAddLoadModal, closeDateDropdown, renderCalendarGrid, closeContextMenu, sendCurrentGroupBatchDirect, groupSendNowPressed, openCurrentGroupBatch, openCurrentGroupBatchInWeb, confirmGroupBatchSent, pick, handleRealtimeDriverChange, initAvailableSection, resetCalendarViewMonth, resetGroupTextState, refreshAvailableSection, openDriverAutocomplete, updateDriverAutocomplete, closeDriverAutocomplete, captureFocusForRerender, handleRowAwareTab, openEditDriverModal, BOARD_IMAGE_BUCKET, rowImageDropzoneHtml, wireRowImageDropzone, batchSignImageUrls, openLocationNotesModal, closeLocationNotesModal, saveLocationNotes } from './loadboard.js';
+import { state, parseHHMM, supabaseClient, uid, findDriver, driversForLocation, setDriverSyncStatus, SAVE_DEBOUNCE_MS, escapeHtml, $, $all, addDays, keyToDate, dateKey, on, refreshDriverDatalist, renderBoardChrome, beginTextBatchFlow, textDriverPhone, openAddDriverModal, openAddLoadModal, closeAddLoadModal, closeDateDropdown, renderCalendarGrid, fetchDatesWithData, closeContextMenu, sendCurrentGroupBatchDirect, groupSendNowPressed, openCurrentGroupBatch, openCurrentGroupBatchInWeb, confirmGroupBatchSent, pick, handleRealtimeDriverChange, initAvailableSection, resetCalendarViewMonth, resetGroupTextState, refreshAvailableSection, openDriverAutocomplete, updateDriverAutocomplete, closeDriverAutocomplete, captureFocusForRerender, handleRowAwareTab, openEditDriverModal, BOARD_IMAGE_BUCKET, rowImageDropzoneHtml, wireRowImageDropzone, batchSignImageUrls, openLocationNotesModal, closeLocationNotesModal, saveLocationNotes } from './loadboard.js';
 import { getBoardRateSettings } from './boardrates.js';
 import { nextShiftDate, nightShiftRows, shortShiftDate, morningShift } from './night-shift.js';
 export const HOUSTON_TABLE = "loads_houston";
@@ -110,13 +110,13 @@ export const HOUSTON_TABLE = "loads_houston";
     houstonState.sheets[dKey] = rows;
   }
 
+  // Paged, through the shared helper: this query spans two years and crossed
+  // PostgREST's silent 1,000-row cap, so the most recent days -- the ones
+  // anyone actually looks back at -- were losing their calendar dot.
   export async function loadHoustonDatesWithData() {
-    if (!supabaseClient) return;
-    const { data, error } = await supabaseClient
-      .from(HOUSTON_TABLE).select("shift_date")
-      .gte("shift_date", state.minDate).lte("shift_date", state.maxDate);
-    if (error) { console.error("Failed to load Houston date-availability info:", error); return; }
-    houstonState.datesWithData = new Set((data || []).map((r) => r.shift_date));
+    const dates = await fetchDatesWithData(HOUSTON_TABLE);
+    if (!dates) return;
+    houstonState.datesWithData = dates;
   }
 
   export async function saveHoustonRowNow(row) {
@@ -751,6 +751,39 @@ export const HOUSTON_TABLE = "loads_houston";
       if (!tr || !tr.id) return;
       e.preventDefault();
       openHoustonRowContextMenu(tr.id, e.clientX, e.clientY);
+    });
+    /*
+     * The ↗ beside an Aljex # appears as soon as you leave the cell.
+     *
+     * The cell renders its button from `row.aljexNumber ? ... : ""`, which is
+     * true at DRAW time only -- so a number typed into a row already on
+     * screen got no button until something else forced a redraw. Rows loaded
+     * with the page had one and rows filled in since did not, side by side,
+     * which is what it looked like.
+     *
+     * The standard board solved this on focusout; this is the same rule for
+     * Houston's own table. On focusout rather than input so the button does
+     * not flicker in on the first keystroke of a number being typed.
+     */
+    boardTable.addEventListener("focusout", (e) => {
+      const t = e.target;
+      if (!t.dataset || t.dataset.field !== "aljexNumber") return;
+      const wrap = t.closest(".cell-with-link");
+      if (!wrap) return;
+      let btn = wrap.querySelector(".cell-link-btn");
+      if (t.value.trim()) {
+        if (!btn) {
+          btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "cell-link-btn";
+          btn.title = "Open load details";
+          btn.textContent = "↗";
+          btn.dataset.openHouLoad = t.dataset.row;
+          wrap.appendChild(btn);
+        }
+      } else if (btn) {
+        btn.remove();
+      }
     });
     boardTable.addEventListener("change", (e) => {
       if (e.target.id === "select-all-rows") { selectAllHoustonRows(e.target.checked); return; }
