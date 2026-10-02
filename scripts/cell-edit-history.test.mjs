@@ -117,12 +117,31 @@ test('manual numeric overrides, clearing, checkboxes and invalid numeric input',
   history.focus(rate); type(history, rate, '475'); history.blur(rate, null);
   history.focus(rate); type(history, rate, 'bad'); history.blur(rate, null);
   rate.value = '475'; history.focus(rate); type(history, rate, ''); history.blur(rate, null);
-  const flag = { ...cell('salvage', '', 'trip1'), type: 'checkbox', checked: false };
+  const flag = { ...cell('backhaul', '', 'trip1'), type: 'checkbox', checked: false };
   history.focus(flag); flag.checked = true; history.input(flag);
   assert.equal(entries.length, 2);
   history.blur(flag, null);
   assert.deepEqual(entries.map(e => [e.before, e.value]), [['470', '475'], ['475', ''], ['false', 'true']]);
   assert.equal(describe({ ...cell('etaNextDispatch', '12:00', 'trip1'), readOnly: true }), null);
+});
+
+// b439422 narrowed Change History to "intentional identifiers and operational
+// decisions" and dropped the routine route-entry fields. This test still drove
+// `salvage`, which is one of them, so main's CI went red on a deliberate
+// change -- the checkbox case now uses `backhaul`, which is still tracked.
+//
+// Pinned here so the trimmed list is a decision the suite knows about rather
+// than something the next person quietly puts back while chasing a failure.
+test('routine route-entry fields are deliberately NOT in Change History', () => {
+  for (const field of ['salvage', 'trailerOut', 'routeMiles', 'stopCount', 'dispatchTime', 'lastStopDepart', 'returnToDC']) {
+    assert.equal(describe(cell(field, 'x', 'trip1')), null, `${field} should not be logged`);
+  }
+  for (const field of ['routeId', 'tripId', 'backhaul', 'backhaulLocation']) {
+    assert.ok(describe(cell(field, 'x', 'trip1')), `${field} should still be logged`);
+  }
+  for (const field of ['proNumber', 'driverName', 'rate', 'shiftStart', 'notes']) {
+    assert.ok(describe(cell(field, 'x')), `${field} should still be logged`);
+  }
 });
 
 test('history waits for final successful save, skips failed writes, and identifies the actual trip', async () => {
