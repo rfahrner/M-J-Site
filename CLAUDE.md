@@ -564,6 +564,39 @@ deleted loses that one bit, which is preferred over silently re-releasing an
 invoice. `scripts/deleted-load-stays-on-accounting.test.mjs` pins all three
 halves; `scripts/bulk-delete-loads.test.mjs` pins the button.
 
+## Calendar dots: one paged helper, not one query per board
+
+The red dots come from every `shift_date` in the browsable range, which is two
+years. PostgREST caps a response at 1,000 rows and says nothing when it does --
+the array simply arrives short -- so the days in the rows past the cap lose
+their dot, and those are the rows added most recently, i.e. the recent past
+people actually look back at. Houston: 1,165 rows over 104 days, 88 dots, all
+16 missing days from 2026-07-16 on.
+
+Atlanta had been paged for this since it hit the cap first, with a comment
+saying why. Houston and Mondelez each kept their own unpaged copy and were
+quietly wrong. There is now one `fetchDatesWithData(table, applyFilters)` in
+`loadboard.js` and all three call it, so a fourth board cannot forget.
+
+It returns **null** on failure and every caller keeps the set it already had.
+An empty calendar reads as "no loads ran", which is a worse lie than a stale
+one. `scripts/houston-calendar-and-pro-link.test.mjs` drives the real helper
+against a fake PostgREST that enforces the cap.
+
+## A cell's link button has to be added on focusout, not drawn once
+
+Houston's Aljex # cell renders its ↗ from `row.aljexNumber ? ... : ""`, which
+is true at DRAW time only. A number typed into a row already on screen got no
+button until something forced a redraw -- so rows loaded with the page had one
+and rows filled in since did not, side by side. The standard board solved this
+on `focusout` for `proNumber`/`routeId`; Houston now does the same for
+`aljexNumber`.
+
+Focusout, not input: on input the button flickers in on the first keystroke of
+a number still being typed. The created button sets `dataset.openHouLoad`,
+which must stay the same attribute the renderer emits and the click handler
+reads.
+
 ## Database rules worth preserving
 
 - `loads_shifts` = standard board shifts.
