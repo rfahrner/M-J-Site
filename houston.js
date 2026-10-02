@@ -642,6 +642,33 @@ export const HOUSTON_TABLE = "loads_houston";
     } else {
       loadAndRenderHoustonBoard();
     }
+    /*
+     * The driver pool arrives after this board has already drawn.
+     *
+     * Every column here except the name comes off the driver profile --
+     * phone, dispatcher phone, carrier, MC, rating -- so a board drawn
+     * before the pool lands shows the name and five dashes. The name
+     * survives because it falls back to row.driverName, stored on the row
+     * itself, which is what makes this look like lost data rather than a
+     * lookup that has not happened yet.
+     *
+     * loadDriversFromSupabase() is not awaited by init(), so it is a race,
+     * and a cached page loses it more often -- the board comes back fast
+     * while 5,700+ driver rows are still paging in. That is why it shows up
+     * as "navigate away and come back".
+     *
+     * The standard board and the Available list were both repaired for this;
+     * Houston has its own rows and its own renderer, so neither fix reached
+     * it. Redrawing costs nothing when the board is already correct.
+     *
+     * Registered here rather than at module scope: loadboard.js imports this
+     * module on every page, and a listener that fired on Accounting would
+     * call a renderer whose table is not in the document.
+     */
+    document.addEventListener("drivers:loaded", () => {
+      if (state.activeLocation !== "houston") return;
+      renderHoustonBoardTable();
+    });
     setupHoustonRealtimeSync();
     loadHoustonDatesWithData().catch((e) => console.error("loadHoustonDatesWithData() failed:", e));
     initAvailableSection();
