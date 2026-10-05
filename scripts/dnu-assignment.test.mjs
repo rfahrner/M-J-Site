@@ -92,7 +92,7 @@ test('profile deep link targets Notes and safely ignores missing or invalid driv
   for (const [search, expected] of [
     ['?driver=12&tab=notes', ['12', 'notes']],
     ['?driver=missing&tab=notes', []],
-    ['?driver=12&tab=edit', []],
+    ['?driver=12&tab=edit', ['12', 'edit']],
     ['?tab=notes', []],
     ['', []]
   ]) {
