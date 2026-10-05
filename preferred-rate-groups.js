@@ -3,12 +3,20 @@ export function driverRate(value) {
   const rate = Number(value);
   return Number.isFinite(rate) && rate >= 0 ? rate : null;
 }
-export function rateOptions(drivers) {
-  return [...new Set(drivers.map(d => driverRate(d.normalRate)).filter(r => r !== null))].sort((a, b) => a - b);
+// Profile boxes show "default" when this exact mileage tier has no override.
+export function preferredTierRate(driver, tiers) {
+  const tier = (tiers || []).find(t => Number(t.min) === 61 && Math.floor(Number(t.max)) === 140);
+  return tier ? driverRate(driver.atlantaRateOverrides?.tiers?.[tier.id]) : null;
 }
-export function rateMembers(drivers, rate) {
+export function rateOptions(drivers, tiers) {
+  const rates = drivers.map(d => preferredTierRate(d, tiers));
+  const options = [...new Set(rates.filter(r => r !== null))].sort((a, b) => a - b);
+  return rates.includes(null) ? ['DEFAULT', ...options] : options;
+}
+export function rateMembers(drivers, rate, tiers) {
+  if (rate === 'DEFAULT') return drivers.filter(d => preferredTierRate(d, tiers) === null);
   const selected = driverRate(rate);
-  return selected === null ? [] : drivers.filter(d => driverRate(d.normalRate) === selected);
+  return selected === null ? [] : drivers.filter(d => preferredTierRate(d, tiers) === selected);
 }
 export function ratingGroups(drivers, classify) {
   const counts = new Map();
@@ -22,13 +30,4 @@ export function ratingGroups(drivers, classify) {
 }
 export function selectedRateMembers(drivers, selectedRatings, classify) {
   return drivers.filter(d => selectedRatings.has(classify(d) || 'Unrated') && classify(d) !== 'DNU');
-}
-export async function savePreferredRate(client, id, value) {
-  const rate = String(value).trim() === '' ? null : driverRate(value);
-  if (rate === null && String(value).trim() !== '') throw Error('Enter a valid rate of zero or more.');
-  if (!client) throw Error('The database is unavailable. Refresh and try again.');
-  const { data, error } = await client.from('atlanta_drivers').update({ normal_rate: rate }).eq('id', id).select('id,normal_rate').single();
-  if (error) throw error;
-  if (!data || String(data.id) !== String(id) || data.normal_rate !== rate) throw Error('Rate was not saved. Refresh and check your access.');
-  return data;
 }

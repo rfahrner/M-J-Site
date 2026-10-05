@@ -1978,7 +1978,6 @@ fieldset.rate-tier-box.is-overridden {
   text-decoration: underline;
 }
 
-.preferred-driver-rate { width: 100px; }
 .rate-rating-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 8px; }
 .rate-rating-toggle[aria-pressed="true"] { background: var(--navy-900); color: #fff; border-color: var(--navy-900); }
 .rate-rating-toggle[aria-pressed="false"] { background: #fff; color: var(--slate-500); }
