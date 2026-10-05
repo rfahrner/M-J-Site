@@ -1,3 +1,4 @@
+import { driverProfilePatch, mergeSavedDriverProfiles } from './driver-profile-sync.js';
 import { rateOptions, rateMembers, ratingGroups, selectedRateMembers, preferredTierRate, resolveAtlantaRateProfile } from './preferred-rate-groups.js';
 import { acknowledgeDnuAssignment } from './dnu-assignment.js';
 import { shiftRelativeNow, tripTimeline } from './overnight-times.js';
@@ -385,6 +386,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   export function driverFromDbRow(row) {
     return {
       id: row.id,
+      profileKey: row.profile_key || null,
       name: row["Driver Name"] || "",
       phone: row["Driver Cell"] || "",
       mc: row["MC"] != null ? String(row["MC"]) : "",
@@ -6689,17 +6691,14 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     [["atlanta", "ad-atlanta-rate-section"], ["delaware", "ad-delaware-rate-section"]].forEach(([location, sectionId]) => {
       const section = $("#" + sectionId);
       const checked = $(`input[name="ad-runs-out-of"][value="${location}"]`);
-      const sharedAtlantaCard = location === "atlanta" && driverProfileState?.rateSourceId != null && String(driverProfileState.rateSourceId) !== String(driverProfileState.driverId);
-      if (section) section.classList.toggle("hidden", !(checked && checked.checked) && !sharedAtlantaCard);
+      const profile = driverProfileState ? findDriver(driverProfileState.rateSourceId || driverProfileState.driverId) : null;
+      const card = location === "atlanta" ? profile?.atlantaRateOverrides : profile?.delawareRateOverrides;
+      const savedCard = Object.keys(card?.tiers || {}).length > 0 || Object.keys(card?.settings || {}).length > 0;
+      if (section) section.classList.toggle("hidden", !(checked && checked.checked) && !savedCard);
     });
   }
 
   function readAtlantaRateOverridesFromForm() {
-    // Viewing a linked rate card must not copy it onto the Preferred record
-    // when unrelated profile fields are saved; it stays live from its source.
-    if (driverProfileState?.rateSourceId != null && String(driverProfileState.rateSourceId) !== String(driverProfileState.driverId)) {
-      return findDriver(driverProfileState.driverId)?.atlantaRateOverrides || null;
-    }
     const section = $("#ad-atlanta-rate-section");
     if (!section) return null;
     const overrides = { tiers: {}, settings: {} };
@@ -6772,7 +6771,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     state.editingDriverId = driverId;
     state.editingDriverLocation = d.location || "atlanta";
     const rateProfile = resolveAtlantaRateProfile(d, state.drivers);
-    driverProfileState = { driverId, activeTab: "edit", history: null, notes: null, rateHistory: null, rateSourceId: rateProfile.id };
+    driverProfileState = { driverId, activeTab: "edit", history: null, notes: null, rateHistory: null, rateSourceId: rateProfile.id, originalRow: driverToDbRow(d) };
     modalEl.classList.remove("hidden"); // open first — a missing field below should never block this
     const tabStrip = $("#ad-modal-tabs");
     if (tabStrip) {
@@ -6804,8 +6803,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     if (atlantaBoxes) {
       atlantaBoxes.innerHTML = driverAtlantaRateBoxesHtml(rateProfile.atlantaRateOverrides);
       if (String(rateProfile.id) !== String(d.id)) {
-        $all("input", atlantaBoxes).forEach(input => { input.disabled = true; });
-        atlantaBoxes.insertAdjacentHTML("afterbegin", `<div class="subtext shared-driver-rate-source">Rate card from this driver's Atlanta profile. <a href="driverlist.html?driver=${encodeURIComponent(rateProfile.id)}&tab=edit" target="_blank" rel="noopener noreferrer">Edit that rate card ↗</a></div>`);
+        atlantaBoxes.insertAdjacentHTML("afterbegin", '<div class="subtext shared-driver-rate-source">This rate card is shared with the driver’s Atlanta profile. Changes apply to both lists.</div>');
       }
     }
     const delawareBoxes = $("#ad-delaware-rate-boxes");
@@ -6976,9 +6974,23 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     submitBtn.disabled = true;
     submitBtn.textContent = isEdit ? "Saving…" : "Adding…";
 
-    const { data, error } = isEdit
-      ? await supabaseClient.from(DRIVERS_TABLE).update(driverToDbRow(draft)).eq("id", state.editingDriverId).select()
-      : await supabaseClient.from(DRIVERS_TABLE).insert(driverToDbRow(draft)).select();
+    const draftRow = driverToDbRow(draft);
+    const patch = isEdit ? driverProfilePatch(driverProfileState?.originalRow || driverToDbRow(beforeDriver), draftRow) : draftRow;
+    if (isEdit && Object.keys(patch).length === 0) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Save";
+      closeAddDriverModal();
+      return;
+    }
+    let data, error;
+    try {
+      const result = isEdit
+        ? await supabaseClient.from(DRIVERS_TABLE).update(patch).eq("id", state.editingDriverId).select()
+        : await supabaseClient.from(DRIVERS_TABLE).insert(draftRow).select();
+      ({ data, error } = result);
+    } catch (saveError) {
+      error = saveError;
+    }
 
     submitBtn.disabled = false;
     submitBtn.textContent = isEdit ? "Save" : "Add";
@@ -7029,6 +7041,18 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
             setDriverSyncStatus(`Also updated the dispatcher number for ${siblingsToUpdate.length} other driver(s) under MC ${driver.mc}.`, "info");
           }
         }
+      }
+    }
+    // The database commits every linked record atomically. Refresh this tab's
+    // copies before switching list tabs, without waiting for Realtime delivery.
+    if (driver.profileKey) {
+      try {
+        const { data: sharedRows, error: sharedError } = await supabaseClient.from(DRIVERS_TABLE).select("*").eq("profile_key", driver.profileKey);
+        if (sharedError) throw sharedError;
+        mergeSavedDriverProfiles(state.drivers, (sharedRows || []).map(driverFromDbRow));
+      } catch (refreshError) {
+        console.error("Driver saved, but linked profile refresh failed:", refreshError);
+        setDriverSyncStatus("Driver saved. Refresh to see the updated profiles on other lists.", "info");
       }
     }
     closeAddDriverModal();

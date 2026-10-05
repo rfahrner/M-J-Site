@@ -221,21 +221,19 @@ test('existing Preferred cards and unmatched or ambiguous identities never inher
   assert.equal(resolveAtlantaRateProfile({ ...preferred, atlantaRateOverrides: {} }, [atlanta]), atlanta);
 });
 
-test('saving unrelated Preferred fields does not copy an inherited rate card to the Preferred record', () => {
-  for (const local of [null, {}]) {
-    const context = vm.createContext({
-      driverProfileState: { driverId: 'p', rateSourceId: 'a' },
-      findDriver: () => ({ atlantaRateOverrides: local }),
-      $: () => { throw new Error('Inherited inputs must not be read'); }
-    });
-    vm.runInContext(lift('readAtlantaRateOverridesFromForm'), context);
-    assert.equal(vm.runInContext('readAtlantaRateOverridesFromForm()', context), local);
-  }
+test('Preferred rate inputs are read when edited, including a linked card', () => {
+  const context = vm.createContext({
+    driverProfileState: { driverId: 'p', rateSourceId: 'a' },
+    $: () => ({}),
+    $all: selector => selector.includes('tier') ? [{ value: '475', dataset: { drTierId: 'target' } }] : []
+  });
+  vm.runInContext(lift('readAtlantaRateOverridesFromForm'), context);
+  assert.equal(vm.runInContext('readAtlantaRateOverridesFromForm().tiers.target', context), 475);
 });
 
 test('an inherited Atlanta card remains visible even when Preferred runs-out-of checkbox is absent', () => {
   const hidden = new Map();
-  const context = vm.createContext({ ensureDelawareRateSection: () => {}, driverProfileState: { driverId: 'p', rateSourceId: 'a' },
+  const context = vm.createContext({ findDriver: () => ({ atlantaRateOverrides: { tiers: { target: 400 } } }), ensureDelawareRateSection: () => {}, driverProfileState: { driverId: 'p', rateSourceId: 'a' },
     $: selector => selector.startsWith('input') ? { checked: false } : { classList: { toggle: (name, value) => hidden.set(selector, value) } }
   });
   vm.runInContext(lift('updateDriverRateSectionVisibility') + ';updateDriverRateSectionVisibility()', context);
@@ -243,7 +241,7 @@ test('an inherited Atlanta card remains visible even when Preferred runs-out-of 
   assert.equal(hidden.get('#ad-delaware-rate-section'), true);
 });
 
-test('Preferred profile displays the linked card and offers editing in the source profile', () => {
+test('Preferred profile displays the linked card and allows editing it directly', () => {
   const preferred = { id: 'p', location: 'preferred', name: 'Howard Barnett', mc: '1618522' };
   const atlanta = { id: 'a', location: 'atlanta', name: 'Howard Barnett', mc: '1618522', atlantaRateOverrides: { tiers: { target: 400 } } };
   const $ = elements();
@@ -252,7 +250,7 @@ test('Preferred profile displays the linked card and offers editing in the sourc
   const input = { disabled: false };
   $('#ad-atlanta-rate-boxes').insertAdjacentHTML = (_position, html) => { $('#ad-atlanta-rate-boxes').innerHTML += html; };
   const context = vm.createContext({ $, state: { drivers: [preferred, atlanta] }, driverProfileState: null,
-    findDriver: id => [preferred, atlanta].find(d => d.id === id), resolveAtlantaRateProfile,
+    findDriver: id => [preferred, atlanta].find(d => d.id === id), resolveAtlantaRateProfile, driverToDbRow: d => ({ 'Driver Name': d.name }),
     $all: selector => selector === 'input' ? [input] : [], setVal: () => {}, setText: () => {},
     ensureDelawareRateSection: () => {}, updateDriverRateSectionVisibility: () => {},
     driverAtlantaRateBoxesHtml: card => JSON.stringify(card), driverDelawareRateBoxesHtml: () => ''
@@ -261,8 +259,8 @@ test('Preferred profile displays the linked card and offers editing in the sourc
   vm.runInContext(fn + ';openEditDriverModal("p")', context);
   assert.equal(context.driverProfileState.rateSourceId, 'a');
   assert.match($('#ad-atlanta-rate-boxes').innerHTML, /"target":400/);
-  assert.match($('#ad-atlanta-rate-boxes').innerHTML, /driverlist.html\?driver=a&tab=edit/);
-  assert.equal(input.disabled, true);
+  assert.match($('#ad-atlanta-rate-boxes').innerHTML, /Changes apply to both lists/);
+  assert.equal(input.disabled, false);
   vm.runInContext('openEditDriverModal("a")', context);
   assert.equal(context.driverProfileState.rateSourceId, 'a');
   assert.equal(context.driverProfileState.driverId, 'a');
