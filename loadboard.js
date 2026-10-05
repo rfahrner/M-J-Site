@@ -2950,7 +2950,9 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   // it hands back a function that re-focuses (and restores cursor position
   // in) the equivalent field afterward, if there was one to restore.
   export function captureFocusForRerender() {
-    const el = document.activeElement;
+    const focused = document.activeElement;
+    const selectedDriverCell = focused?.matches?.("td[data-driver-cell-selected]");
+    const el = selectedDriverCell ? focused.querySelector('[data-driver-ac="true"]') : focused;
     if (!el || !("value" in el)) return () => {};
     const ds = el.dataset || {};
     let selector = null;
@@ -2974,6 +2976,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     return () => {
       const fresh = document.querySelector(selector);
       if (!fresh) return;
+      if (selectedDriverCell) { finishDriverCellSelection(fresh); return; }
       fresh.focus();
       if (selStart != null && fresh.setSelectionRange) {
         try { fresh.setSelectionRange(selStart, selEnd); } catch (e) { /* not a text-selectable input type */ }
@@ -3354,11 +3357,29 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       if (!item) return;
       e.preventDefault();
       const drv = findDriver(item.dataset.pickDriver);
-      if (drv && driverAcOnPick) driverAcOnPick(drv);
-      closeDriverAutocomplete();
+      if (drv) commitDriverAutocomplete(drv);
     });
     driverAcBox = box;
     return box;
+  }
+
+  function finishDriverCellSelection(input) {
+    const cell = input.closest("td");
+    if (!cell) { input.blur(); return; }
+    cell.dataset.driverCellSelected = "true";
+    cell.tabIndex = -1;
+    cell.focus({ preventScroll: true });
+  }
+
+  function commitDriverAutocomplete(driver) {
+    const input = driverAcInput;
+    const onPick = driverAcOnPick;
+    closeDriverAutocomplete();
+    if (onPick) onPick(driver);
+    // A pick callback can open another dialog. Let that dialog keep focus.
+    if (input?.isConnected && (document.activeElement === input || document.activeElement === document.body)) {
+      finishDriverCellSelection(input);
+    }
   }
 
   function positionDriverAcBox(inputEl) {
@@ -3430,8 +3451,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       if (driverAcHighlight >= 0 && driverAcMatches[driverAcHighlight]) {
         e.preventDefault();
         const drv = driverAcMatches[driverAcHighlight];
-        if (driverAcOnPick) driverAcOnPick(drv);
-        closeDriverAutocomplete();
+        commitDriverAutocomplete(drv);
       } else if (driverAcHighlight === 0 && driverAcShowAddOption && !driverAcMatches.length) {
         e.preventDefault();
         const nameToAdd = driverAcQuery;
@@ -3503,8 +3523,18 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   // match — this makes tab order explicit instead of relying on that.
   const EDITABLE_SELECTOR = 'input:not([disabled]):not([readonly]):not([type="checkbox"]):not([tabindex="-1"]), textarea:not([disabled]):not([readonly]):not([tabindex="-1"]), select:not([disabled]):not([tabindex="-1"])';
   export function handleRowAwareTab(e, tableSelector) {
-    const el = e.target;
-    if (!el.matches || !el.matches(EDITABLE_SELECTOR)) return;
+    const selectedDriverCell = e.target.matches?.("td[data-driver-cell-selected]");
+    const el = selectedDriverCell ? e.target.querySelector('[data-driver-ac="true"]') : e.target;
+    if (!el?.matches || !el.matches(EDITABLE_SELECTOR)) return;
+
+    // A selected driver cell has no text cursor. Enter/F2 resumes editing;
+    // Tab uses its input's position to enter the next editable field.
+    if (selectedDriverCell && (e.key === "Enter" || e.key === "F2")) {
+      e.preventDefault();
+      el.focus();
+      if (el.select) el.select();
+      return;
+    }
 
     // Enter closes out the cell the way a spreadsheet does: the value is
     // already in state (the input handler writes it on every keystroke),
@@ -3520,7 +3550,8 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       if (e.defaultPrevented || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
       if (!el.closest(tableSelector)) return;
       e.preventDefault();
-      el.blur();
+      if (el.dataset.driverAc === "true") finishDriverCellSelection(el);
+      else el.blur();
       return;
     }
 
