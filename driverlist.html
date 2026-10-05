@@ -200,9 +200,12 @@
             <div id="tg-rating-count-note" class="subtext" aria-live="polite"></div>
           </div>
           <div class="field hidden" id="tg-rate-wrap" role="tabpanel" aria-label="Text by Rate">
-            <label for="tg-rate-select">Preferred Drivers — 61–140.9 MI Rate</label>
-            <select id="tg-rate-select" class="cell-input"></select>
-            <div id="tg-rate-ratings" class="rate-rating-buttons" aria-label="Ratings to include"></div>
+            <label id="tg-rate-label">Preferred Drivers — 61–140.9 MI Rate</label>
+            <div id="tg-rate-buttons" class="rate-rating-buttons" role="group" aria-labelledby="tg-rate-label"></div>
+            <!-- Step two. Stays empty until a rate is chosen, because the
+                 rating groups and their counts are of THAT rate's drivers. -->
+            <label id="tg-rate-rating-label" class="hidden">Then pick the ratings</label>
+            <div id="tg-rate-ratings" class="rate-rating-buttons" role="group" aria-labelledby="tg-rate-rating-label"></div>
             <div id="tg-rate-count-note" class="subtext" aria-live="polite"></div>
           </div>
           <div class="field">

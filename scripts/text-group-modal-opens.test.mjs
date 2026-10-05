@@ -43,7 +43,8 @@ const fn = (n) => {
   if (!m) throw new Error(`anchor moved: ${n}`);
   return m[0].replace('export ', '');
 };
-const NAMES = ['openTextGroupModal', 'setupRateTextOptions', 'setTextGroupMode', 'refreshRatingTextGroups', 'renderRatingTextGroups'];
+const NAMES = ['openTextGroupModal', 'setupRateTextOptions', 'setTextGroupMode', 'refreshRatingTextGroups',
+  'renderRatingTextGroups', 'rateTextLabel', 'renderRateTextOptions', 'setRateRatingLabelVisible'];
 const DRIVERS = [
   { id: '1', name: 'A One', rating: 'A', phone: '5551112222' },
   { id: '2', name: 'B Two', rating: 'B', phone: '5551112223' },
@@ -68,7 +69,7 @@ function openOn(page) {
     availableDriverClasses: () => ['A', 'B', 'DNU'],
     ratingTextClass: (d) => String(d.rating || 'Unrated').toUpperCase().includes('DNU') ? 'DNU' : (d.rating || 'Unrated'),
   };
-  const decl = 'let rateTextMode=false,rateTextRefresh=0,groupTextState=null,ratingTextRatings=new Set(),ratingTextEligible=[],ratingTextRefresh=0,rateTextRatings=new Set(),rateTextEligible=[];\n';
+  const decl = 'let rateTextMode=false,rateTextRefresh=0,groupTextState=null,ratingTextRatings=new Set(),ratingTextEligible=[],ratingTextRefresh=0,rateTextRatings=new Set(),rateTextEligible=[],rateTextRate="",rateTextOptions=[];\n';
   const api = new Function(...Object.keys(env), `${decl}${NAMES.map(fn).join('\n')}\nreturn { openTextGroupModal };`)(...Object.values(env));
   let threw = null;
   const quiet = console.error; console.error = () => {};
@@ -117,9 +118,9 @@ check('rather than leaving a convincing empty modal',
 console.log('\n5. the rate tab is guarded the same way');
 const setup = fn('setupRateTextOptions');
 check('it checks its three elements first',
-  /if \(!rateSelect \|\| !rateRatings \|\| !rateNote\) return;/.test(setup), true);
+  /if \(!rateButtons \|\| !rateRatings \|\| !rateNote\) return;/.test(setup), true);
 check('and writes through the checked references',
-  /rateSelect\.innerHTML =/.test(setup) && /rateRatings\.innerHTML = ""/.test(setup), true);
+  /renderRateTextOptions\(\)/.test(setup) && /rateRatings\.innerHTML = ""/.test(setup), true);
 check('the shared footer controls are optional too',
   /\$\("#" \+ id\)\?\.classList\.add\("hidden"\)/.test(setup), true);
 

@@ -54,7 +54,7 @@ function lift(name) { return board.match(new RegExp(`  (?:async )?function ${nam
 function elements() {
   const map = new Map();
   return selector => {
-    if (!map.has(selector)) map.set(selector,{value:'',checked:false,innerHTML:'',textContent:'',classList:{add(){},remove(){}}});
+    if (!map.has(selector)) map.set(selector,{value:'',checked:false,innerHTML:'',textContent:'',classList:{add(){},remove(){},toggle(){}}});
     return map.get(selector);
   };
 }
@@ -62,15 +62,14 @@ function elements() {
 test('rate sender passes only the selected rating at the chosen rate and still excludes scheduled drivers', async () => {
   const $ = elements();
   $('#tg-message').value='Available tonight?';
-  $('#tg-rate-select').value='400';
   $('#tg-exclude-scheduled').checked=true;
   $('#tg-day').value='2026-10-05';
   const batches=[];
-  const context=vm.createContext({$,state:{driverListTab:'preferred',drivers:pool},rateTextMode:true,rateTextRatings:new Set(['A']),
+  const context=vm.createContext({$,state:{driverListTab:'preferred',drivers:pool},rateTextMode:true,rateTextRate:'400',rateTextRatings:new Set(['A']),
     driversForLocation:()=>pool,driverClassification:classify,isNeverTextDriver:d=>classify(d)==='DNU',
     rateMembers,selectedRateMembers,getBoardRateTiers:()=>({atlanta:tiers}),scheduledDriversOn:async()=>new Set(['1']),driverIsScheduled:(d,s)=>s.has(d.id),
     applyPhoneMode:m=>m,beginTextBatchFlow:(...args)=>batches.push(args)});
-  vm.runInContext(lift('startGroupTexting'), context);
+  vm.runInContext(lift('rateTextLabel')+'\n'+lift('startGroupTexting'), context);
   await vm.runInContext('startGroupTexting()',context);
   assert.deepEqual(batches[0][0].map(d=>d.id),['2']);
   assert.equal(batches[0][3].allowDnu,false);
@@ -78,7 +77,7 @@ test('rate sender passes only the selected rating at the chosen rate and still e
   await vm.runInContext('startGroupTexting()',context);
   assert.equal(batches.length,1);
   assert.match($('#tg-error').textContent,/Select at least one/);
-  $('#tg-rate-select').value='DEFAULT';
+  context.rateTextRate='DEFAULT';
   context.rateTextRatings=new Set(['B']);
   await vm.runInContext('startGroupTexting()',context);
   assert.deepEqual(batches[1][0].map(d=>d.id),['6']);
@@ -87,25 +86,24 @@ test('rate sender passes only the selected rating at the chosen rate and still e
 
 test('rate counts start unselected, apply eligibility, and stale async refreshes cannot overwrite a new rate', async () => {
   const $=elements();
-  $('#tg-rate-select').value='400';
   $('#tg-exclude-scheduled').checked=true;
   $('#tg-day').value='2026-10-05';
   const resolvers=[];
-  const context=vm.createContext({$,state:{drivers:pool},rateTextMode:true,rateTextRefresh:0,rateTextRatings:new Set(),rateTextEligible:[],
+  const context=vm.createContext({$,state:{drivers:pool},rateTextMode:true,rateTextRate:'400',rateTextRefresh:0,rateTextRatings:new Set(),rateTextEligible:[],
     driversForLocation:()=>pool,driverClassification:classify,rateMembers,ratingGroups,selectedRateMembers,getBoardRateTiers:()=>({atlanta:tiers}),
     filterNeverTextRecipients:m=>({allowed:m.filter(d=>classify(d)!=='DNU')}),applyPhoneMode:m=>m,
     formatTextAddress:p=>p,driverIsScheduled:(d,s)=>s.has(d.id),escapeHtml:x=>x,
     scheduledDriversOn:()=>new Promise(resolve=>resolvers.push(resolve))});
-  vm.runInContext(lift('refreshRateTextRatings')+'\n'+lift('renderRateTextRatings'),context);
+  vm.runInContext(lift('setRateRatingLabelVisible')+'\n'+lift('refreshRateTextRatings')+'\n'+lift('renderRateTextRatings'),context);
   const first=vm.runInContext('refreshRateTextRatings(true)',context);
-  $('#tg-rate-select').value='450';
+  context.rateTextRate='450';
   const second=vm.runInContext('refreshRateTextRatings(true)',context);
   resolvers[1](new Set());await second;
   resolvers[0](new Set());await first;
   assert.match($('#tg-rate-ratings').innerHTML,/A- 1/);
   assert.doesNotMatch($('#tg-rate-ratings').innerHTML,/B-/);
   assert.doesNotMatch($('#tg-rate-ratings').innerHTML,/aria-pressed="true"/);
-  $('#tg-rate-select').value='400';
+  context.rateTextRate='400';
   const third=vm.runInContext('refreshRateTextRatings(true)',context);
   resolvers[2](new Set(['1']));await third;
   assert.match($('#tg-rate-ratings').innerHTML,/A- 1/);
@@ -164,12 +162,14 @@ test('modal tabs switch selection panels while preserving shared options, messag
   $('#tg-day').value='2026-10-06';
   $('#tg-dispatch-mode').checked=true;
   $('#tg-exclude-scheduled').checked=true;
-  $('#tg-rate-select').value='400';
   const buttons=['rating','rate'].map(mode=>({dataset:{textGroupMode:mode},classList:{toggle(_class,value){this.active=value;}},setAttribute(key,value){this[key]=value;}}));
   let refreshes=0;
+  // The chosen rate is module state behind a button group now, not a <select>
+  // value, so switching tabs has to leave it alone the same way.
   const context=vm.createContext({$, $all:()=>buttons, rateTextMode:false,rateTextRefresh:0,
+    rateTextRate:'400', rateTextOptions:[], escapeHtml:x=>x,
     rateTextRatings:new Set(['B']), refreshRateTextRatings:()=>refreshes++, refreshRatingTextGroups:()=>{}});
-  vm.runInContext(lift('setTextGroupMode'),context);
+  vm.runInContext(lift('rateTextLabel')+'\n'+lift('renderRateTextOptions')+'\n'+lift('setTextGroupMode'),context);
   vm.runInContext('setTextGroupMode("rate")',context);
   assert.equal(context.rateTextMode,true);
   assert.equal(hidden.get('#tg-rate-wrap'),false);
@@ -183,7 +183,7 @@ test('modal tabs switch selection panels while preserving shared options, messag
   assert.equal($('#tg-day').value,'2026-10-06');
   assert.equal($('#tg-dispatch-mode').checked,true);
   assert.equal($('#tg-exclude-scheduled').checked,true);
-  assert.equal($('#tg-rate-select').value,'400');
+  assert.equal(context.rateTextRate,'400');
   assert.deepEqual([...context.rateTextRatings],['B']);
   assert.equal(refreshes,1);
 });

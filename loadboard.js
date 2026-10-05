@@ -5167,6 +5167,12 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   let ratingTextRefresh = 0;
   let rateTextMode = false;
   let rateTextRatings = new Set();
+  // Which rate is chosen on the Text by Rate tab, and the rates on offer.
+  // Both were read straight off a <select>; it is a button group now, so the
+  // choice lives here. "" means nothing picked, which is what keeps the
+  // ratings section underneath empty.
+  let rateTextRate = "";
+  let rateTextOptions = [];
   let rateTextRefresh = 0;
   let rateTextEligible = [];
 
@@ -5228,15 +5234,17 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     // Group button lives there alone today, but the modal shell is copied
     // into the board pages, so a stray wiring change would otherwise take
     // the whole open path down with a null innerHTML.
-    const rateSelect = $("#tg-rate-select");
+    const rateButtons = $("#tg-rate-buttons");
     const rateRatings = $("#tg-rate-ratings");
     const rateNote = $("#tg-rate-count-note");
-    if (!rateSelect || !rateRatings || !rateNote) return;
-    const options = rateOptions(driversForLocation("preferred"), getBoardRateTiers()?.atlanta, state.drivers);
-    rateSelect.innerHTML = '<option value="">Choose a rate…</option>' + options.map(rate => `<option value="${rate}">${rate === "DEFAULT" ? "Default" : `$${rate.toLocaleString()}`}</option>`).join("");
+    if (!rateButtons || !rateRatings || !rateNote) return;
+    rateTextOptions = rateOptions(driversForLocation("preferred"), getBoardRateTiers()?.atlanta, state.drivers);
+    rateTextRate = "";
     rateTextRatings = new Set();
+    renderRateTextOptions();
     rateRatings.innerHTML = "";
-    rateNote.textContent = options.length ? "Choose a rate to see the rating groups." : "No preferred drivers on file.";
+    setRateRatingLabelVisible(false);
+    rateNote.textContent = rateTextOptions.length ? "Choose a rate to see the rating groups." : "No preferred drivers on file.";
     // Both selection tabs share the existing Send Now/batch controls.
     const sendNow = $("#tg-send-now");
     if (sendNow) { sendNow.classList.remove("hidden"); sendNow.disabled = false; }
@@ -5322,10 +5330,11 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   async function refreshRateTextRatings(resetSelection = false) {
     if (!rateTextMode) return;
     const generation = ++rateTextRefresh;
-    const rate = $("#tg-rate-select").value;
+    const rate = rateTextRate;
     const wrap = $("#tg-rate-ratings");
     const note = $("#tg-rate-count-note");
     wrap.innerHTML = "";
+    setRateRatingLabelVisible(false);
     if (resetSelection) rateTextRatings = new Set();
     rateTextEligible = [];
     if (rate === "") { note.textContent = "Choose a rate to see the rating groups."; return; }
@@ -5347,11 +5356,49 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     }
   }
 
+  /*
+   * The rates, as buttons, in the same style as the ratings below them.
+   *
+   * One rate at a time -- a driver sits on one rate card, so these are radio
+   * buttons wearing the toggle's clothes: picking a second replaces the
+   * first rather than adding to it, and picking the chosen one again clears
+   * it, since otherwise there is no way back to "nothing selected".
+   *
+   * No counts on these, deliberately. The counts on the rating buttons below
+   * are AFTER DNU, no-phone and already-scheduled are taken out. A count here
+   * could only be the raw pool, and two differently-filtered numbers stacked
+   * above one another invite exactly the wrong arithmetic.
+   */
+  function rateTextLabel(rate) {
+    return rate === "DEFAULT" ? "Default" : `$${Number(rate).toLocaleString()}`;
+  }
+
+  function renderRateTextOptions() {
+    const wrap = $("#tg-rate-buttons");
+    if (!wrap) return;
+    wrap.innerHTML = rateTextOptions.map((rate) => {
+      const selected = String(rate) === String(rateTextRate);
+      return `<button type="button" class="btn btn-ghost rate-rating-toggle" data-text-rate="${escapeHtml(String(rate))}" aria-pressed="${selected}"><span class="rating-selection-mark" aria-hidden="true">${selected ? "✓" : "○"}</span> ${escapeHtml(rateTextLabel(rate))}</button>`;
+    }).join("");
+  }
+
   function renderRateTextRatings() {
     const groups = ratingGroups(rateTextEligible, driverClassification);
     $("#tg-rate-ratings").innerHTML = groups.map(([rating, count]) => `<button type="button" class="btn btn-ghost rate-rating-toggle" data-rate-rating="${escapeHtml(rating)}" aria-pressed="${rateTextRatings.has(rating)}"><span class="rating-selection-mark" aria-hidden="true">${rateTextRatings.has(rating) ? "✓" : "○"}</span> ${escapeHtml(rating)}- ${count}</button>`).join("");
+    // The step-two heading only belongs on screen once there is a step two.
+    setRateRatingLabelVisible(groups.length > 0);
     const count = selectedRateMembers(rateTextEligible, rateTextRatings, driverClassification).length;
-    $("#tg-rate-count-note").textContent = groups.length ? `${count} eligible drivers selected. DNU drivers are excluded; shared phone numbers receive one text.` : "No eligible drivers at this rate with these options.";
+    // Same wording as the rating tab when nothing is picked yet: "0 selected"
+    // reads like a result, and this is a prompt.
+    $("#tg-rate-count-note").textContent = !groups.length
+      ? "No eligible drivers at this rate with these options."
+      : rateTextRatings.size
+        ? `${count} eligible drivers selected. DNU drivers are excluded; shared phone numbers receive one text.`
+        : "No ratings selected. Choose the buttons for the drivers you want to text.";
+  }
+
+  function setRateRatingLabelVisible(visible) {
+    $("#tg-rate-rating-label")?.classList.toggle("hidden", !visible);
   }
 
   // Shared by both Text Group flows (driver-list group texting and the
@@ -5500,11 +5547,11 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     let label = rateTextMode ? "" : (groupKey === "DNU" ? "DNU" : `Ratings ${[...ratingTextRatings].join(", ")}`);
 
     if (rateTextMode) {
-      const rate = $("#tg-rate-select").value;
+      const rate = rateTextRate;
       if (rate === "") { errEl.textContent = "Choose a rate first."; errEl.classList.remove("hidden"); return; }
       members = selectedRateMembers(rateMembers(driversForLocation("preferred"), rate, getBoardRateTiers()?.atlanta, state.drivers), rateTextRatings, driverClassification);
       if (!members.length) { errEl.textContent = "Select at least one rating with eligible drivers."; errEl.classList.remove("hidden"); return; }
-      label = `${rate === "DEFAULT" ? "Default" : `$${Number(rate).toLocaleString()}`} — ${[...rateTextRatings].join(", ")}`;
+      label = `${rateTextLabel(rate)} — ${[...rateTextRatings].join(", ")}`;
     }
 
     const excludeScheduledCheckbox = $("#tg-exclude-scheduled");
@@ -8835,7 +8882,14 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       const button = e.target.closest("[data-text-rating]");
       if (button) toggleRatingTextGroup(button.dataset.textRating);
     });
-    on("tg-rate-select", "change", () => refreshRateTextRatings(true));
+    on("tg-rate-buttons", "click", e => {
+      const button = e.target.closest("[data-text-rate]");
+      if (!button) return;
+      const rate = button.dataset.textRate;
+      rateTextRate = String(rateTextRate) === String(rate) ? "" : rate;
+      renderRateTextOptions();
+      refreshRateTextRatings(true);
+    });
     on("tg-rate-ratings", "click", e => {
       const button = e.target.closest("[data-rate-rating]");
       if (!button) return;
