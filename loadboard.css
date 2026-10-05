@@ -226,6 +226,39 @@ button {
   flex-shrink: 0;
 }
 .toolbar-actions { display: flex; gap: 8px; position: relative; }
+/* Keep board dates in their own column as selection actions appear. */
+#board-view > .toolbar {
+  display: grid;
+  grid-template-columns: minmax(500px, 35%) max-content minmax(0, 1fr);
+  align-items: start;
+}
+#board-view > .toolbar > .date-nav {
+  margin-top: 7px;
+}
+#board-view > .toolbar > .toolbar-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+@media (max-width: 1100px) {
+  #board-view > .toolbar {
+    grid-template-columns: minmax(0, 1fr) max-content;
+  }
+  #board-view > .toolbar > .toolbar-actions {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 700px) {
+  #board-view > .toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  #board-view > .toolbar > .date-nav {
+    margin-top: 0;
+  }
+  #board-view > .toolbar > .toolbar-actions {
+    justify-content: flex-start;
+  }
+}
 .btn {
   border: 1px solid var(--slate-700);
   background: var(--navy-900);
