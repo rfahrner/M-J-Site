@@ -1979,8 +1979,11 @@ fieldset.rate-tier-box.is-overridden {
 }
 
 .rate-rating-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 8px; }
-.rate-rating-toggle[aria-pressed="true"] { background: var(--navy-900); color: #fff; border-color: var(--navy-900); }
-.rate-rating-toggle[aria-pressed="false"] { background: #fff; color: var(--slate-500); }
+.rate-rating-toggle { border: 2px solid var(--line); font-weight: 700; }
+.rate-rating-toggle[aria-pressed="true"] { background: var(--focus); color: #fff; border-color: var(--focus); }
+.rate-rating-toggle[aria-pressed="false"] { background: #fff; color: var(--navy-950); border-color: var(--slate-500); }
+.rate-rating-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.rating-selection-mark { display: inline-block; width: 1em; font-weight: 900; }
 
 .group-text-mode-tabs { margin-bottom: 16px; padding-left: 0; padding-right: 0; }
 
