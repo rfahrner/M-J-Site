@@ -3370,13 +3370,58 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     return box;
   }
 
+  /*
+   * Finishing a driver cell leaves the cell SELECTED and the editor closed --
+   * the spreadsheet behaviour: no caret, no suggestions, Tab moves on, Enter
+   * or F2 resumes editing.
+   *
+   * The marker has to be cleared again when focus leaves. It never was, so a
+   * td stayed `tabindex="-1"` and `data-driver-cell-selected` for the rest of
+   * the session: every driver cell the dispatcher had ever been through
+   * remained a focus target, and clicking one landed on the CELL rather than
+   * the input, so the click looked ignored and typing did nothing.
+   */
+  function clearDriverCellSelection(cell) {
+    if (!cell) return;
+    delete cell.dataset.driverCellSelected;
+    cell.removeAttribute("tabindex");
+  }
+
   function finishDriverCellSelection(input) {
     const cell = input.closest("td");
     if (!cell) { input.blur(); return; }
+    // Only one cell is ever the selected one. document.querySelectorAll
+    // rather than $all: this function is lifted on its own by the driver
+    // navigation tests, and should not need a helper to come with it.
+    document.querySelectorAll("td[data-driver-cell-selected]").forEach((other) => {
+      if (other !== cell) clearDriverCellSelection(other);
+    });
     cell.dataset.driverCellSelected = "true";
     cell.tabIndex = -1;
     cell.focus({ preventScroll: true });
   }
+
+  // Leaving the cell ends the selection; a re-render that restores it calls
+  // finishDriverCellSelection() again on the fresh node.
+  document.addEventListener("focusout", (e) => {
+    const cell = e.target?.closest?.("td[data-driver-cell-selected]");
+    if (!cell) return;
+    // Selected means the CELL holds focus. Focus landing back on the input
+    // inside it is editing resuming, which is not the selected state either.
+    setTimeout(() => { if (document.activeElement !== cell) clearDriverCellSelection(cell); }, 0);
+  }, true);
+
+  // Clicking a selected cell resumes editing it, rather than focusing the
+  // cell box and leaving the dispatcher with no caret.
+  document.addEventListener("mousedown", (e) => {
+    const cell = e.target?.closest?.("td[data-driver-cell-selected]");
+    if (!cell || e.target.matches?.('[data-driver-ac="true"]')) return;
+    const input = cell.querySelector('[data-driver-ac="true"]');
+    if (!input) return;
+    e.preventDefault();
+    input.focus();
+    if (input.select) input.select();
+  });
 
   function commitDriverAutocomplete(driver) {
     const input = driverAcInput;
@@ -3417,10 +3462,14 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
 
   function renderDriverAcOptions(query, locationKey) {
     const box = ensureDriverAcBox();
-    const q = (query || "").trim().toLowerCase();
+    // Both sides go through normalizedDriverName, so a double space or a
+    // stray trailing one still finds the driver. It did not: the search
+    // compared raw text, so "samuel  godinez" matched nobody and the list
+    // offered to ADD a driver who was already on file.
+    const q = normalizedDriverName(query);
     driverAcQuery = (query || "").trim();
     const pool = driversForLocation(locationKey || "atlanta");
-    driverAcMatches = (q ? pool.filter((d) => d.name.toLowerCase().includes(q)) : pool).slice(0, 8);
+    driverAcMatches = (q ? pool.filter((d) => normalizedDriverName(d.name).includes(q)) : pool).slice(0, 8);
     driverAcHighlight = -1;
     driverAcShowAddOption = driverAcMatches.length === 0 && !!driverAcQuery;
     if (driverAcMatches.length) {
@@ -3441,7 +3490,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     $all(".autocomplete-item[data-ac-index]", driverAcBox).forEach((el) => {
       const isHit = Number(el.dataset.acIndex) === index;
       el.classList.toggle("is-highlighted", isHit);
-      if (isHit) el.scrollIntoView({ block: "nearest" });
+      if (isHit && typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "nearest" });
     });
   }
 
@@ -3455,11 +3504,31 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       e.preventDefault();
       if (selectableCount) setDriverAcHighlight(Math.max(driverAcHighlight - 1, 0));
     } else if (e.key === "Enter") {
-      if (driverAcHighlight >= 0 && driverAcMatches[driverAcHighlight]) {
+      /*
+       * Enter picks the driver the list is obviously offering.
+       *
+       * It used to require an ArrowDown first: with nothing highlighted it
+       * did nothing at all, so typing a full name and pressing Enter left
+       * the text as free text and no profile attached. The typed name only
+       * linked a driver when it happened to match exactly, which is why this
+       * felt unreliable rather than broken.
+       *
+       * It will not GUESS. One match, or a match equal to what was typed,
+       * is unambiguous and gets taken. Several matches with nothing
+       * highlighted falls through to the generic Enter handler, which closes
+       * the editor and selects the cell, leaving the text alone -- picking
+       * the first of three Samuels would be worse than picking none.
+       */
+      const typed = normalizedDriverName(driverAcQuery);
+      const exact = typed ? driverAcMatches.filter((d) => normalizedDriverName(d.name) === typed) : [];
+      const chosen = driverAcHighlight >= 0 ? driverAcMatches[driverAcHighlight]
+        : exact.length === 1 ? exact[0]
+        : driverAcMatches.length === 1 ? driverAcMatches[0]
+        : null;
+      if (chosen) {
         e.preventDefault();
-        const drv = driverAcMatches[driverAcHighlight];
-        commitDriverAutocomplete(drv);
-      } else if (driverAcHighlight === 0 && driverAcShowAddOption && !driverAcMatches.length) {
+        commitDriverAutocomplete(chosen);
+      } else if (driverAcShowAddOption && !driverAcMatches.length) {
         e.preventDefault();
         const nameToAdd = driverAcQuery;
         closeDriverAutocomplete();
