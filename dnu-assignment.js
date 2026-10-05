@@ -31,6 +31,12 @@ function showNextAcknowledgment() {
   const message = document.createElement('p');
   message.id = 'dnu-assignment-message';
   message.textContent = `${name} is marked Do Not Use. Acknowledge their DNU status before continuing with this assignment.`;
+  const notesLink = document.createElement('a');
+  notesLink.className = 'dnu-assignment-notes-link';
+  notesLink.href = `driverlist.html?driver=${encodeURIComponent(id)}&tab=notes`;
+  notesLink.target = '_blank';
+  notesLink.rel = 'noopener noreferrer';
+  notesLink.textContent = "View this driver's profile notes ↗";
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'btn';
@@ -45,7 +51,7 @@ function showNextAcknowledgment() {
     if (previousFocus?.isConnected) previousFocus.focus();
     showNextAcknowledgment();
   });
-  dialog.append(title, message, button);
+  dialog.append(title, message, notesLink, button);
   document.body.append(dialog);
   dialog.showModal();
   button.focus();
