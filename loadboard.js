@@ -1,3 +1,4 @@
+import { acknowledgeDnuAssignment } from './dnu-assignment.js';
 import { shiftRelativeNow, tripTimeline } from './overnight-times.js';
 import { createCellEditHistory } from './cell-edit-history.js';
 /* ============================================================
@@ -6295,9 +6296,10 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     if (tabKey === "overview") {
       const before = { ...row, driverName: findDriver(row.driverId)?.name || row.driverNameText || "" };
       const nameVal = $("#ld-ov-driver").value.trim();
+      const match = resolveDriverByName(nameVal, row.location).driver;
+      acknowledgeDnuAssignment(match, row.driverId);
       row.driverNameText = nameVal;
       row.driverId = null;
-      const match = resolveDriverByName(nameVal, row.location).driver;
       if (match) row.driverId = match.id;
       const timesheetReceivedEl = $("#ld-ov-timesheet-received");
       if (timesheetReceivedEl) {
@@ -6330,11 +6332,9 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       trip.stopCount = $("#ld-tr-stopCount").value.trim();
       trip.notes = $("#ld-tr-notes").value.trim();
       const driverNameVal = $("#ld-tr-driver").value.trim();
-      trip.driverId = null;
-      if (driverNameVal) {
-        const match = resolveDriverByName(driverNameVal, row.location).driver;
-        if (match) trip.driverId = match.id;
-      }
+      const tripDriver = driverNameVal ? resolveDriverByName(driverNameVal, row.location).driver : null;
+      acknowledgeDnuAssignment(tripDriver, trip.driverId);
+      trip.driverId = tripDriver?.id || null;
       const ppwkEl = $("#ld-tr-ppwk-received");
       if (ppwkEl) trip.ppwkReceived = ppwkEl.checked;
       const checkedInEl = $("#ld-tr-checked-in");
@@ -7398,6 +7398,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       driverId = match ? match.id : null;
     }
 
+    acknowledgeDnuAssignment(findDriver(driverId));
     const row = blankRow(driverId, name);
     row.proNumber = $("#al-pro").value.trim();
     row.shiftStart = $("#al-shift-start").value.trim();
@@ -7930,6 +7931,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
             // the database, same as picking it from the autocomplete
             // would) and go straight to the profile, no detour through
             // edit mode needed when there's nothing actually ambiguous.
+            acknowledgeDnuAssignment(match, row.driverId);
             row.driverId = match.id;
             saveShiftNow(row);
             renderLoadDetailsTabContent();
@@ -8169,6 +8171,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
           boardCellHistory.input(input);
           const found = findRowAnywhere(rowId);
           if (found) {
+            acknowledgeDnuAssignment(drv, found.row.driverId);
             found.row.driverNameText = drv.name;
             found.row.driverId = drv.id;
             markFieldDirty(dirtyShiftFields, rowId, "driverNameText");
@@ -8317,9 +8320,10 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
         return;
       }
       if (t.dataset.field === "driverName") {
+        const match = resolveDriverByName(t.value, found.row.location).driver;
+        acknowledgeDnuAssignment(match, found.row.driverId);
         found.row.driverNameText = t.value;
         found.row.driverId = null;
-        const match = resolveDriverByName(t.value, found.row.location).driver;
         if (match) found.row.driverId = match.id;
         updateDriverLinkedCellsInPlace(rowId);
         scheduleShiftSave(found.row);

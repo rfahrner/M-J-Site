@@ -1948,3 +1948,24 @@ fieldset.rate-tier-box.is-overridden {
 :is(#la-table, #vol-table) .analytics-week-row > td:last-child { border-right: 3px solid #000; }
 :is(#la-table, #vol-table) .analytics-week-start > td { border-top: 3px solid #000; }
 :is(#la-table, #vol-table) .analytics-week-end > td { border-bottom: 3px solid #000; }
+
+/* DNU assignments require an explicit acknowledgment on every board. */
+.dnu-assignment-dialog {
+  width: min(420px, calc(100vw - 40px));
+  box-sizing: border-box;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  color: var(--navy-950);
+  font-family: var(--font-ui);
+}
+.dnu-assignment-dialog::backdrop { background: rgba(0, 0, 0, 0.5); }
+.dnu-assignment-dialog h3 {
+  margin: 0 0 12px;
+  color: #b91c1c;
+  font-size: 28px;
+  font-weight: 800;
+}
+.dnu-assignment-dialog p { margin: 0 0 20px; line-height: 1.5; }
+.dnu-assignment-dialog .btn { white-space: normal; }
