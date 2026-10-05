@@ -5201,20 +5201,46 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     $("#tg-progress-step").classList.add("hidden");
     $("#tg-error").classList.add("hidden");
     modal.classList.remove("hidden");
-    setupRateTextOptions();
-    setTextGroupMode("rating");
+    /*
+     * Anything that throws between here and setTextGroupMode() leaves the
+     * modal open and HALF BUILT -- the labels and checkboxes are static
+     * markup so they show, while the rating buttons and their count note are
+     * written by JS and stay empty. That reads as "the feature is missing"
+     * rather than "something broke", which is the worst way for this to
+     * fail: there is nothing on screen to report and nothing in the modal
+     * that admits a problem. Say so in the error row the modal already has.
+     */
+    try {
+      setupRateTextOptions();
+      setTextGroupMode("rating");
+    } catch (e) {
+      console.error("Text Group modal failed to build:", e);
+      const err = $("#tg-error");
+      if (err) {
+        err.textContent = `This modal didn't load properly (${e.message}). Reload the page and try again.`;
+        err.classList.remove("hidden");
+      }
+    }
   }
 
   function setupRateTextOptions() {
+    // Every one of these is markup only driverlist.html carries. The Text
+    // Group button lives there alone today, but the modal shell is copied
+    // into the board pages, so a stray wiring change would otherwise take
+    // the whole open path down with a null innerHTML.
+    const rateSelect = $("#tg-rate-select");
+    const rateRatings = $("#tg-rate-ratings");
+    const rateNote = $("#tg-rate-count-note");
+    if (!rateSelect || !rateRatings || !rateNote) return;
     const options = rateOptions(driversForLocation("preferred"), getBoardRateTiers()?.atlanta, state.drivers);
-    $("#tg-rate-select").innerHTML = '<option value="">Choose a rate…</option>' + options.map(rate => `<option value="${rate}">${rate === "DEFAULT" ? "Default" : `$${rate.toLocaleString()}`}</option>`).join("");
+    rateSelect.innerHTML = '<option value="">Choose a rate…</option>' + options.map(rate => `<option value="${rate}">${rate === "DEFAULT" ? "Default" : `$${rate.toLocaleString()}`}</option>`).join("");
     rateTextRatings = new Set();
-    $("#tg-rate-ratings").innerHTML = "";
-    $("#tg-rate-count-note").textContent = options.length ? "Choose a rate to see the rating groups." : "No preferred drivers on file.";
+    rateRatings.innerHTML = "";
+    rateNote.textContent = options.length ? "Choose a rate to see the rating groups." : "No preferred drivers on file.";
     // Both selection tabs share the existing Send Now/batch controls.
-    $("#tg-send-now").classList.remove("hidden");
-    $("#tg-send-now").disabled = false;
-    for (const id of ["tg-open-web", "tg-open-batch", "tg-confirm-sent", "tg-finish"]) $("#" + id).classList.add("hidden");
+    const sendNow = $("#tg-send-now");
+    if (sendNow) { sendNow.classList.remove("hidden"); sendNow.disabled = false; }
+    for (const id of ["tg-open-web", "tg-open-batch", "tg-confirm-sent", "tg-finish"]) $("#" + id)?.classList.add("hidden");
   }
 
   function setTextGroupMode(mode) {
