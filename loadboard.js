@@ -1,4 +1,4 @@
-import { rateOptions, rateMembers, ratingGroups, selectedRateMembers, preferredTierRate } from './preferred-rate-groups.js';
+import { rateOptions, rateMembers, ratingGroups, selectedRateMembers, preferredTierRate, resolveAtlantaRateProfile } from './preferred-rate-groups.js';
 import { acknowledgeDnuAssignment } from './dnu-assignment.js';
 import { shiftRelativeNow, tripTimeline } from './overnight-times.js';
 import { createCellEditHistory } from './cell-edit-history.js';
@@ -767,7 +767,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   }
 
   function getDriverDisplayRate(d) {
-    if (state.driverListTab === "preferred") return preferredTierRate(d, getBoardRateTiers()?.atlanta);
+    if (state.driverListTab === "preferred") return preferredTierRate(d, getBoardRateTiers()?.atlanta, state.drivers);
     if (state.driverListTab === "atlanta") {
       const tiers = (getBoardRateTiers() && getBoardRateTiers().atlanta) || [];
       const tier = tiers.find((t) => t.min === 61 && t.max === 140);
@@ -5102,7 +5102,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   }
 
   function setupRateTextOptions() {
-    const options = rateOptions(driversForLocation("preferred"), getBoardRateTiers()?.atlanta);
+    const options = rateOptions(driversForLocation("preferred"), getBoardRateTiers()?.atlanta, state.drivers);
     $("#tg-rate-select").innerHTML = '<option value="">Choose a rate…</option>' + options.map(rate => `<option value="${rate}">${rate === "DEFAULT" ? "Default" : `$${rate.toLocaleString()}`}</option>`).join("");
     rateTextRatings = new Set();
     $("#tg-rate-ratings").innerHTML = "";
@@ -5134,12 +5134,12 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     const wrap = $("#tg-rate-ratings");
     const note = $("#tg-rate-count-note");
     wrap.innerHTML = "";
-    if (resetSelection) rateTextRatings = new Set(ratingGroups(rateMembers(driversForLocation("preferred"), rate, getBoardRateTiers()?.atlanta), driverClassification).map(([rating]) => rating));
+    if (resetSelection) rateTextRatings = new Set(ratingGroups(rateMembers(driversForLocation("preferred"), rate, getBoardRateTiers()?.atlanta, state.drivers), driverClassification).map(([rating]) => rating));
     rateTextEligible = [];
     if (rate === "") { note.textContent = "Choose a rate to see the rating groups."; return; }
     note.textContent = "Checking eligible drivers…";
     try {
-      let members = rateMembers(driversForLocation("preferred"), rate, getBoardRateTiers()?.atlanta);
+      let members = rateMembers(driversForLocation("preferred"), rate, getBoardRateTiers()?.atlanta, state.drivers);
       members = filterNeverTextRecipients(applyPhoneMode(members)).allowed.filter(d => !!formatTextAddress(d.phone));
       if ($("#tg-exclude-scheduled").checked) {
         const day = $("#tg-day").value;
@@ -5312,7 +5312,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     if (rateTextMode) {
       const rate = $("#tg-rate-select").value;
       if (rate === "") { errEl.textContent = "Choose a rate first."; errEl.classList.remove("hidden"); return; }
-      members = selectedRateMembers(rateMembers(driversForLocation("preferred"), rate, getBoardRateTiers()?.atlanta), rateTextRatings, driverClassification);
+      members = selectedRateMembers(rateMembers(driversForLocation("preferred"), rate, getBoardRateTiers()?.atlanta, state.drivers), rateTextRatings, driverClassification);
       if (!members.length) { errEl.textContent = "Select at least one rating with eligible drivers."; errEl.classList.remove("hidden"); return; }
       label = `${rate === "DEFAULT" ? "Default" : `$${Number(rate).toLocaleString()}`} — ${[...rateTextRatings].join(", ")}`;
     }
@@ -6689,11 +6689,17 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     [["atlanta", "ad-atlanta-rate-section"], ["delaware", "ad-delaware-rate-section"]].forEach(([location, sectionId]) => {
       const section = $("#" + sectionId);
       const checked = $(`input[name="ad-runs-out-of"][value="${location}"]`);
-      if (section) section.classList.toggle("hidden", !(checked && checked.checked));
+      const sharedAtlantaCard = location === "atlanta" && driverProfileState?.rateSourceId != null && String(driverProfileState.rateSourceId) !== String(driverProfileState.driverId);
+      if (section) section.classList.toggle("hidden", !(checked && checked.checked) && !sharedAtlantaCard);
     });
   }
 
   function readAtlantaRateOverridesFromForm() {
+    // Viewing a linked rate card must not copy it onto the Preferred record
+    // when unrelated profile fields are saved; it stays live from its source.
+    if (driverProfileState?.rateSourceId != null && String(driverProfileState.rateSourceId) !== String(driverProfileState.driverId)) {
+      return findDriver(driverProfileState.driverId)?.atlantaRateOverrides || null;
+    }
     const section = $("#ad-atlanta-rate-section");
     if (!section) return null;
     const overrides = { tiers: {}, settings: {} };
@@ -6765,7 +6771,8 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     state.addDriverNestedFromLoad = false;
     state.editingDriverId = driverId;
     state.editingDriverLocation = d.location || "atlanta";
-    driverProfileState = { driverId, activeTab: "edit", history: null, notes: null, rateHistory: null };
+    const rateProfile = resolveAtlantaRateProfile(d, state.drivers);
+    driverProfileState = { driverId, activeTab: "edit", history: null, notes: null, rateHistory: null, rateSourceId: rateProfile.id };
     modalEl.classList.remove("hidden"); // open first — a missing field below should never block this
     const tabStrip = $("#ad-modal-tabs");
     if (tabStrip) {
@@ -6794,7 +6801,13 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     $all('input[name="ad-runs-out-of"]').forEach((c) => { c.checked = runsOutOf.includes(c.value); });
     ensureDelawareRateSection();
     const atlantaBoxes = $("#ad-atlanta-rate-boxes");
-    if (atlantaBoxes) atlantaBoxes.innerHTML = driverAtlantaRateBoxesHtml(d.atlantaRateOverrides);
+    if (atlantaBoxes) {
+      atlantaBoxes.innerHTML = driverAtlantaRateBoxesHtml(rateProfile.atlantaRateOverrides);
+      if (String(rateProfile.id) !== String(d.id)) {
+        $all("input", atlantaBoxes).forEach(input => { input.disabled = true; });
+        atlantaBoxes.insertAdjacentHTML("afterbegin", `<div class="subtext shared-driver-rate-source">Rate card from this driver's Atlanta profile. <a href="driverlist.html?driver=${encodeURIComponent(rateProfile.id)}&tab=edit" target="_blank" rel="noopener noreferrer">Edit that rate card ↗</a></div>`);
+      }
+    }
     const delawareBoxes = $("#ad-delaware-rate-boxes");
     if (delawareBoxes) delawareBoxes.innerHTML = driverDelawareRateBoxesHtml(d.delawareRateOverrides);
     updateDriverRateSectionVisibility();
@@ -6809,9 +6822,10 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   function openRequestedDriverProfileNotes() {
     const params = new URLSearchParams(window.location.search);
     const driverId = params.get("driver");
-    if (params.get("tab") !== "notes" || !driverId || !findDriver(driverId)) return;
+    const tab = params.get("tab");
+    if (!["edit", "notes"].includes(tab) || !driverId || !findDriver(driverId)) return;
     openEditDriverModal(driverId);
-    switchAddDriverTab("notes");
+    switchAddDriverTab(tab);
   }
 
   function closeAddDriverModal() {

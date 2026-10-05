@@ -1983,3 +1983,5 @@ fieldset.rate-tier-box.is-overridden {
 .rate-rating-toggle[aria-pressed="false"] { background: #fff; color: var(--slate-500); }
 
 .group-text-mode-tabs { margin-bottom: 16px; padding-left: 0; padding-right: 0; }
+
+.shared-driver-rate-source { margin-bottom: 12px; }

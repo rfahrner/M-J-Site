@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 const source = fs.readFileSync('preferred-rate-groups.js', 'utf8');
 const helpers = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
-const { driverRate, rateOptions, rateMembers, ratingGroups, selectedRateMembers, preferredTierRate } = helpers;
+const { driverRate, rateOptions, rateMembers, ratingGroups, selectedRateMembers, preferredTierRate, resolveAtlantaRateProfile } = helpers;
 const classify = d => String(d.rating || '').includes('DNU') ? 'DNU' : (d.rating || '').slice(0, 1) || null;
 const tiers = [{ id: 'short', min: 0, max: 25, rate: 325 }, { id: 'target', min: 61, max: 140, rate: 400 }];
 const pool = [
@@ -66,7 +66,7 @@ test('rate sender passes only the selected rating at the chosen rate and still e
   $('#tg-exclude-scheduled').checked=true;
   $('#tg-day').value='2026-10-05';
   const batches=[];
-  const context=vm.createContext({$,state:{driverListTab:'preferred'},rateTextMode:true,rateTextRatings:new Set(['A']),
+  const context=vm.createContext({$,state:{driverListTab:'preferred',drivers:pool},rateTextMode:true,rateTextRatings:new Set(['A']),
     driversForLocation:()=>pool,driverClassification:classify,isNeverTextDriver:d=>classify(d)==='DNU',
     rateMembers,selectedRateMembers,getBoardRateTiers:()=>({atlanta:tiers}),scheduledDriversOn:async()=>new Set(['1']),driverIsScheduled:(d,s)=>s.has(d.id),
     applyPhoneMode:m=>m,beginTextBatchFlow:(...args)=>batches.push(args)});
@@ -91,7 +91,7 @@ test('rate counts select all ratings initially, apply eligibility, and stale asy
   $('#tg-exclude-scheduled').checked=true;
   $('#tg-day').value='2026-10-05';
   const resolvers=[];
-  const context=vm.createContext({$,rateTextMode:true,rateTextRefresh:0,rateTextRatings:new Set(),rateTextEligible:[],
+  const context=vm.createContext({$,state:{drivers:pool},rateTextMode:true,rateTextRefresh:0,rateTextRatings:new Set(),rateTextEligible:[],
     driversForLocation:()=>pool,driverClassification:classify,rateMembers,ratingGroups,selectedRateMembers,getBoardRateTiers:()=>({atlanta:tiers}),
     filterNeverTextRecipients:m=>({allowed:m.filter(d=>classify(d)!=='DNU')}),applyPhoneMode:m=>m,
     formatTextAddress:p=>p,driverIsScheduled:(d,s)=>s.has(d.id),escapeHtml:x=>x,
@@ -186,4 +186,85 @@ test('modal tabs switch selection panels while preserving shared options, messag
   assert.equal($('#tg-rate-select').value,'400');
   assert.deepEqual([...context.rateTextRatings],['B']);
   assert.equal(refreshes,1);
+});
+
+
+test('missing Preferred card resolves by unique name and MC, and rate grouping uses the same live card', () => {
+  const preferred = { id: 'p', location: 'preferred', name: '  Howard   Barnett ', mc: '1618522', rating: 'B', phone: '111' };
+  const atlanta = { id: 'a', location: 'atlanta', name: 'HOWARD BARNETT', mc: '1618522', atlantaRateOverrides: { tiers: { target: 400 } } };
+  const profiles = [preferred, atlanta];
+  assert.equal(resolveAtlantaRateProfile(preferred, profiles), atlanta);
+  assert.equal(preferredTierRate(preferred, tiers, profiles), 400);
+  assert.deepEqual(rateOptions([preferred], tiers, profiles), [400]);
+  assert.deepEqual(rateMembers([preferred], 400, tiers, profiles), [preferred]);
+  assert.deepEqual(rateMembers([preferred], 'DEFAULT', tiers, profiles), []);
+  atlanta.atlantaRateOverrides.tiers.target = 450;
+  assert.equal(preferredTierRate(preferred, tiers, profiles), 450);
+  assert.deepEqual(rateMembers([preferred], 400, tiers, profiles), []);
+  assert.deepEqual(rateMembers([preferred], 450, tiers, profiles), [preferred]);
+  assert.equal(preferred.atlantaRateOverrides, undefined);
+});
+
+test('existing Preferred cards and unmatched or ambiguous identities never inherit another driver rate', () => {
+  const preferred = { id: 'p', location: 'preferred', name: 'Howard Barnett', mc: '1618522' };
+  const atlanta = { id: 'a', location: 'atlanta', name: 'Howard Barnett', mc: '1618522', atlantaRateOverrides: { tiers: { target: 400 } } };
+  for (const local of [{ tiers: { target: 500 } }, { tiers: { short: 350 } }, { settings: { overmi: 4 } }]) {
+    const d = { ...preferred, atlantaRateOverrides: local };
+    assert.equal(resolveAtlantaRateProfile(d, [atlanta]), d);
+  }
+  for (const d of [{ ...preferred, mc: '' }, { ...preferred, mc: '999' }, { ...preferred, name: 'Other Driver' }, { ...preferred, location: 'delaware' }]) {
+    assert.equal(resolveAtlantaRateProfile(d, [atlanta]), d);
+  }
+  assert.equal(resolveAtlantaRateProfile(preferred, [atlanta, { ...atlanta, id: 'b', location: 'buildingc' }]), preferred);
+  assert.equal(resolveAtlantaRateProfile(preferred, [{ ...atlanta, atlantaRateOverrides: null }]), preferred);
+  assert.equal(resolveAtlantaRateProfile(preferred, [{ ...atlanta, location: 'buildingc' }]).id, 'a');
+  assert.equal(resolveAtlantaRateProfile({ ...preferred, atlantaRateOverrides: {} }, [atlanta]), atlanta);
+});
+
+test('saving unrelated Preferred fields does not copy an inherited rate card to the Preferred record', () => {
+  for (const local of [null, {}]) {
+    const context = vm.createContext({
+      driverProfileState: { driverId: 'p', rateSourceId: 'a' },
+      findDriver: () => ({ atlantaRateOverrides: local }),
+      $: () => { throw new Error('Inherited inputs must not be read'); }
+    });
+    vm.runInContext(lift('readAtlantaRateOverridesFromForm'), context);
+    assert.equal(vm.runInContext('readAtlantaRateOverridesFromForm()', context), local);
+  }
+});
+
+test('an inherited Atlanta card remains visible even when Preferred runs-out-of checkbox is absent', () => {
+  const hidden = new Map();
+  const context = vm.createContext({ ensureDelawareRateSection: () => {}, driverProfileState: { driverId: 'p', rateSourceId: 'a' },
+    $: selector => selector.startsWith('input') ? { checked: false } : { classList: { toggle: (name, value) => hidden.set(selector, value) } }
+  });
+  vm.runInContext(lift('updateDriverRateSectionVisibility') + ';updateDriverRateSectionVisibility()', context);
+  assert.equal(hidden.get('#ad-atlanta-rate-section'), false);
+  assert.equal(hidden.get('#ad-delaware-rate-section'), true);
+});
+
+test('Preferred profile displays the linked card and offers editing in the source profile', () => {
+  const preferred = { id: 'p', location: 'preferred', name: 'Howard Barnett', mc: '1618522' };
+  const atlanta = { id: 'a', location: 'atlanta', name: 'Howard Barnett', mc: '1618522', atlantaRateOverrides: { tiers: { target: 400 } } };
+  const $ = elements();
+  $('#ad-mc').dataset = {};
+  $('#ad-name').focus = () => {};
+  const input = { disabled: false };
+  $('#ad-atlanta-rate-boxes').insertAdjacentHTML = (_position, html) => { $('#ad-atlanta-rate-boxes').innerHTML += html; };
+  const context = vm.createContext({ $, state: { drivers: [preferred, atlanta] }, driverProfileState: null,
+    findDriver: id => [preferred, atlanta].find(d => d.id === id), resolveAtlantaRateProfile,
+    $all: selector => selector === 'input' ? [input] : [], setVal: () => {}, setText: () => {},
+    ensureDelawareRateSection: () => {}, updateDriverRateSectionVisibility: () => {},
+    driverAtlantaRateBoxesHtml: card => JSON.stringify(card), driverDelawareRateBoxesHtml: () => ''
+  });
+  const fn = board.match(/  export function openEditDriverModal\([^]*?\n  \}/)[0].replace('export ', '');
+  vm.runInContext(fn + ';openEditDriverModal("p")', context);
+  assert.equal(context.driverProfileState.rateSourceId, 'a');
+  assert.match($('#ad-atlanta-rate-boxes').innerHTML, /"target":400/);
+  assert.match($('#ad-atlanta-rate-boxes').innerHTML, /driverlist.html\?driver=a&tab=edit/);
+  assert.equal(input.disabled, true);
+  vm.runInContext('openEditDriverModal("a")', context);
+  assert.equal(context.driverProfileState.rateSourceId, 'a');
+  assert.equal(context.driverProfileState.driverId, 'a');
+  assert.doesNotMatch($('#ad-atlanta-rate-boxes').innerHTML, /shared-driver-rate-source/);
 });
