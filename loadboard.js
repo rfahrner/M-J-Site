@@ -5057,6 +5057,9 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     return [...KNOWN_DRIVER_CLASSES, ...extras];
   }
 
+  let ratingTextRatings = new Set();
+  let ratingTextEligible = [];
+  let ratingTextRefresh = 0;
   let rateTextMode = false;
   let rateTextRatings = new Set();
   let rateTextRefresh = 0;
@@ -5070,15 +5073,9 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     const modal = $("#modal-text-group");
     if (!modal) return;
     groupTextState = null;
-    const selectEl = $("#tg-group-select");
-    if (selectEl) {
-      const classes = availableDriverClasses();
-      selectEl.innerHTML = [
-        `<option value="ALL">All Drivers</option>`,
-        ...classes.map((c) => `<option value="${c}">${c === "DNU" ? "DNU" : "Rating " + c}</option>`),
-      ].join("");
-      selectEl.value = "ALL";
-    }
+    ratingTextRatings = new Set();
+    ratingTextEligible = [];
+    ratingTextRefresh++;
     const msgEl = $("#tg-message");
     if (msgEl) msgEl.value = "";
     const dispatchModeCheckbox = $("#tg-dispatch-mode");
@@ -5127,6 +5124,68 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     });
     $("#tg-error").classList.add("hidden");
     if (rateTextMode) refreshRateTextRatings();
+    else refreshRatingTextGroups();
+  }
+
+  function ratingTextClass(driver) {
+    return isNeverTextDriver(driver) ? "DNU" : (driverClassification(driver) || "Unrated");
+  }
+
+  function toggleRatingTextGroup(rating) {
+    if (rating === "ALL") {
+      const choices = [...availableDriverClasses().filter(c => c !== "DNU"), "Unrated"];
+      const allSelected = choices.every(c => ratingTextRatings.has(c));
+      ratingTextRatings = allSelected ? new Set() : new Set(choices);
+    } else if (rating === "DNU") {
+      // Preserve the explicit DNU-only flow; ordinary groups never enable it.
+      ratingTextRatings = ratingTextRatings.has("DNU") ? new Set() : new Set(["DNU"]);
+    } else {
+      ratingTextRatings.delete("DNU");
+      if (ratingTextRatings.has(rating)) ratingTextRatings.delete(rating);
+      else ratingTextRatings.add(rating);
+    }
+    renderRatingTextGroups();
+  }
+
+  function renderRatingTextGroups() {
+    const choices = [...availableDriverClasses().filter(c => c !== "DNU"), "Unrated", "DNU"];
+    const counts = new Map();
+    for (const driver of ratingTextEligible) {
+      const rating = ratingTextClass(driver);
+      counts.set(rating, (counts.get(rating) || 0) + 1);
+    }
+    const allSelected = choices.filter(c => c !== "DNU").every(c => ratingTextRatings.has(c));
+    const ordinaryCount = ratingTextEligible.filter(d => ratingTextClass(d) !== "DNU").length;
+    const button = (rating, label, count, selected) => `<button type="button" class="btn btn-ghost rate-rating-toggle" data-text-rating="${escapeHtml(rating)}" aria-pressed="${selected}"><span class="rating-selection-mark" aria-hidden="true">${selected ? "✓" : "○"}</span> ${escapeHtml(label)}- ${count}</button>`;
+    $("#tg-rating-buttons").innerHTML = button("ALL", "All Drivers", ordinaryCount, allSelected) + choices.map(rating => button(rating, rating, counts.get(rating) || 0, ratingTextRatings.has(rating))).join("");
+    const selected = ratingTextEligible.filter(d => ratingTextRatings.has(ratingTextClass(d))).length;
+    $("#tg-rating-count-note").textContent = ratingTextRatings.size
+      ? `${selected} eligible drivers selected. ${ratingTextRatings.has("DNU") ? "DNU-only group." : "DNU drivers are excluded."} Shared phone numbers receive one text.`
+      : "No ratings selected. Choose the buttons for the drivers you want to text.";
+  }
+
+  async function refreshRatingTextGroups() {
+    if (rateTextMode || !$("#tg-rating-buttons")) return;
+    const generation = ++ratingTextRefresh;
+    const note = $("#tg-rating-count-note");
+    note.textContent = "Checking eligible drivers…";
+    try {
+      const pool = driversForLocation(state.driverListTab || "atlanta");
+      const ordinary = filterNeverTextRecipients(applyPhoneMode(pool.filter(d => !isNeverTextDriver(d)))).allowed;
+      const dnu = applyPhoneMode(pool.filter(isNeverTextDriver));
+      let members = [...ordinary, ...dnu].filter(d => !!formatTextAddress(d.phone));
+      if ($("#tg-exclude-scheduled").checked) {
+        const day = $("#tg-day").value;
+        if (!day) throw Error("Choose the day you're trying to fill.");
+        const scheduled = await scheduledDriversOn(day);
+        members = members.filter(d => !driverIsScheduled(d, scheduled));
+      }
+      if (rateTextMode || generation !== ratingTextRefresh) return;
+      ratingTextEligible = members;
+      renderRatingTextGroups();
+    } catch (e) {
+      if (!rateTextMode && generation === ratingTextRefresh) note.textContent = `Couldn't check eligible drivers: ${e.message}`;
+    }
   }
 
   async function refreshRateTextRatings(resetSelection = false) {
@@ -5136,7 +5195,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     const wrap = $("#tg-rate-ratings");
     const note = $("#tg-rate-count-note");
     wrap.innerHTML = "";
-    if (resetSelection) rateTextRatings = new Set(ratingGroups(rateMembers(driversForLocation("preferred"), rate, getBoardRateTiers()?.atlanta, state.drivers), driverClassification).map(([rating]) => rating));
+    if (resetSelection) rateTextRatings = new Set();
     rateTextEligible = [];
     if (rate === "") { note.textContent = "Choose a rate to see the rating groups."; return; }
     note.textContent = "Checking eligible drivers…";
@@ -5159,7 +5218,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
 
   function renderRateTextRatings() {
     const groups = ratingGroups(rateTextEligible, driverClassification);
-    $("#tg-rate-ratings").innerHTML = groups.map(([rating, count]) => `<button type="button" class="btn btn-ghost rate-rating-toggle" data-rate-rating="${escapeHtml(rating)}" aria-pressed="${rateTextRatings.has(rating)}">${escapeHtml(rating)}- ${count}</button>`).join("");
+    $("#tg-rate-ratings").innerHTML = groups.map(([rating, count]) => `<button type="button" class="btn btn-ghost rate-rating-toggle" data-rate-rating="${escapeHtml(rating)}" aria-pressed="${rateTextRatings.has(rating)}"><span class="rating-selection-mark" aria-hidden="true">${rateTextRatings.has(rating) ? "✓" : "○"}</span> ${escapeHtml(rating)}- ${count}</button>`).join("");
     const count = selectedRateMembers(rateTextEligible, rateTextRatings, driverClassification).length;
     $("#tg-rate-count-note").textContent = groups.length ? `${count} eligible drivers selected. DNU drivers are excluded; shared phone numbers receive one text.` : "No eligible drivers at this rate with these options.";
   }
@@ -5298,18 +5357,16 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   }
 
   async function startGroupTexting() {
-    const groupKey = rateTextMode ? "RATE" : ($("#tg-group-select") || {}).value || "";
+    const groupKey = rateTextMode ? "RATE" : (ratingTextRatings.size === 1 && ratingTextRatings.has("DNU") ? "DNU" : "RATINGS");
     const message = $("#tg-message").value.trim();
     const errEl = $("#tg-error");
-    if (!groupKey) { errEl.textContent = "Pick who to text first."; errEl.classList.remove("hidden"); return; }
+    if (!rateTextMode && !ratingTextRatings.size) { errEl.textContent = "Select at least one rating first."; errEl.classList.remove("hidden"); return; }
     if (!message) { errEl.textContent = "Write a message first."; errEl.classList.remove("hidden"); return; }
     errEl.classList.add("hidden");
 
     const pool = driversForLocation(state.driverListTab || "atlanta");
-    let members = groupKey === "ALL"
-      ? pool
-      : pool.filter((d) => groupKey === "DNU" ? isNeverTextDriver(d) : driverClassification(d) === groupKey);
-    let label = groupKey === "ALL" ? "All Drivers" : (groupKey === "DNU" ? "DNU" : `Rating ${groupKey}`);
+    let members = rateTextMode ? [] : pool.filter(d => ratingTextRatings.has(ratingTextClass(d)));
+    let label = rateTextMode ? "" : (groupKey === "DNU" ? "DNU" : `Ratings ${[...ratingTextRatings].join(", ")}`);
 
     if (rateTextMode) {
       const rate = $("#tg-rate-select").value;
@@ -8643,6 +8700,10 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
 
     if ($("#btn-text-group")) $("#btn-text-group").addEventListener("click", openTextGroupModal);
     $all("[data-text-group-mode]").forEach(button => button.addEventListener("click", () => setTextGroupMode(button.dataset.textGroupMode)));
+    on("tg-rating-buttons", "click", e => {
+      const button = e.target.closest("[data-text-rating]");
+      if (button) toggleRatingTextGroup(button.dataset.textRating);
+    });
     on("tg-rate-select", "change", () => refreshRateTextRatings(true));
     on("tg-rate-ratings", "click", e => {
       const button = e.target.closest("[data-rate-rating]");
@@ -8651,7 +8712,9 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       if (rateTextRatings.has(rating)) rateTextRatings.delete(rating); else rateTextRatings.add(rating);
       renderRateTextRatings();
     });
-    for (const id of ["tg-dispatch-mode", "tg-exclude-scheduled", "tg-day"]) on(id, "change", () => refreshRateTextRatings());
+    for (const id of ["tg-dispatch-mode", "tg-exclude-scheduled", "tg-day"]) on(id, "change", () => {
+      if (rateTextMode) refreshRateTextRatings(); else refreshRatingTextGroups();
+    });
     on("tg-start", "click", startGroupTexting);
     on("tg-send-now", "click", groupSendNowPressed);
       on("tg-open-batch", "click", openCurrentGroupBatch);

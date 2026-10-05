@@ -195,8 +195,9 @@
             <button type="button" class="ld-tab" role="tab" aria-selected="false" aria-controls="tg-rate-wrap" data-text-group-mode="rate">Text by Rate</button>
           </div>
           <div class="field" id="tg-group-tabs-wrap" role="tabpanel" aria-label="Text by Rating">
-            <label for="tg-group-select">Who to text</label>
-            <select id="tg-group-select" class="cell-input"></select>
+            <label id="tg-rating-label">Who to text</label>
+            <div id="tg-rating-buttons" class="rate-rating-buttons" role="group" aria-labelledby="tg-rating-label"></div>
+            <div id="tg-rating-count-note" class="subtext" aria-live="polite"></div>
           </div>
           <div class="field hidden" id="tg-rate-wrap" role="tabpanel" aria-label="Text by Rate">
             <label for="tg-rate-select">Preferred Drivers — 61–140.9 MI Rate</label>

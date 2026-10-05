@@ -85,7 +85,7 @@ test('rate sender passes only the selected rating at the chosen rate and still e
   assert.match(batches[1][1],/^Default/);
 });
 
-test('rate counts select all ratings initially, apply eligibility, and stale async refreshes cannot overwrite a new rate', async () => {
+test('rate counts start unselected, apply eligibility, and stale async refreshes cannot overwrite a new rate', async () => {
   const $=elements();
   $('#tg-rate-select').value='400';
   $('#tg-exclude-scheduled').checked=true;
@@ -104,13 +104,13 @@ test('rate counts select all ratings initially, apply eligibility, and stale asy
   resolvers[0](new Set());await first;
   assert.match($('#tg-rate-ratings').innerHTML,/A- 1/);
   assert.doesNotMatch($('#tg-rate-ratings').innerHTML,/B-/);
-  assert.match($('#tg-rate-ratings').innerHTML,/aria-pressed="true"/);
+  assert.doesNotMatch($('#tg-rate-ratings').innerHTML,/aria-pressed="true"/);
   $('#tg-rate-select').value='400';
   const third=vm.runInContext('refreshRateTextRatings(true)',context);
   resolvers[2](new Set(['1']));await third;
   assert.match($('#tg-rate-ratings').innerHTML,/A- 1/);
   assert.match($('#tg-rate-ratings').innerHTML,/B- 1/);
-  vm.runInContext('rateTextRatings.delete("A");renderRateTextRatings()',context);
+  vm.runInContext('rateTextRatings.add("B");renderRateTextRatings()',context);
   assert.match($('#tg-rate-count-note').textContent,/1 eligible drivers/);
   assert.match($('#tg-rate-ratings').innerHTML,/aria-pressed="false"/);
 });
@@ -168,7 +168,7 @@ test('modal tabs switch selection panels while preserving shared options, messag
   const buttons=['rating','rate'].map(mode=>({dataset:{textGroupMode:mode},classList:{toggle(_class,value){this.active=value;}},setAttribute(key,value){this[key]=value;}}));
   let refreshes=0;
   const context=vm.createContext({$, $all:()=>buttons, rateTextMode:false,rateTextRefresh:0,
-    rateTextRatings:new Set(['B']), refreshRateTextRatings:()=>refreshes++});
+    rateTextRatings:new Set(['B']), refreshRateTextRatings:()=>refreshes++, refreshRatingTextGroups:()=>{}});
   vm.runInContext(lift('setTextGroupMode'),context);
   vm.runInContext('setTextGroupMode("rate")',context);
   assert.equal(context.rateTextMode,true);
