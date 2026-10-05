@@ -2,32 +2,32 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-import { createClient } from '@supabase/supabase-js';
 const source = fs.readFileSync('preferred-rate-groups.js', 'utf8');
 const helpers = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
-const { driverRate, rateOptions, rateMembers, ratingGroups, selectedRateMembers, savePreferredRate } = helpers;
+const { driverRate, rateOptions, rateMembers, ratingGroups, selectedRateMembers, preferredTierRate } = helpers;
 const classify = d => String(d.rating || '').includes('DNU') ? 'DNU' : (d.rating || '').slice(0, 1) || null;
+const tiers = [{ id: 'short', min: 0, max: 25, rate: 325 }, { id: 'target', min: 61, max: 140, rate: 400 }];
 const pool = [
-  { id: '1', normalRate: '400', rating: 'A', phone: '111' },
-  { id: '2', normalRate: '400.00', rating: 'A1', phone: '222' },
-  { id: '3', normalRate: 400, rating: 'B', phone: '333' },
-  { id: '4', normalRate: 400, rating: 'DNU', phone: '444' },
-  { id: '5', normalRate: 450, rating: 'A', phone: '555' },
-  { id: '6', normalRate: '', rating: 'B' },
-  { id: '7', normalRate: 0, rating: '' }
+  { id: '1', normalRate: '999', atlantaRateOverrides: { tiers: { target: 400 } }, rating: 'A', phone: '111' },
+  { id: '2', normalRate: '999', atlantaRateOverrides: { tiers: { target: '400.00' } }, rating: 'A1', phone: '222' },
+  { id: '3', normalRate: 999, atlantaRateOverrides: { tiers: { target: 400 } }, rating: 'B', phone: '333' },
+  { id: '4', normalRate: 999, atlantaRateOverrides: { tiers: { target: 400 } }, rating: 'DNU', phone: '444' },
+  { id: '5', normalRate: 999, atlantaRateOverrides: { tiers: { target: 450 } }, rating: 'A', phone: '555' },
+  { id: '6', normalRate: '400', rating: 'B', phone: '666' },
+  { id: '7', normalRate: 999, atlantaRateOverrides: { tiers: { target: 0 } }, rating: '' }
 ];
 
 test('rates normalize numeric strings, preserve zero, and omit blank/invalid rates', () => {
-  assert.deepEqual(rateOptions(pool), [0, 400, 450]);
+  assert.deepEqual(rateOptions(pool, tiers), ['DEFAULT', 0, 400, 450]);
   assert.equal(driverRate(''), null);
   assert.equal(driverRate('bad'), null);
   assert.equal(driverRate('-1'), null);
-  assert.deepEqual(rateMembers(pool, '').map(d => d.id), []);
-  assert.deepEqual(rateMembers(pool, '400').map(d => d.id), ['1','2','3','4']);
+  assert.deepEqual(rateMembers(pool, '', tiers).map(d => d.id), []);
+  assert.deepEqual(rateMembers(pool, '400', tiers).map(d => d.id), ['1','2','3','4']);
 });
 
 test('rating counts match rate and toggle exclusions without including DNU', () => {
-  const members = rateMembers(pool, 400);
+  const members = rateMembers(pool, 400, tiers);
   assert.deepEqual(ratingGroups(members, classify), [['A',2],['B',1]]);
   const selected = new Set(['A','B']);
   assert.deepEqual(selectedRateMembers(members, selected, classify).map(d => d.id), ['1','2','3']);
@@ -37,30 +37,16 @@ test('rating counts match rate and toggle exclusions without including DNU', () 
   assert.deepEqual(selectedRateMembers(members, selected, classify), []);
 });
 
-test('real Supabase builder saves only normal_rate to the matched driver and verifies the result', async () => {
-  const calls = [];
-  let stored = { id: 12, normal_rate: 325 };
-  let failure = false;
-  const client = createClient('https://example.supabase.co', 'test-key', {
-    auth: { persistSession:false, autoRefreshToken:false, detectSessionInUrl:false },
-    global: { fetch:async (url, options) => {
-      calls.push({ url:new URL(url), options });
-      if (options.method === 'PATCH' && !failure) Object.assign(stored, JSON.parse(options.body));
-      return new Response(JSON.stringify(stored), {status:200,headers:{'Content-Type':'application/json'}});
-    } }
-  });
-  for (const [value, expected] of [['400',400],['0',0],['',null]]) {
-    await savePreferredRate(client,12,value);
-    const { data } = await client.from('atlanta_drivers').select('id,normal_rate').eq('id',12).single();
-    assert.equal(data.normal_rate,expected);
+test('profile tier overrides are the sole source, and Default stays distinct from explicit base-rate overrides', () => {
+  assert.equal(preferredTierRate(pool[0], tiers), 400);
+  assert.equal(preferredTierRate(pool[5], tiers), null);
+  assert.equal(preferredTierRate({ normalRate: 777, atlantaRateOverrides: { tiers: { short: 600 } } }, tiers), null);
+  for (const value of [undefined, null, '', 'default']) {
+    assert.equal(preferredTierRate({ atlantaRateOverrides: { tiers: { target: value } } }, tiers), null);
   }
-  assert.equal(calls[0].url.searchParams.get('id'),'eq.12');
-  assert.deepEqual(JSON.parse(calls[0].options.body),{normal_rate:400});
-  failure = true;
-  await assert.rejects(savePreferredRate(client,12,'500'));
-  await assert.rejects(savePreferredRate(client,12,'-5'));
-  stored = null;
-  await assert.rejects(savePreferredRate(client,12,'500'));
+  assert.equal(preferredTierRate(pool[0], [{ id: 'target', min: '61', max: '140.9' }]), 400);
+  assert.deepEqual(rateMembers(pool, 'DEFAULT', tiers).map(d => d.id), ['6']);
+  assert.deepEqual(rateMembers(pool, '400', tiers).map(d => d.id), ['1','2','3','4']);
 });
 
 const board = fs.readFileSync('loadboard.js', 'utf8');
@@ -82,7 +68,7 @@ test('rate sender passes only the selected rating at the chosen rate and still e
   const batches=[];
   const context=vm.createContext({$,state:{driverListTab:'preferred'},rateTextMode:true,rateTextRatings:new Set(['A']),
     driversForLocation:()=>pool,driverClassification:classify,isNeverTextDriver:d=>classify(d)==='DNU',
-    rateMembers,selectedRateMembers,scheduledDriversOn:async()=>new Set(['1']),driverIsScheduled:(d,s)=>s.has(d.id),
+    rateMembers,selectedRateMembers,getBoardRateTiers:()=>({atlanta:tiers}),scheduledDriversOn:async()=>new Set(['1']),driverIsScheduled:(d,s)=>s.has(d.id),
     applyPhoneMode:m=>m,beginTextBatchFlow:(...args)=>batches.push(args)});
   vm.runInContext(lift('startGroupTexting'), context);
   await vm.runInContext('startGroupTexting()',context);
@@ -92,6 +78,11 @@ test('rate sender passes only the selected rating at the chosen rate and still e
   await vm.runInContext('startGroupTexting()',context);
   assert.equal(batches.length,1);
   assert.match($('#tg-error').textContent,/Select at least one/);
+  $('#tg-rate-select').value='DEFAULT';
+  context.rateTextRatings=new Set(['B']);
+  await vm.runInContext('startGroupTexting()',context);
+  assert.deepEqual(batches[1][0].map(d=>d.id),['6']);
+  assert.match(batches[1][1],/^Default/);
 });
 
 test('rate counts select all ratings initially, apply eligibility, and stale async refreshes cannot overwrite a new rate', async () => {
@@ -101,7 +92,7 @@ test('rate counts select all ratings initially, apply eligibility, and stale asy
   $('#tg-day').value='2026-10-05';
   const resolvers=[];
   const context=vm.createContext({$,rateTextMode:true,rateTextRefresh:0,rateTextRatings:new Set(),rateTextEligible:[],
-    driversForLocation:()=>pool,driverClassification:classify,rateMembers,ratingGroups,selectedRateMembers,
+    driversForLocation:()=>pool,driverClassification:classify,rateMembers,ratingGroups,selectedRateMembers,getBoardRateTiers:()=>({atlanta:tiers}),
     filterNeverTextRecipients:m=>({allowed:m.filter(d=>classify(d)!=='DNU')}),applyPhoneMode:m=>m,
     formatTextAddress:p=>p,driverIsScheduled:(d,s)=>s.has(d.id),escapeHtml:x=>x,
     scheduledDriversOn:()=>new Promise(resolve=>resolvers.push(resolve))});
@@ -129,19 +120,70 @@ test('Preferred rate renders before Rating while other tabs retain their existin
     const $ = elements();
     $('#btn-text-by-rate').classList.toggle=()=>{};
     const moves=[];
-    const rateHeader={};
+    const rateHeader={dataset:{}};
     const ratingHeader={before:node=>moves.push(['before-rating',node])};
     $('#activity-rating-sort').after=node=>moves.push(['after-activity',node]);
     const context=vm.createContext({$,state:{driverListTab:tab},
       document:{querySelector:selector=>selector.includes('normalRate') ? rateHeader : ratingHeader},
-      getSortedDrivers:()=>[pool[0]],getDriverDisplayRate:d=>Number(d.normalRate),escapeHtml:v=>String(v ?? ''),
+      getSortedDrivers:()=>[pool[0]],getDriverDisplayRate:d=>preferredTierRate(d,tiers),escapeHtml:v=>String(v ?? ''),
       refreshDriverDatalist:()=>{},$all:()=>[]});
     vm.runInContext(lift('renderDriverList')+';renderDriverList()',context);
     const html=$('#driverlist-table-body').innerHTML;
     const rateIndex=html.indexOf('driver-list-rate-cell');
     const ratingIndex=html.indexOf('driver-list-rating-cell');
     assert.equal(rateIndex<ratingIndex,tab==='preferred');
-    assert.equal(html.includes('data-driver-rate="1"'),tab==='preferred');
+    assert.equal(html.includes('data-driver-rate='),false);
+    assert.ok(html.includes('$400'));
+    assert.equal(rateHeader.dataset.sort,tab==='preferred'?'displayRate':'normalRate');
     assert.equal(moves[0][0],tab==='preferred'?'before-rating':'after-activity');
   }
+});
+
+
+test('Preferred column displays Default for a profile with no mileage-tier override', () => {
+  const $ = elements();
+  $('#btn-text-by-rate').classList.toggle=()=>{};
+  const rateHeader={dataset:{}};
+  const context=vm.createContext({$,state:{driverListTab:'preferred'},
+    document:{querySelector:selector=>selector.includes('normalRate') ? rateHeader : {before(){}}},
+    getSortedDrivers:()=>[pool[5]],getDriverDisplayRate:d=>preferredTierRate(d,tiers),escapeHtml:v=>String(v ?? ''),
+    refreshDriverDatalist:()=>{},$all:()=>[]});
+  vm.runInContext(lift('renderDriverList')+';renderDriverList()',context);
+  const html=$('#driverlist-table-body').innerHTML;
+  assert.match(html,/61–140.9 MI">Default<\/td>/);
+  assert.doesNotMatch(html,/\$400/);
+});
+
+test('modal tabs switch selection panels while preserving shared options, message, rate, and rating toggles', () => {
+  const $ = elements();
+  const hidden = new Map();
+  for (const selector of ['#tg-group-tabs-wrap','#tg-rate-wrap']) {
+    $(selector).classList.toggle=(_class, value)=>hidden.set(selector,value);
+  }
+  $('#tg-message').value='Keep this message';
+  $('#tg-day').value='2026-10-06';
+  $('#tg-dispatch-mode').checked=true;
+  $('#tg-exclude-scheduled').checked=true;
+  $('#tg-rate-select').value='400';
+  const buttons=['rating','rate'].map(mode=>({dataset:{textGroupMode:mode},classList:{toggle(_class,value){this.active=value;}},setAttribute(key,value){this[key]=value;}}));
+  let refreshes=0;
+  const context=vm.createContext({$, $all:()=>buttons, rateTextMode:false,rateTextRefresh:0,
+    rateTextRatings:new Set(['B']), refreshRateTextRatings:()=>refreshes++});
+  vm.runInContext(lift('setTextGroupMode'),context);
+  vm.runInContext('setTextGroupMode("rate")',context);
+  assert.equal(context.rateTextMode,true);
+  assert.equal(hidden.get('#tg-rate-wrap'),false);
+  assert.equal(hidden.get('#tg-group-tabs-wrap'),true);
+  assert.equal(buttons[1]['aria-selected'],'true');
+  vm.runInContext('setTextGroupMode("rating")',context);
+  assert.equal(context.rateTextMode,false);
+  assert.equal(hidden.get('#tg-rate-wrap'),true);
+  assert.equal(buttons[0]['aria-selected'],'true');
+  assert.equal($('#tg-message').value,'Keep this message');
+  assert.equal($('#tg-day').value,'2026-10-06');
+  assert.equal($('#tg-dispatch-mode').checked,true);
+  assert.equal($('#tg-exclude-scheduled').checked,true);
+  assert.equal($('#tg-rate-select').value,'400');
+  assert.deepEqual([...context.rateTextRatings],['B']);
+  assert.equal(refreshes,1);
 });
