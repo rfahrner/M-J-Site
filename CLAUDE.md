@@ -55,7 +55,37 @@ and cursor position is not the right signal for which copy of a value is newer.
 
 ### Driver autocomplete
 
-The floating driver picker is `#driver-ac-floating`. Enter should accept a driver and close the dropdown. Do not set permanent inline `display:none`; reopening relies on toggling `.hidden`.
+The floating driver picker is `#driver-ac-floating`. Do not set permanent
+inline `display:none`; reopening relies on toggling `.hidden`.
+
+**Picking a driver ENDS the edit.** The cell stays focused and shows the
+selected outline, the suggestions close, and there is no caret -- the
+spreadsheet behaviour. Tab moves to the next cell's editor; Enter, F2 or a
+click resumes editing this one. `finishDriverCellSelection()` is the one way
+in, from all three exits (Enter, the Enter-key fallthrough in
+`handleRowAwareTab`, and a clicked suggestion).
+
+Four things this flow got wrong, all found by driving it in jsdom
+(`scripts/driver-selection-flow.test.mjs`) rather than by reading it:
+
+- **Enter did nothing without an ArrowDown first.** Typing a full name and
+  pressing Enter left free text and no profile; it only linked when
+  `resolveDriverByName` matched the typed string exactly. Enter now takes an
+  unambiguous match -- one result, or one equal to what was typed. It must
+  keep refusing to GUESS: several matches with nothing highlighted falls
+  through to the generic Enter handler, which closes the editor and leaves the
+  text alone. Picking the first of three Samuels is worse than picking none.
+- **`data-driver-cell-selected` was set and never cleared.** Every driver cell
+  the dispatcher had been through kept it, plus `tabindex="-1"`, for the rest
+  of the session -- so clicking one focused the CELL instead of the input and
+  the click looked ignored. It is cleared on focusout unless the cell itself
+  still holds focus; focus returning to the input is editing resuming, not
+  selection.
+- **The search compared raw text.** `"samuel  godinez"` matched nobody and the
+  list offered to ADD a driver already on file. Both sides go through
+  `normalizedDriverName()` now.
+- **Tab out of a selected cell, and clicking a suggestion, were already
+  right.** Pinned, because they are easy to break while fixing the rest.
 
 ### Shift completion / time sheets
 

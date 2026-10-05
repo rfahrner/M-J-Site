@@ -19,7 +19,7 @@ function setup(tableId='board-table', metadata='data-row="r1" data-field="driver
   window.findDriver = () => ({ id: 12, name: 'Atiba Ward' });
   window.openAddDriverModal = () => {};
   const editable = 'input:not([disabled]):not([readonly]):not([type="checkbox"]):not([tabindex="-1"]), textarea:not([disabled]):not([readonly]):not([tabindex="-1"]), select:not([disabled]):not([tabindex="-1"])';
-  const funcs = ['closeDriverAutocomplete','finishDriverCellSelection','commitDriverAutocomplete','handleDriverAcKeydown','setDriverAcHighlight','ensureDriverAcBox','handleRowAwareTab','captureFocusForRerender'].map(lift).join('\n');
+  const funcs = ['closeDriverAutocomplete','finishDriverCellSelection','commitDriverAutocomplete','handleDriverAcKeydown','setDriverAcHighlight','ensureDriverAcBox','handleRowAwareTab','captureFocusForRerender','normalizedDriverName'].map(lift).join('\n');
   window.eval(`let driverAcBox=null,driverAcInput=null,driverAcOnPick=null,driverAcHighlight=0,driverAcMatches=[{id:12,name:'Atiba Ward'}],driverAcShowAddOption=false,driverAcQuery='Atiba War';const EDITABLE_SELECTOR=${JSON.stringify(editable)};${funcs}
     window.setPicker=(input,callback)=>{driverAcInput=input;driverAcOnPick=callback;ensureDriverAcBox().classList.remove('hidden');input.addEventListener('keydown',handleDriverAcKeydown);};
     window.capture=captureFocusForRerender;
