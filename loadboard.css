@@ -1985,3 +1985,9 @@ fieldset.rate-tier-box.is-overridden {
 .group-text-mode-tabs { margin-bottom: 16px; padding-left: 0; padding-right: 0; }
 
 .shared-driver-rate-source { margin-bottom: 12px; }
+
+/* Driver selection finishes editing while retaining a spreadsheet cell focus. */
+td[data-driver-cell-selected]:focus {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
