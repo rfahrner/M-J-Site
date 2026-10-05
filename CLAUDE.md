@@ -230,6 +230,39 @@ decision, and a red test looks like a bug worth "fixing" by putting a field
 back. It was exactly that: the test still drove `salvage` and left main's CI
 red from 2026-10-01.
 
+## Text a Group: buttons, nothing preselected, two steps on the Rate tab
+
+Both tabs of the Text Group modal pick with buttons (`.rate-rating-toggle`),
+never a dropdown, and **nothing is selected when the modal opens** -- you have
+to say who you are texting. Pressed state is a filled button, not just the
+✓/○ glyph, because a glyph alone was not read as selected.
+
+- **Text by Rating**: `#tg-rating-buttons`, multi-select, plus an All Drivers
+  button. Counts are after DNU, no-phone and already-scheduled are removed.
+- **Text by Rate**: `#tg-rate-buttons` then `#tg-rate-ratings`, in that order,
+  and the second does not exist until the first is answered -- the rating
+  groups and their counts are of THAT rate's drivers. The "Then pick the
+  ratings" heading is hidden until there is something under it.
+
+Rates are **single**-select: a driver sits on one rate card. Picking another
+replaces the chosen one, and picking the chosen one again clears it, because
+otherwise there is no way back to "nothing selected". Switching rates clears
+the rating choices with it. The chosen rate lives in `rateTextRate`, not in a
+DOM value -- nothing should read `#tg-rate-select`, which no longer exists.
+
+No counts on the rate buttons, deliberately: the rating counts below are
+post-filter, a rate count could only be the raw pool, and two
+differently-filtered numbers stacked above one another invite the wrong
+arithmetic.
+
+All of this markup lives in `driverlist.html` only -- `#btn-text-group` is on
+that page alone, while the modal SHELL is copied into the four board pages.
+`openTextGroupModal()` therefore wraps its build and reports a failure in
+`#tg-error` rather than leaving a modal that renders empty and reads as
+"that feature is missing", which is exactly how this was first reported.
+`scripts/text-group-rate-buttons.test.mjs` and
+`scripts/text-group-modal-opens.test.mjs` drive the real functions.
+
 ## Deleting a load vs. deleting a route
 
 The ROUTES column's pills are rendered inside a load's FIRST `<tr>`, and routes

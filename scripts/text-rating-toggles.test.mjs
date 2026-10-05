@@ -28,9 +28,9 @@ function setup() {
     scheduledDriversOn:async()=>scheduled, driverIsScheduled:(d,index)=>index.has(d.id),
     beginTextBatchFlow:(...args)=>batches.push(args)
   });
-  const names=['driverClassification','availableDriverClasses','applyPhoneMode','openTextGroupModal','setupRateTextOptions','setTextGroupMode','ratingTextClass','toggleRatingTextGroup','renderRatingTextGroups','refreshRatingTextGroups','refreshRateTextRatings','renderRateTextRatings','startGroupTexting'];
-  window.eval(`const KNOWN_DRIVER_CLASSES=['A','B','C','D','DNU','R'];let groupTextState=null,rateTextMode=false,rateTextRatings=new Set(),rateTextRefresh=0,rateTextEligible=[],ratingTextRatings=new Set(),ratingTextEligible=[],ratingTextRefresh=0;${names.map(lift).join('\n')}
-    window.openModal=openTextGroupModal;window.toggle=toggleRatingTextGroup;window.refreshRating=refreshRatingTextGroups;window.refreshRate=refreshRateTextRatings;window.start=startGroupTexting;window.mode=setTextGroupMode;window.selectRateRating=rating=>{rateTextRatings.add(rating);renderRateTextRatings();};
+  const names=['driverClassification','availableDriverClasses','applyPhoneMode','openTextGroupModal','setupRateTextOptions','setTextGroupMode','ratingTextClass','toggleRatingTextGroup','renderRatingTextGroups','refreshRatingTextGroups','refreshRateTextRatings','renderRateTextRatings','rateTextLabel','renderRateTextOptions','setRateRatingLabelVisible','startGroupTexting'];
+  window.eval(`const KNOWN_DRIVER_CLASSES=['A','B','C','D','DNU','R'];let groupTextState=null,rateTextMode=false,rateTextRatings=new Set(),rateTextRefresh=0,rateTextEligible=[],ratingTextRatings=new Set(),ratingTextEligible=[],ratingTextRefresh=0,rateTextRate='',rateTextOptions=[];${names.map(lift).join('\n')}
+    window.openModal=openTextGroupModal;window.toggle=toggleRatingTextGroup;window.refreshRating=refreshRatingTextGroups;window.refreshRate=refreshRateTextRatings;window.start=startGroupTexting;window.mode=setTextGroupMode;window.selectRateRating=rating=>{rateTextRatings.add(rating);renderRateTextRatings();};window.pickRate=rate=>{rateTextRate=rate;renderRateTextOptions();};window.chosenRate=()=>rateTextRate;
   `);
   const settle=async()=>{await Promise.resolve();await Promise.resolve();};
   return {window,$,pool,batches,settle,schedule:ids=>{scheduled=new Set(ids);}};
@@ -48,7 +48,8 @@ test('opening and reopening clears both tabs, and the rating dropdown is replace
   assert.match($('#tg-rating-buttons [data-text-rating="A"]').textContent,/✓/);
   window.openModal();await settle();
   assert.equal($('#tg-rating-buttons [aria-pressed="true"]'),null);
-  assert.equal($('#tg-rate-select').value,'');
+  assert.equal(window.chosenRate(),'');
+  assert.ok([...$('#tg-rate-buttons').querySelectorAll('button')].every(b=>b.getAttribute('aria-pressed')==='false'));
 });
 
 test('multiple rating buttons select only those drivers, toggling off excludes them, and empty selection cannot start', async () => {
@@ -97,7 +98,7 @@ test('eligibility options update counts and sender without auto-selecting groups
 test('choosing or changing a rate clears rating selection; changing options preserves deliberate choices', async () => {
   const {window,$,settle}=setup();
   window.openModal();await settle();window.mode('rate');
-  $('#tg-rate-select').value='400';await window.refreshRate(true);
+  window.pickRate('400');await window.refreshRate(true);
   assert.equal($('#tg-rate-ratings [aria-pressed="true"]'),null);
   window.selectRateRating('B');
   assert.match($('#tg-rate-ratings [data-rate-rating="B"]').textContent,/✓/);
