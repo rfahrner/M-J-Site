@@ -1,3 +1,4 @@
+import { acknowledgeDnuAssignment } from './dnu-assignment.js';
 /* ================================================================
      Houston board — separate implementation, not shared with the other
      three boards, since loads_houston is a flat table (no shift/trips
@@ -457,6 +458,7 @@ export const HOUSTON_TABLE = "loads_houston";
       driverId = match ? match.id : null;
     }
 
+    acknowledgeDnuAssignment(findDriver(driverId), row.driverId);
     row.driverName = driverNameTyped;
     row.driverId = driverId || null;
     row.aljexNumber = getVal("hou-ld-aljex").trim();
@@ -607,6 +609,7 @@ export const HOUSTON_TABLE = "loads_houston";
       driverId = match ? match.id : null;
     }
 
+    acknowledgeDnuAssignment(findDriver(driverId));
     const row = blankHoustonRow(driverId, name);
     row.aljexNumber = $("#al-pro").value.trim();
     row.time = $("#al-shift-start").value.trim();
@@ -832,9 +835,10 @@ export const HOUSTON_TABLE = "loads_houston";
       if (t.dataset.field !== "driverName") return;
       const found = findHoustonRowAnywhere(t.dataset.row);
       if (!found) return;
+      const match = driversForLocation("houston").find((d) => d.name.toLowerCase() === t.value.trim().toLowerCase());
+      acknowledgeDnuAssignment(match, found.row.driverId);
       found.row.driverName = t.value;
       found.row.driverId = null;
-      const match = driversForLocation("houston").find((d) => d.name.toLowerCase() === t.value.trim().toLowerCase());
       if (match) found.row.driverId = match.id;
       const tr = document.getElementById(found.row.id);
       if (tr) {
@@ -862,6 +866,7 @@ export const HOUSTON_TABLE = "loads_houston";
         t.value = drv.name;
         const found = findHoustonRowAnywhere(rowId);
         if (found) {
+          acknowledgeDnuAssignment(drv, found.row.driverId);
           found.row.driverName = drv.name;
           found.row.driverId = drv.id;
           const tr = document.getElementById(found.row.id);

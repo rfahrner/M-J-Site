@@ -1,3 +1,4 @@
+import { acknowledgeDnuAssignment } from './dnu-assignment.js';
 /* ================================================================
    Mondelez board — flat table like Houston (one row per route, no
    shift/trip split), but spanning several origin DCs shown as
@@ -751,6 +752,7 @@ function saveMondelezLoadDetailsModal() {
     driverId = match ? match.id : null;
   }
   row.location = newLocation;
+  acknowledgeDnuAssignment(findDriver(driverId), row.driverId);
   row.driverName = driverNameTyped;
   row.driverId = driverId;
   row.aljexNumber = getVal("mdz-ld-aljex").trim();
@@ -1121,6 +1123,7 @@ export async function initMondelezPage() {
       t.value = drv.name;
       const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
       if (row) {
+        acknowledgeDnuAssignment(drv, row.driverId);
         row.driverName = drv.name;
         row.driverId = drv.id;
         updateMondelezMcCell(row);
@@ -1146,9 +1149,10 @@ export async function initMondelezPage() {
       return;
     }
     if (field === "driverName") {
+      const match = driversForLocation("mondelez").find((d) => d.name.toLowerCase() === t.value.trim().toLowerCase());
+      acknowledgeDnuAssignment(match, row.driverId);
       row.driverName = t.value;
       row.driverId = null;
-      const match = driversForLocation("mondelez").find((d) => d.name.toLowerCase() === t.value.trim().toLowerCase());
       if (match) row.driverId = match.id;
       updateMondelezMcCell(row);
       scheduleMondelezRowSave(row);
