@@ -2975,10 +2975,15 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     if (!selector) return () => {};
     const selStart = typeof el.selectionStart === "number" ? el.selectionStart : null;
     const selEnd = typeof el.selectionEnd === "number" ? el.selectionEnd : null;
+    // Name lookup ignores surrounding spaces and can link a profile before
+    // typing is finished. Redraws then render the profile's canonical name.
+    // Keep the person's verbatim draft until they actually finish the cell.
+    const driverNameDraft = !selectedDriverCell && ds.driverAc === "true" ? el.value : null;
     return () => {
       const fresh = document.querySelector(selector);
       if (!fresh) return;
       if (selectedDriverCell) { finishDriverCellSelection(fresh); return; }
+      if (driverNameDraft !== null) fresh.value = driverNameDraft;
       fresh.focus();
       if (selStart != null && fresh.setSelectionRange) {
         try { fresh.setSelectionRange(selStart, selEnd); } catch (e) { /* not a text-selectable input type */ }
