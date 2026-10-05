@@ -1969,3 +1969,11 @@ fieldset.rate-tier-box.is-overridden {
 }
 .dnu-assignment-dialog p { margin: 0 0 20px; line-height: 1.5; }
 .dnu-assignment-dialog .btn { white-space: normal; }
+
+.dnu-assignment-notes-link {
+  display: block;
+  margin-bottom: 20px;
+  color: #1d4ed8;
+  font-weight: 600;
+  text-decoration: underline;
+}

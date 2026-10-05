@@ -6711,6 +6711,14 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     if (nameEl) nameEl.focus();
   }
 
+  function openRequestedDriverProfileNotes() {
+    const params = new URLSearchParams(window.location.search);
+    const driverId = params.get("driver");
+    if (params.get("tab") !== "notes" || !driverId || !findDriver(driverId)) return;
+    openEditDriverModal(driverId);
+    switchAddDriverTab("notes");
+  }
+
   function closeAddDriverModal() {
     $("#modal-add-driver").classList.add("hidden");
     driverProfileState = null;
@@ -8565,7 +8573,9 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       else if (info.type === "location-analytics") initLocationAnalyticsPage();
       else if (info.type === "accounting") initAccountingPage();
     } catch (e) { console.error("page-specific init failed:", e); }
-    loadDriversFromSupabase().catch((e) => console.error("loadDriversFromSupabase() failed:", e));
+    loadDriversFromSupabase().then(() => {
+      if (info.type === "driverlist") openRequestedDriverProfileNotes();
+    }).catch((e) => console.error("loadDriversFromSupabase() failed:", e));
 
     // A route ID typed a second before navigating away is still sitting
     // in the debounce timer — flush it rather than lose the sync.
