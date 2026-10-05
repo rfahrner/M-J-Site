@@ -42,6 +42,7 @@
       <div class="toolbar-actions">
         <button class="btn" id="btn-add-driver">+ Add Driver</button>
         <button class="btn btn-ghost" id="btn-text-group">Text Group</button>
+        <button class="btn btn-ghost hidden" id="btn-text-by-rate">Text by Rate</button>
       </div>
     </div>
     <div id="driver-sync-status" class="hidden"></div>
@@ -193,6 +194,12 @@
           <div class="field" id="tg-group-tabs-wrap">
             <label for="tg-group-select">Who to text</label>
             <select id="tg-group-select" class="cell-input"></select>
+          </div>
+          <div class="field hidden" id="tg-rate-wrap">
+            <label for="tg-rate-select">Rate</label>
+            <select id="tg-rate-select" class="cell-input"></select>
+            <div id="tg-rate-ratings" class="rate-rating-buttons" aria-label="Ratings to include"></div>
+            <div id="tg-rate-count-note" class="subtext" aria-live="polite"></div>
           </div>
           <div class="field">
             <div class="radio-row" style="flex-direction:column; align-items:flex-start; gap:8px;">

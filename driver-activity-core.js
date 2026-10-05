@@ -196,8 +196,9 @@ function ensureActivityCell(row, info) {
   if (!cell) {
     cell = document.createElement('td');
     cell.className = 'carrier-activity-cell';
-    // Existing layout: Rating is cell 7 and Rate is cell 8. Insert between them.
-    row.insertBefore(cell, row.cells[8] || null);
+    // Rate moves on Preferred Drivers; keep activity immediately after Rating.
+    const ratingCell = row.querySelector(".driver-list-rating-cell");
+    row.insertBefore(cell, ratingCell ? ratingCell.nextSibling : row.cells[8] || null);
   }
 
   cell.dataset.activityPercent = Number.isFinite(info.percent) ? String(info.percent) : '';

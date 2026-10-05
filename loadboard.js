@@ -1,3 +1,4 @@
+import { rateOptions, rateMembers, ratingGroups, selectedRateMembers, savePreferredRate } from './preferred-rate-groups.js';
 import { acknowledgeDnuAssignment } from './dnu-assignment.js';
 import { shiftRelativeNow, tripTimeline } from './overnight-times.js';
 import { createCellEditHistory } from './cell-edit-history.js';
@@ -3555,8 +3556,21 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   function renderDriverList() {
     const body = $("#driverlist-table-body");
     if (!body) return;
+    const preferred = state.driverListTab === "preferred";
+    $("#btn-text-by-rate")?.classList.toggle("hidden", !preferred);
+    const rateHeader = document.querySelector('.driverlist th[data-sort="normalRate"], .driverlist th[data-sort="displayRate"]');
+    const ratingHeader = document.querySelector('.driverlist th[data-sort="rating"]');
+    const activityHeader = $("#activity-rating-sort");
+    if (rateHeader && ratingHeader) {
+      if (preferred) ratingHeader.before(rateHeader);
+      else (activityHeader || ratingHeader).after(rateHeader);
+    }
     const tbody = getSortedDrivers().map((d) => {
       const displayRate = getDriverDisplayRate(d);
+      const rateCell = preferred
+        ? `<td class="driver-list-rate-cell"><input type="number" min="0" step="0.01" class="cell-input preferred-driver-rate" data-driver-rate="${escapeHtml(d.id)}" aria-label="Rate for ${escapeHtml(d.name)}" value="${escapeHtml(d.normalRate ?? '')}"></td>`
+        : `<td class="driver-list-rate-cell">${displayRate != null ? `$${Number(displayRate).toLocaleString()}` : "—"}</td>`;
+      const ratingCell = `<td class="driver-list-rating-cell">${escapeHtml(d.rating || "—")}</td>`;
       return `
       <tr id="dl-${d.id}" class="${d.addedAt ? "is-new" : ""}">
         <td><button type="button" class="cell-link-btn" data-action="edit-driver" data-driver-id="${d.id}" title="Open driver profile">↗</button></td>
@@ -3566,8 +3580,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
         <td>${escapeHtml(d.dispatcherPhone || "—")}</td>
         <td>${escapeHtml(d.email)}</td>
         <td>${escapeHtml(d.email2 || "—")}</td>
-        <td>${escapeHtml(d.rating || "—")}</td>
-        <td>${displayRate != null ? `$${Number(displayRate).toLocaleString()}` : "—"}</td>
+        ${preferred ? rateCell + ratingCell : ratingCell + rateCell}
         <td>${escapeHtml(d.carrier || "—")}</td>
         <td>${escapeHtml(d.rateBooking || "—")}</td>
         <td><span class="badge ${d.tia ? "badge-yes" : "badge-no"}">${d.tia ? "Yes" : "No"}</span></td>
@@ -5040,7 +5053,16 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     return [...KNOWN_DRIVER_CLASSES, ...extras];
   }
 
+  let rateTextMode = false;
+  let rateTextRatings = new Set();
+  let rateTextRefresh = 0;
+  let rateTextEligible = [];
+
   function openTextGroupModal() {
+    rateTextMode = false;
+    rateTextRefresh++;
+    $("#tg-rate-wrap")?.classList.add("hidden");
+    $("#tg-group-tabs-wrap")?.classList.remove("hidden");
     const modal = $("#modal-text-group");
     if (!modal) return;
     groupTextState = null;
@@ -5073,6 +5095,57 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     $("#tg-progress-step").classList.add("hidden");
     $("#tg-error").classList.add("hidden");
     modal.classList.remove("hidden");
+  }
+
+  function openRateTextGroupModal() {
+    openTextGroupModal();
+    rateTextMode = true;
+    $("#tg-group-tabs-wrap").classList.add("hidden");
+    $("#tg-rate-wrap").classList.remove("hidden");
+    const options = rateOptions(driversForLocation("preferred"));
+    $("#tg-rate-select").innerHTML = '<option value="">Choose a rate…</option>' + options.map(rate => `<option value="${rate}">$${rate.toLocaleString()}</option>`).join("");
+    rateTextRatings = new Set();
+    $("#tg-rate-ratings").innerHTML = "";
+    $("#tg-rate-count-note").textContent = options.length ? "Choose a rate to see the rating groups." : "Enter rates on Preferred Drivers first.";
+    // This new opener shares the existing Send Now/batch controls.
+    $("#tg-send-now").classList.remove("hidden");
+    $("#tg-send-now").disabled = false;
+    for (const id of ["tg-open-web", "tg-open-batch", "tg-confirm-sent", "tg-finish"]) $("#" + id).classList.add("hidden");
+  }
+
+  async function refreshRateTextRatings(resetSelection = false) {
+    if (!rateTextMode) return;
+    const generation = ++rateTextRefresh;
+    const rate = $("#tg-rate-select").value;
+    const wrap = $("#tg-rate-ratings");
+    const note = $("#tg-rate-count-note");
+    wrap.innerHTML = "";
+    if (resetSelection) rateTextRatings = new Set(ratingGroups(rateMembers(driversForLocation("preferred"), rate), driverClassification).map(([rating]) => rating));
+    rateTextEligible = [];
+    if (rate === "") { note.textContent = "Choose a rate to see the rating groups."; return; }
+    note.textContent = "Checking eligible drivers…";
+    try {
+      let members = rateMembers(driversForLocation("preferred"), rate);
+      members = filterNeverTextRecipients(applyPhoneMode(members)).allowed.filter(d => !!formatTextAddress(d.phone));
+      if ($("#tg-exclude-scheduled").checked) {
+        const day = $("#tg-day").value;
+        if (!day) throw Error("Choose the day you're trying to fill.");
+        const scheduled = await scheduledDriversOn(day);
+        members = members.filter(d => !driverIsScheduled(d, scheduled));
+      }
+      if (!rateTextMode || generation !== rateTextRefresh) return;
+      rateTextEligible = members;
+      renderRateTextRatings();
+    } catch (e) {
+      if (generation === rateTextRefresh) note.textContent = `Couldn't check eligible drivers: ${e.message}`;
+    }
+  }
+
+  function renderRateTextRatings() {
+    const groups = ratingGroups(rateTextEligible, driverClassification);
+    $("#tg-rate-ratings").innerHTML = groups.map(([rating, count]) => `<button type="button" class="btn btn-ghost rate-rating-toggle" data-rate-rating="${escapeHtml(rating)}" aria-pressed="${rateTextRatings.has(rating)}">${escapeHtml(rating)}- ${count}</button>`).join("");
+    const count = selectedRateMembers(rateTextEligible, rateTextRatings, driverClassification).length;
+    $("#tg-rate-count-note").textContent = groups.length ? `${count} eligible drivers selected. DNU drivers are excluded; shared phone numbers receive one text.` : "No eligible drivers at this rate with these options.";
   }
 
   // Shared by both Text Group flows (driver-list group texting and the
@@ -5209,7 +5282,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   }
 
   async function startGroupTexting() {
-    const groupKey = ($("#tg-group-select") || {}).value || "";
+    const groupKey = rateTextMode ? "RATE" : ($("#tg-group-select") || {}).value || "";
     const message = $("#tg-message").value.trim();
     const errEl = $("#tg-error");
     if (!groupKey) { errEl.textContent = "Pick who to text first."; errEl.classList.remove("hidden"); return; }
@@ -5221,6 +5294,14 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       ? pool
       : pool.filter((d) => groupKey === "DNU" ? isNeverTextDriver(d) : driverClassification(d) === groupKey);
     let label = groupKey === "ALL" ? "All Drivers" : (groupKey === "DNU" ? "DNU" : `Rating ${groupKey}`);
+
+    if (rateTextMode) {
+      const rate = $("#tg-rate-select").value;
+      if (rate === "") { errEl.textContent = "Choose a rate first."; errEl.classList.remove("hidden"); return; }
+      members = selectedRateMembers(rateMembers(driversForLocation("preferred"), rate), rateTextRatings, driverClassification);
+      if (!members.length) { errEl.textContent = "Select at least one rating with eligible drivers."; errEl.classList.remove("hidden"); return; }
+      label = `$${Number(rate).toLocaleString()} — ${[...rateTextRatings].join(", ")}`;
+    }
 
     const excludeScheduledCheckbox = $("#tg-exclude-scheduled");
     const excludeScheduled = !!(excludeScheduledCheckbox && excludeScheduledCheckbox.checked);
@@ -8509,6 +8590,39 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     });
 
     if ($("#btn-text-group")) $("#btn-text-group").addEventListener("click", openTextGroupModal);
+    on("btn-text-by-rate", "click", openRateTextGroupModal);
+    on("tg-rate-select", "change", () => refreshRateTextRatings(true));
+    on("tg-rate-ratings", "click", e => {
+      const button = e.target.closest("[data-rate-rating]");
+      if (!button) return;
+      const rating = button.dataset.rateRating;
+      if (rateTextRatings.has(rating)) rateTextRatings.delete(rating); else rateTextRatings.add(rating);
+      renderRateTextRatings();
+    });
+    for (const id of ["tg-dispatch-mode", "tg-exclude-scheduled", "tg-day"]) on(id, "change", () => refreshRateTextRatings());
+    $("#driverlist-table-body").addEventListener("change", async e => {
+      const input = e.target.closest("[data-driver-rate]");
+      if (!input) return;
+      const driver = findDriver(input.dataset.driverRate);
+      if (!driver) return;
+      const before = driver.normalRate;
+      if (String(before ?? "") === input.value.trim()) return;
+      input.disabled = true;
+      try {
+        const saved = await savePreferredRate(supabaseClient, driver.id, input.value);
+        const current = findDriver(driver.id);
+        if (current) current.normalRate = saved.normal_rate == null ? "" : String(saved.normal_rate);
+        try {
+          const { error } = await supabaseClient.from(DRIVER_RATE_HISTORY_TABLE).insert({ driver_id: Number(driver.id), old_rate: before === "" || before == null ? null : Number(before), new_rate: saved.normal_rate, changed_by: currentUserLabel || "unknown user" });
+          if (error) console.error("Failed to log driver rate history:", error);
+        } catch (error) { console.error("Failed to log driver rate history:", error); }
+        setDriverSyncStatus("Driver rate saved.", "success");
+        renderDriverList();
+      } catch (error) {
+        input.value = before ?? "";
+        setDriverSyncStatus(`Couldn't save the rate (${error.message}).`, "error");
+      } finally { input.disabled = false; }
+    });
     on("tg-start", "click", startGroupTexting);
     on("tg-send-now", "click", groupSendNowPressed);
       on("tg-open-batch", "click", openCurrentGroupBatch);
