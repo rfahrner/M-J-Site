@@ -2986,7 +2986,8 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       if (!fresh) return;
       if (selectedDriverCell) { finishDriverCellSelection(fresh); return; }
       if (driverNameDraft !== null) fresh.value = driverNameDraft;
-      fresh.focus();
+      // Live redraws restore the editor without moving the dispatcher's viewport.
+      fresh.focus({ preventScroll: true });
       if (selStart != null && fresh.setSelectionRange) {
         try { fresh.setSelectionRange(selStart, selEnd); } catch (e) { /* not a text-selectable input type */ }
       }

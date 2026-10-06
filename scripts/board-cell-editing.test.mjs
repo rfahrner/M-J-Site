@@ -127,7 +127,16 @@ const restore = ctx.captureFocusForRerender();
 // A realtime redraw replaces the table's innerHTML: same markup, new nodes.
 document.querySelector('#board-table tbody').innerHTML =
   document.querySelector('#board-table tbody').innerHTML;
+const replacement = cell(T2, 'tripId');
+let scrollPosition = 480;
+const nativeFocus = replacement.focus.bind(replacement);
+replacement.focus = (options) => {
+  // Model the browser bringing an offscreen editor back into view.
+  if (!options?.preventScroll) scrollPosition = 0;
+  nativeFocus(options);
+};
 restore();
+check('live redraw does not scroll back to the focused editor', scrollPosition, 480);
 
 check('focus is on route 2 after the redraw', document.activeElement.dataset.trip, T2);
 check('focus is still the tripId column', document.activeElement.dataset.field, 'tripId');
@@ -137,7 +146,12 @@ shiftCell('driverName').focus();
 const restoreShift = ctx.captureFocusForRerender();
 document.querySelector('#board-table tbody').innerHTML =
   document.querySelector('#board-table tbody').innerHTML;
+const shiftReplacement = shiftCell('driverName');
+let shiftFocusOptions;
+const nativeShiftFocus = shiftReplacement.focus.bind(shiftReplacement);
+shiftReplacement.focus = (options) => { shiftFocusOptions = options; nativeShiftFocus(options); };
 restoreShift();
+check('shift-level editor restoration also prevents automatic scrolling', shiftFocusOptions?.preventScroll, true);
 check('a shift cell restores to a shift cell', document.activeElement.dataset.field, 'driverName');
 check('a shift cell does not restore into a route cell', !!document.activeElement.dataset.trip, false);
 
