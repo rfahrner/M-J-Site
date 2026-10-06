@@ -697,6 +697,45 @@ The Accounting page keeps its realtime subscription. That is how a push reaches
 a screen someone already has open -- delivery, not a second source of change.
 `scripts/accounting-push-model.test.mjs` pins all of it.
 
+## An analytics page may only name columns its VIEW has — filters included
+
+`analytics-data-compat.js` redirects five tables to five views on the analytics
+pages. Twice now a page has out-grown the view it actually reads, and PostgREST
+rejects the **whole request** over one unknown column, so the page gets nothing
+and draws zeros:
+
+- **2026-09-25** `analytics_shifts_all` — 0 drivers, 0 loads, 0 miles, 0 stops
+  beside $1,037,928.59 of revenue.
+- **2026-10-06** `analytics_accounting_all` — **$0.00 in every financial
+  column** for a week. The week on screen held ~$90,000 of Atlanta revenue
+  across 75 loads. Cause: `20260929180000_accounting_status_deleted.sql` added
+  `status='deleted'` and Location Analytics began filtering with
+  `.neq('status','deleted')`, but the view was never widened to carry `status`.
+
+`scripts/analytics-view-columns.test.mjs` exists to stop exactly this and let
+the second one through anyway, for three reasons now fixed. Keep all three:
+
+- **A filter names a column just as surely as a select does.** It only read
+  `.select()` lists. `.neq('status', …)` is equally fatal.
+- **Find every filter in the chain, not the first.** Matching
+  table-then-filter in one regex stops at `.eq('location')`, and `.neq('status')`
+  two lines later is never seen. Take the window after the table, then scan it.
+  The window must stop at the next `_TABLE`, or a shifts query inherits the
+  blame for the trips query that follows it.
+- **Check every view in the compat map, by reading the map.** It checked only
+  `analytics_shifts_all`, the one that broke first. The next outage came
+  through a different view.
+
+**A view in the compat map belongs in `supabase/migrations/`.** Three of the
+five lived only in the live database, so the test could not read them and could
+not protect them; `20261006171000` records them verbatim (a no-op to apply).
+A view this repo cannot read is a view this repo cannot guard.
+
+Worth remembering why this survives so long in production: a failed query and a
+quiet week look identical on these pages. That is also why
+`fetchAllRows()` reports the failure in a banner rather than letting it draw as
+zero — do not let anything here swallow an error and render a number.
+
 ## Analytics recaps and driver counts
 
 Location Analytics and Volume add the daily driver counts for weekly, period,
