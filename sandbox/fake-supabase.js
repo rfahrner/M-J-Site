@@ -43,6 +43,13 @@
       on: (_evt, filter, cb) => { handlers.push({ filter: filter || {}, cb: cb || filter }); return ch; },
       subscribe: (cb) => { if (typeof cb === 'function') cb('SUBSCRIBED'); return ch; },
       unsubscribe: () => {},
+      // The board broadcasts presence/typing over the channel; without this
+      // every realtime redraw threw "boardChannel.send is not a function"
+      // and the handler aborted before the part under test.
+      send: async () => ({ status: 'ok' }),
+      track: async () => ({ status: 'ok' }),
+      untrack: async () => ({ status: 'ok' }),
+      presenceState: () => ({}),
     };
     return ch;
   };
