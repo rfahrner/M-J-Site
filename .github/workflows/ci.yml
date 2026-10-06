@@ -114,6 +114,9 @@ jobs:
       - name: Test analytics arithmetic and weekly recap grouping
         run: node scripts/analytics-weekly-totals.test.mjs
 
+      - name: Test generated reports include daily and weekly figures
+        run: node scripts/analytics-report-breakdown.test.mjs
+
       - name: Test analytics pages only select columns their view has
         run: node scripts/analytics-view-columns.test.mjs
 
