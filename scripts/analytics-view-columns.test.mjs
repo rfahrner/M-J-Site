@@ -40,25 +40,31 @@ function check(label, actual, expected) {
 // Read from the newest migration that redefines it, so the test tracks the
 // schema rather than a copy of it that can rot.
 const migDir = new URL('supabase/migrations/', root);
-const migration = readdirSync(migDir)
+const MIGRATIONS = readdirSync(migDir)
   .filter((f) => f.endsWith('.sql'))
   .sort()
   .reverse()
-  .map((f) => readFileSync(new URL(f, migDir), 'utf8'))
-  .find((sql) => /create or replace view public\.analytics_shifts_all/i.test(sql));
-if (!migration) throw new Error('no migration defines analytics_shifts_all');
+  .map((f) => readFileSync(new URL(f, migDir), 'utf8'));
 
-// Only the first UNION branch -- both branches must agree on output names, and
-// Postgres takes the names from the first.
-const body = /create or replace view public\.analytics_shifts_all as([\s\S]*?)union all/i.exec(migration)[1];
-const viewCols = new Set(
-  body.slice(body.toLowerCase().indexOf('select') + 6, body.toLowerCase().lastIndexOf('from'))
-    .split(',')
-    .map((c) => c.trim())
-    // "h.driver_name_snapshot as driver_name_text" -> driver_name_text
-    .map((c) => (/\sas\s+(\w+)\s*$/i.exec(c) || [])[1] || c.split('.').pop())
-    .filter(Boolean)
-);
+function columnsOf(viewName) {
+  const re = new RegExp(`create or replace view public\\.${viewName}\\b`, 'i');
+  const migration = MIGRATIONS.find((sql) => re.test(sql));
+  if (!migration) throw new Error(`no migration defines ${viewName}`);
+  // Only the first UNION branch -- both branches must agree on output names,
+  // and Postgres takes the names from the first.
+  const bodyRe = new RegExp(`create or replace view public\\.${viewName} as([\\s\\S]*?)union all`, 'i');
+  const body = bodyRe.exec(migration)[1];
+  return new Set(
+    body.slice(body.toLowerCase().indexOf('select') + 6, body.toLowerCase().lastIndexOf('from'))
+      .split(',')
+      .map((c) => c.trim())
+      // "h.driver_name_snapshot as driver_name_text" -> driver_name_text
+      .map((c) => (/\sas\s+(\w+)\s*$/i.exec(c) || [])[1] || c.split('.').pop())
+      .filter(Boolean)
+  );
+}
+
+const viewCols = columnsOf('analytics_shifts_all');
 
 console.log('\n1. the view exposes what the countDrivers() rules need');
 // These two are the ones that were missing. Named individually so a failure
@@ -86,6 +92,72 @@ for (const page of PAGES) {
     check(`${page}: [${list}]`, missing.join(', ') || 'none missing', 'none missing');
   }
 }
+
+console.log('\n2b. a FILTER column counts too -- PostgREST rejects on those as well');
+/*
+ * This is the hole the Location Analytics financial outage went through on
+ * 2026-10-06. Section 2 above only reads .select() lists. But
+ * .neq('status','deleted') names a column just as surely, and PostgREST
+ * rejects the whole request over it the same way -- so every financial column
+ * on the page rendered $0.00 for a week while the database held ~$90k of
+ * revenue for the week on screen.
+ *
+ * Any method that names a column is checked, not just select.
+ */
+const FILTER_METHODS = 'eq|neq|gt|gte|lt|lte|is|in|like|ilike|contains|order';
+const ACCOUNTING_COLS = columnsOf('analytics_accounting_all');
+const VIEW_FOR_TABLE = {
+  SHIFTS_TABLE: viewCols,
+  TRIPS_TABLE: columnsOf('analytics_trips_all'),
+  ACCOUNTING_TABLE: ACCOUNTING_COLS,
+};
+
+for (const page of PAGES) {
+  const src = read(page);
+  for (const [tableConst, cols] of Object.entries(VIEW_FOR_TABLE)) {
+    // Take the WINDOW after each mention of this table, then find every filter
+    // inside it. Matching table-then-filter in one regex finds only the FIRST
+    // filter of each chain -- which on Location Analytics is .eq('location'),
+    // so .neq('status') two lines later went unseen and this test passed
+    // straight through the outage it is named for.
+    //
+    // The window stops at the next _TABLE constant: these pages fetch shifts
+    // and then immediately fetch their trips, so a window that runs on reads
+    // `.in('shift_id', ...)` off the trips query and blames it on shifts.
+    const named = new Set();
+    const at = new RegExp(tableConst, 'g');
+    for (const m of src.matchAll(at)) {
+      let window = src.slice(m.index + tableConst.length, m.index + tableConst.length + 600);
+      const nextTable = window.search(/_TABLE/);
+      if (nextTable !== -1) window = window.slice(0, nextTable);
+      const f = new RegExp(`\\.(?:${FILTER_METHODS})\\(\\s*'([a-z_]+)'`, 'g');
+      for (const fm of window.matchAll(f)) named.add(fm[1]);
+    }
+    const missing = [...named].filter((c) => !cols.has(c));
+    check(`${page}: filters on ${tableConst} [${[...named].join(', ') || 'none'}]`,
+      missing.join(', ') || 'none missing', 'none missing');
+  }
+}
+
+console.log('\n2c. every view the compat layer redirects to is checked by name');
+/*
+ * The 2026-09-25 outage was analytics_shifts_all. The 2026-10-06 one was
+ * analytics_accounting_all -- a DIFFERENT view, one this test did not look at.
+ * Checking only the view that broke last time is how the same bug arrives
+ * through the next one along, so the mapping itself is the list.
+ */
+const MAPPED = [...read('analytics-data-compat.js')
+  .matchAll(/(\w+):\s*'(analytics_\w+)'/g)].map((m) => ({ table: m[1], view: m[2] }));
+check('the compat layer still maps tables to views', MAPPED.length > 0, true);
+for (const { table, view } of MAPPED) {
+  let known = true;
+  try { columnsOf(view); } catch (e) { known = false; }
+  check(`${view} (for ${table}) is defined by a migration in the repo`, known, true,
+    'a view with no migration cannot be checked, so a page can out-grow it unnoticed');
+}
+
+check('analytics_accounting_all carries status, the column the outage needed',
+  ACCOUNTING_COLS.has('status'), true);
 
 console.log('\n3. the compat layer is still what makes this matter');
 // If the redirect ever goes away the pages read the base table, which has
