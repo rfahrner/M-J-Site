@@ -20,6 +20,13 @@ import { initAccountingLoadSearch } from './accounting-load-search.js';
 const MONDELEZ_TABLE = "mondelez_loads";
 const pendingAccountingChecks = new Set();
 
+// Why a release refused, keyed by accounting id. The status line lives above
+// the table; by the time an operator is clicking Released on row 900 it is
+// hundreds of rows off screen, so "it just won't check" was the whole of the
+// feedback. The marker renders in the cell that was clicked and clears on the
+// next attempt.
+const accountingReleaseErrors = new Map();
+
 async function saveAccountingCheckbox(rec, patch, label) {
   const key = String(rec.id);
   if (pendingAccountingChecks.has(key)) return;
@@ -724,7 +731,7 @@ function accountingNoteButton(rec) {
       </td>${showFsc ? `<td>${fmtMoney(rec.fsc_payment)}</td>` : ""}`}
       <td><select class="cell-input" data-action="acct-day-type" data-id="${rec.id}">${dayTypeOptions}</select></td>
       <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-sent" data-id="${rec.id}" ${pendingAccountingChecks.has(String(rec.id)) ? "disabled" : ""} ${rec.sent ? "checked" : ""} title="Sent"></td>
-      <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-released" data-id="${rec.id}" ${pendingAccountingChecks.has(String(rec.id)) ? "disabled" : ""} ${rec.status === "released" ? "checked" : ""} title="Released"></td>
+      <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-released" data-id="${rec.id}" ${pendingAccountingChecks.has(String(rec.id)) ? "disabled" : ""} ${rec.status === "released" ? "checked" : ""} title="Released">${accountingReleaseErrors.has(String(rec.id)) ? `<span class="acct-release-error" title="${escapeHtml(accountingReleaseErrors.get(String(rec.id)))}">!</span>` : ""}</td>
       <td style="text-align:center;"><input type="checkbox" class="chk" data-action="acct-highlighted" data-id="${rec.id}" ${pendingAccountingChecks.has(String(rec.id)) ? "disabled" : ""} ${rec.highlighted ? "checked" : ""} title="Highlight row" aria-label="Highlight row"></td>
     </tr>`;
   }
@@ -1024,6 +1031,7 @@ export function renderDriverStatsTable() {
           // Releasing is the hand-off: Accounting's numbers become the
           // authoritative payload and go out to Aljex.
           if (pendingAccountingChecks.has(String(rec.id))) return;
+          accountingReleaseErrors.delete(String(rec.id));
           pendingAccountingChecks.add(String(rec.id));
           renderAccountingTable();
           setDriverSyncStatus("Releasing to Aljex…", "");
@@ -1043,6 +1051,7 @@ export function renderDriverStatsTable() {
             })
             .catch((err) => {
               t.checked = false;
+              accountingReleaseErrors.set(String(rec.id), `Couldn't release: ${err.message || err}`);
               setDriverSyncStatus(`Couldn't release to Aljex: ${err.message || err}`, "error");
             })
             .finally(() => { pendingAccountingChecks.delete(String(rec.id)); renderAccountingTable(); });

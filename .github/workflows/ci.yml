@@ -90,6 +90,9 @@ jobs:
       - name: Test accounting checkbox persistence
         run: node --test scripts/accounting-save.test.mjs scripts/accounting-note-icon.test.mjs
 
+      - name: Test Released works on boards with no loads_shifts row
+        run: node --test scripts/release-without-a-board-shift.test.mjs
+
       - name: Test every board redraws when the driver pool lands
         run: node scripts/drivers-loaded-redraw.test.mjs
 

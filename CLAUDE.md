@@ -367,6 +367,44 @@ carry both as `data-acct-route-number` / `data-acct-source-trip`;
 them. Matching on the text is a last-resort fallback for rows old enough to
 predate `route_number`, and only when the name is unambiguous.
 
+## Released has to work on boards with no `loads_shifts` row
+
+`releaseToAljex()` opened with `if (!acct.source_shift_id) throw`. Atlanta,
+Delaware and Building C satisfy that. **Houston and Mondelez never can** --
+their loads live in `loads_houston` and `mondelez_loads`, and their accounting
+rows link through `source_houston_id` / `source_mondelez_id`. Every release
+from either board threw, the `.catch` unchecked the box, and the reason went
+to `#driver-sync-status`, which sits above a table the operator had scrolled
+hundreds of rows past. It was reported as "I click it but it will not check".
+1,394 Mondelez and 185 Houston accounting rows; zero releases between them,
+ever.
+
+A release is `authority: "accounting"` **by definition** -- under that
+authority `buildOrderPayload()` overwrites the shift's customer and carrier
+rates with the accounting figures anyway -- so a shift-less load assembles
+from the accounting row and its `loads_accounting_routes`
+(`buildAccountingOnlyPayload()`), and only TONU / called off / shift complete
+are read off the board row. That read is allowed to fail: those flags are not
+billed, and a release must not die because one extra query did.
+
+- Mondelez has **no** `loads_accounting_routes` rows at all and Houston's
+  carry no `route_id`, so `refs` is legitimately empty on both. The payload is
+  sendable on its order number and its money. If `isSendable()` is ever
+  tightened to require refs, both boards silently stop releasing again.
+- `aljex_outbox.shift_id` is nullable and must stay that way. Inventing a
+  shift id would make `drainOutbox()` stamp sync state onto somebody else's
+  load.
+- There is exactly **one** `.from(OUTBOX_TABLE).insert(` in the file
+  (`insertOutboxRow()`). Both release paths and the board's live updates go
+  through it, so the supersede rule cannot be true on one and forgotten on the
+  other.
+- A refused release now records why in `accountingReleaseErrors` and draws a
+  red `!` in the Released cell that was clicked. Everything about this bug was
+  invisible: keep the feedback where the click was.
+
+`scripts/release-without-a-board-shift.test.mjs` drives the real
+`releaseToAljex()` against a fake PostgREST.
+
 ## Right-click menus live per page, not globally
 
 Right-clicking a Trip ID pill on Accounting copies it

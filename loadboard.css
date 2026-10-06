@@ -895,6 +895,24 @@ tr.is-new td.pin { background-color: rgba(192,54,44,0.22) !important; }
 }
 .acct-push-sticky:hover { background: #ffd966; }
 
+/* A release that refused, marked on the checkbox the operator clicked --
+   the status line above the table is off screen by row 900. */
+.acct-release-error {
+  display: inline-block;
+  margin-left: 4px;
+  width: 14px;
+  height: 14px;
+  line-height: 14px;
+  border-radius: 50%;
+  background: #c0392b;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+  cursor: help;
+  vertical-align: middle;
+}
+
 /* ---------------- Accounting: find a load ----------------
    The sheet is one location on one day; this reaches any load in the
    database by Trip ID, Route ID, Load # or PRO #. Results sit in flow under

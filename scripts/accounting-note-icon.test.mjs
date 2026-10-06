@@ -46,7 +46,7 @@ test('rendered accounting driver cell contains the blank or yellow Notes shortcu
   acctDriverCell:()=>'',acctCarrierPayWarningHtml:()=>'',
   escapeHtml:value=>String(value ?? ''),acctMilesStopsHtml:()=>({miles:'10',stops:'1'}),
   acctPushStickyHtml:()=>'<span data-existing-push-note>Existing push note</span>',
-  accountingNoteButton:f.button,acctRouteIdsHtml:()=>'',acctRoutesChipsHtml:()=>'',fmtMoney:()=>'',pendingAccountingChecks:new Set()
+  accountingNoteButton:f.button,acctRouteIdsHtml:()=>'',acctRoutesChipsHtml:()=>'',fmtMoney:()=>'',pendingAccountingChecks:new Set(),accountingReleaseErrors:new Map()
  });
  const fn=source.match(/function accountingRowHtml\(rec\) \{[\s\S]*?\n  \}/);
  assert.ok(fn);vm.runInContext(fn[0],ctx);
