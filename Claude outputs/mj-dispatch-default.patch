@@ -1,0 +1,372 @@
+From 6e4bf80087438192cbfb0a03d382e60db44e355c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 6 Oct 2026 15:24:27 +0000
+Subject: [PATCH] Dispatch mode on for blasts, and it reaches the drivers
+ without a dispatcher
+
+Three corrections on top of #207, which merged an earlier draft of the same
+work.
+
+1. "Text dispatch where applicable" now defaults ON for the Text a Group
+   modal, and stays OFF for the board's "text selected loads" -- the second is
+   a message about a load someone is already running, not a solicitation. Each
+   opener sets it; the markup carries no `checked` attribute, because the two
+   openers disagree on purpose and a markup default could only be wrong for
+   one of them.
+
+2. A member with no dispatcher number falls back to their own cell again
+   rather than being skipped. #207 skipped them, which reads as the safer
+   choice until the numbers are counted: a THIRD of every pool has no
+   dispatcher number on file -- 204 of 538 preferred, 999 of 3,128 Atlanta,
+   107 of 202 Mondelez. With dispatch mode now on by default, skipping would
+   have quietly cut a third of the drivers out of every blast. Reaching them
+   matters more than the channel.
+
+   The fallback is flagged rather than hidden: applyPhoneMode() sets
+   directPhoneFallback and the progress panel names those drivers, because
+   this message is about to land on their personal phone and they are exactly
+   the list worth filling dispatcher numbers in for. The silence was the bug,
+   not the fallback.
+
+3. The Do not text checkbox moves above Driver cell and loses its
+   explanation -- just the box and the label.
+
+scripts/do-not-text-driver.test.mjs is updated to match and verified red
+against the default reverting to off and against the fallback being removed
+again. scripts/text-modal-layout.test.mjs pins the fourth note folding into
+the same Details summary rather than being emitted loose.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01G31nAipMUTYgpxUWm5ZDWp
+---
+ CLAUDE.md                           | 40 +++++++++++-------
+ driverlist.html                     |  8 ++--
+ loadboard.js                        | 65 ++++++++++++++++-------------
+ scripts/do-not-text-driver.test.mjs | 65 +++++++++++++++++++++--------
+ scripts/text-modal-layout.test.mjs  |  8 +++-
+ 5 files changed, 118 insertions(+), 68 deletions(-)
+
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 95bac8d..6507ec0 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -344,24 +344,32 @@ Two things it has to get right, both silent failures:
+ **everywhere**, including one-to-one. Do not migrate them onto the new flag --
+ that would quietly make them textable again.
+ 
+-## Dispatch mode drops, it does not fall back
++## Dispatch mode: on for blasts, off for loads in progress, never silent
+ 
+ "Text dispatch where applicable" addresses each member at their dispatcher's
+-number. A member with **no** dispatcher number on file is now left out and
+-counted, not quietly sent to their own cell. The old fallback meant the option
+-that exists to keep messages off a driver's personal phone could put one there,
+-and said nothing, so nobody knew whose dispatcher number was missing. They
+-arrive in `skipped` with `noDispatcherPhone`, and the progress panel reports
+-the two skip reasons separately -- no phone at all is a profile to fill in; no
+-dispatcher number is a deliberate drop.
+-
+-**The option defaults OFF, on purpose.** `0f6c842` ("Default board and alert
+-text actions to driver phone numbers") set it false on every modal open, but
+-the markup kept `checked` on the input -- so for three weeks the box read as on
+-and was off. That is why the incident above was reported as "I'm pretty sure
+-text dispatch number was checked": the driver had a dispatcher number on file
+-the whole time. The attribute is gone. If the default is ever meant to change,
+-change the script; do not put the attribute back on its own.
++number. **The Text a Group modal opens with it ON** and the board's "text
++selected loads" opens with it OFF -- the second is a message about a load
++someone is already running, not a solicitation. Each opener sets it, and the
++markup carries **no `checked` attribute**: `0f6c842` ("Default board and alert
++text actions to driver phone numbers") set it false in script while leaving
++`checked` on the input, so for three weeks the box read as on and was off.
++That is why the incident below was reported as "I'm pretty sure text dispatch
++number was checked" -- the driver had a dispatcher number on file the whole
++time. Now that the two openers disagree on purpose, a markup default could
++only ever be wrong for one of them. Do not reintroduce it.
++
++**A member with no dispatcher number falls back to their own cell.** Dropping
++them instead was built and reversed the same day (owner's ruling, 2026-10-06)
++once the numbers were counted: **a third of every pool has no dispatcher
++number on file** -- 204 of 538 preferred, 999 of 3,128 Atlanta, 107 of 202
++Mondelez. Skipping them would quietly cut a third of the drivers out of every
++blast, which is worse than reaching them on the wrong channel.
++
++The fallback is flagged, not hidden. `applyPhoneMode()` sets
++`directPhoneFallback` and the progress panel names those drivers: this message
++is about to land on their personal phone, and they are exactly the list worth
++filling dispatcher numbers in for. **The silence was the bug, not the
++fallback** -- if the flag or the note is ever removed, the bug is back.
+ 
+ ## Deleting a load vs. deleting a route
+ 
+diff --git a/driverlist.html b/driverlist.html
+index f7353eb..952bc61 100644
+--- a/driverlist.html
++++ b/driverlist.html
+@@ -93,6 +93,9 @@
+           <input type="text" id="ad-name">
+           <div class="field-error">Required.</div>
+         </div>
++        <div class="field">
++          <label><input type="checkbox" id="ad-do-not-text"> Do not text</label>
++        </div>
+         <div class="field">
+           <label for="ad-phone">Driver cell</label>
+           <input type="tel" id="ad-phone">
+@@ -159,11 +162,6 @@
+           <label for="ad-notes">Notes</label>
+           <textarea id="ad-notes"></textarea>
+         </div>
+-        <div class="field">
+-          <label><input type="checkbox" id="ad-do-not-text"> Do not text</label>
+-          <div class="subtext">Leaves this driver out of the Text a Group blasts. They can still be
+-            texted one at a time from a board row, an alert or the pre-shift prompt.</div>
+-        </div>
+         <div class="field">
+           <label>Trailer interchange agreement</label>
+           <div class="radio-row">
+diff --git a/loadboard.js b/loadboard.js
+index 85b135a..a7b61a8 100644
+--- a/loadboard.js
++++ b/loadboard.js
+@@ -4413,6 +4413,9 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+     groupTextState = null;
+     $("#tg-group-tabs-wrap").classList.add("hidden"); // no group to pick — the checkboxes already picked them
+     $("#tg-message").value = "";
++    // OFF here, deliberately: these drivers are already on a load that day, so
++    // this is a message about work in progress, not a solicitation. The group
++    // blast opens with it ON instead -- see openTextGroupModal.
+     const dispatchModeCheckbox = $("#tg-dispatch-mode");
+     if (dispatchModeCheckbox) dispatchModeCheckbox.checked = false;
+     $("#tg-setup-step").classList.remove("hidden");
+@@ -5319,8 +5322,12 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+     ratingTextRefresh++;
+     const msgEl = $("#tg-message");
+     if (msgEl) msgEl.value = "";
++    // ON for the blasts (owner's ruling, 2026-10-06): a recruiting message
++    // belongs with the dispatcher where there is one. Anyone without a
++    // dispatcher number still gets it on their own cell -- see applyPhoneMode
++    // -- and the count note says how many that is.
+     const dispatchModeCheckbox = $("#tg-dispatch-mode");
+-    if (dispatchModeCheckbox) dispatchModeCheckbox.checked = false;
++    if (dispatchModeCheckbox) dispatchModeCheckbox.checked = true;
+ 
+     // Both independent options default on whenever the modal opens.
+     // The exclusion date starts on the user's current local date.
+@@ -5598,20 +5605,26 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+    * "text selected rows"). With dispatch mode on, each member is addressed at
+    * their dispatcher's number.
+    *
+-   * A member with NO dispatcher number on file is DROPPED, not quietly sent to
+-   * their own cell. The old fallback meant "text dispatch" could still put a
+-   * message on a driver's personal phone, which is the one outcome the option
+-   * exists to prevent -- and it did it silently, so nobody knew which drivers
+-   * were missing a dispatcher number. They come back in `skipped` instead, and
+-   * the progress panel names the count.
++   * A member with NO dispatcher number on file falls back to their own cell.
++   * Dropping them instead was tried and reversed on the owner's ruling
++   * (2026-10-06): a THIRD of every pool has no dispatcher number on file --
++   * 204 of 538 preferred, 999 of 3,128 Atlanta, 107 of 202 Mondelez -- so
++   * skipping them would quietly cut a third of the drivers out of every blast.
++   * Reaching them matters more than the channel.
++   *
++   * The fallback is flagged, not hidden. `directPhoneFallback` is what the
++   * count note counts, so the dispatcher is told how many of this group will
++   * get the message on their personal phone rather than discovering it later.
++   * That visibility is the whole of the fix; the silence was the bug.
+    *
+    * De-duplication for shared dispatcher numbers happens downstream in
+    * beginTextBatchFlow, so this only has to pick the right number per member.
+    *
+-   * NOTE: dispatch mode defaults OFF. The markup used to carry `checked` while
+-   * 0f6c842 ("Default board and alert text actions to driver phone numbers")
+-   * turned it off in script on every open -- so the box read as on and was not.
+-   * The attribute is gone; do not put it back without changing the script too.
++   * The checkbox's state is set by whichever function OPENS the modal --
++   * openTextGroupModal() on, openTextSelectedModal() off -- and the markup
++   * deliberately carries no `checked` attribute. It used to, while the script
++   * set false on every open, so the box read as on and was off for three
++   * weeks. One source of truth; do not reintroduce the attribute.
+    */
+   function applyPhoneMode(members) {
+     const checkbox = $("#tg-dispatch-mode");
+@@ -5619,7 +5632,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+     if (!dispatchMode) return members;
+     return members.map((m) => {
+       const dispatchPhone = m.dispatcherPhone && String(m.dispatcherPhone).trim();
+-      if (!dispatchPhone) return { ...m, phone: "", noDispatcherPhone: true };
++      if (!dispatchPhone) return { ...m, directPhoneFallback: true };
+       return { ...m, name: `${m.name} (dispatch)`, phone: dispatchPhone };
+     });
+   }
+@@ -5640,12 +5653,9 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+     });
+ 
+     if (withPhone.length === 0) {
+-      const allMissingDispatcher = skipped.length && skipped.every((d) => d.noDispatcherPhone);
+       errEl.textContent = filtered.blocked.length
+         ? `No textable recipients remain in ${label}; every matching recipient is marked DNU.`
+-        : allMissingDispatcher
+-          ? `Nobody in ${label} has a dispatcher number on file. "Text dispatch where applicable" is on, so nobody was texted directly — add dispatcher numbers or untick that box.`
+-          : `No one in ${label} has a phone number on file.`;
++        : `No one in ${label} has a phone number on file.`;
+       errEl.classList.remove("hidden");
+       return;
+     }
+@@ -5872,18 +5882,17 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+     const s = groupTextState;
+     if (!s) return;
+     const isDone = s.batchIndex >= s.batches.length;
+-    // Two different reasons land in `skipped`, and they need different
+-    // answers: no phone at all is a profile to fill in, while no DISPATCHER
+-    // number with dispatch mode on is a deliberate drop (see applyPhoneMode)
+-    // and tells you exactly whose dispatcher number is missing.
+-    const noDispatcher = s.skipped.filter((d) => d.noDispatcherPhone);
+-    const noPhone = s.skipped.filter((d) => !d.noDispatcherPhone);
++    // With dispatch mode on, anyone without a dispatcher number on file is
++    // texted on their own cell (see applyPhoneMode). That is the chosen
++    // behaviour, but it must not be a surprise -- these are the drivers whose
++    // personal phone this message is about to land on, and the same list is
++    // the one worth filling dispatcher numbers in for.
++    const direct = s.batches.flat().filter((d) => d.directPhoneFallback);
++    const directNote = direct.length
++      ? `<div class="calc-note" style="margin-top:8px;">${direct.length} driver(s) have no dispatcher number on file and will be texted directly: ${escapeHtml(direct.map((d) => d.name).join(", "))}</div>`
++      : "";
+     const skipNote = s.skipped.length
+-      ? `<div class="calc-note" style="margin-top:8px;">${
+-          noPhone.length ? `${noPhone.length} driver(s) in this group have no phone on file and were skipped: ${escapeHtml(noPhone.map((d) => d.name).join(", "))}` : ""
+-        }${noPhone.length && noDispatcher.length ? "<br>" : ""}${
+-          noDispatcher.length ? `${noDispatcher.length} driver(s) have no dispatcher number on file and were left out rather than texted directly: ${escapeHtml(noDispatcher.map((d) => d.name).join(", "))}` : ""
+-        }</div>`
++      ? `<div class="calc-note" style="margin-top:8px;">${s.skipped.length} driver(s) in this group have no phone on file and were skipped: ${escapeHtml(s.skipped.map((d) => d.name).join(", "))}</div>`
+       : "";
+     const dedupedNote = s.deduped && s.deduped.length
+       ? `<div class="calc-note" style="margin-top:4px;">${s.deduped.length} driver(s) share a number with someone already in this batch, so only one text went to that number: ${escapeHtml(s.deduped.map((d) => d.name).join(", "))}</div>`
+@@ -5895,7 +5904,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+     // Three stacked yellow notes pushed the buttons off the bottom of a long
+     // batch. They are worth keeping -- who was skipped and why is exactly what
+     // gets asked afterwards -- so they fold into one summary that starts shut.
+-    const detailNotes = [skipNote, dedupedNote, blockedNote].filter(Boolean).join("");
++    const detailNotes = [directNote, skipNote, dedupedNote, blockedNote].filter(Boolean).join("");
+     const details = detailNotes
+       ? `<details class="text-modal-details"><summary>Details</summary>${detailNotes}</details>`
+       : "";
+diff --git a/scripts/do-not-text-driver.test.mjs b/scripts/do-not-text-driver.test.mjs
+index bdc6682..e42119d 100644
+--- a/scripts/do-not-text-driver.test.mjs
++++ b/scripts/do-not-text-driver.test.mjs
+@@ -115,8 +115,16 @@ test('a flagged driver is dropped from the blast that actually SENDS', async ()
+ 
+   assert.equal(batches.length, 1, 'a batch was started');
+   const phones = sent(batches).map((d) => String(d.phone).replace(/\D/g, ''));
+-  assert.ok(!phones.includes('6307709231'), 'the flagged number is not in the batch');
+-  assert.ok(phones.includes('7705550100'), 'the unflagged A driver still is');
++
++  // The modal opens with dispatch mode ON, so the unflagged driver arrives at
++  // his DISPATCHER's number, not his cell.
++  assert.ok(phones.includes('7705550200'), 'the unflagged A driver is in, via his dispatcher');
++
++  // The flagged driver is gone entirely -- neither his cell nor his
++  // dispatcher's number. Excluding the man and then texting his dispatcher
++  // about him would be the same blast by another route.
++  assert.ok(!phones.includes('6307709231'), 'the flagged cell is not in the batch');
++  assert.ok(!phones.includes('3096430963'), 'and neither is his dispatcher');
+ });
+ 
+ test('the flag follows the PHONE, so a duplicate profile cannot leak it', async () => {
+@@ -186,8 +194,8 @@ test('the one-to-one send path is untouched by the flag', () => {
+   assert.equal(/splitDoNotTextRecipients/.test(begin), false);
+ });
+ 
+-/* ---------------- dispatch mode drops, it does not fall back ------------- */
+-test('dispatch mode leaves out a driver with no dispatcher number instead of texting their cell', async () => {
++/* ---------------- dispatch mode falls back, and SAYS it did -------------- */
++test('dispatch mode falls back to the cell when there is no dispatcher number', async () => {
+   const { window, $ } = setup();
+   $('#tg-dispatch-mode').checked = true;
+ 
+@@ -198,26 +206,49 @@ test('dispatch mode leaves out a driver with no dispatcher number instead of tex
+ 
+   assert.equal(out[0].phone, '770-555-0200');
+   assert.match(out[0].name, /\(dispatch\)$/);
++  assert.equal(!!out[0].directPhoneFallback, false);
+ 
+-  // The one that matters: their own cell must NOT be the fallback.
+-  assert.equal(out[1].phone, '');
+-  assert.equal(out[1].noDispatcherPhone, true);
++  // Dropping these was tried and reversed: a third of every pool has no
++  // dispatcher number on file (204/538 preferred, 999/3128 Atlanta), so
++  // skipping them would cut a third of the drivers out of every blast.
++  assert.equal(out[1].phone, '770-555-0101', 'reached on their own cell');
+   assert.equal(out[1].name, 'No Dispatcher', 'not labelled as a dispatch send');
++
++  // But it is flagged, because a silent fallback is the original bug.
++  assert.equal(out[1].directPhoneFallback, true);
+ });
+ 
+-test('dispatch mode off still texts the driver directly -- that default is deliberate', async () => {
+-  const { window, $ } = setup();
+-  assert.equal($('#tg-dispatch-mode').checked, false, 'the modal opens with it off');
+-  const out = window.applyPhoneMode([{ name: 'D', phone: '770-555-0101', dispatcherPhone: '' }]);
+-  assert.equal(out[0].phone, '770-555-0101');
++test('the progress panel names who is getting it on their personal phone', () => {
++  const render = board.match(/function renderGroupTextProgress\([^]*?\n  \}/)[0];
++  assert.match(render, /directPhoneFallback/);
++  assert.match(render, /will be texted directly/);
++  // and it has to actually reach the rendered output, not just be computed
++  assert.match(render, /\[directNote, skipNote/);
++});
++
++test('the Text a Group modal opens with dispatch mode ON', async () => {
++  const { window, $, settle } = setup();
++  window.openModal();
++  await settle();
++  assert.equal($('#tg-dispatch-mode').checked, true);
++});
++
++test('the board\'s "text selected loads" still opens with it OFF', () => {
++  // Same modal, different mode: those drivers are already on a load that day,
++  // so it is a message about work in progress, not a solicitation.
++  const fn = board.match(/function openTextSelectedModal\([^]*?\n  \}/)[0];
++  assert.match(fn, /dispatchModeCheckbox\.checked = false/);
++
++  const group = board.match(/function openTextGroupModal\([^]*?\n  \}/)[0];
++  assert.match(group, /dispatchModeCheckbox\.checked = true/);
+ });
+ 
+-test('the markup no longer claims dispatch mode is on when the script turns it off', () => {
+-  // This exact mismatch is why the incident was reported as "I'm pretty sure
+-  // text dispatch number was checked": the attribute said checked, every
+-  // open set it to false.
++test('the markup carries no checked attribute -- the opener decides', () => {
++  // The attribute said checked while every open set it false, so for three
++  // weeks the box read as on and was off. Now that the two openers disagree
++  // with each other on purpose, a markup default could only be wrong for one
++  // of them.
+   assert.match(html, /id="tg-dispatch-mode"(?![^>]*\bchecked\b)/);
+-  assert.match(board, /dispatchModeCheckbox\.checked = false/);
+ });
+ 
+ /* ---------------- the flag has to survive a round trip ------------------- */
+diff --git a/scripts/text-modal-layout.test.mjs b/scripts/text-modal-layout.test.mjs
+index 34f1175..dffa4f2 100644
+--- a/scripts/text-modal-layout.test.mjs
++++ b/scripts/text-modal-layout.test.mjs
+@@ -79,8 +79,12 @@ for (const page of SEND_PAGES) {
+ console.log('\n3. the notes collapse into one summary that starts closed');
+ checkTrue('the render builds a <details>', /<details class="text-modal-details"><summary>Details<\/summary>/.test(SRC));
+ check('it is never rendered open', /text-modal-details"[^>]*\sopen/.test(SRC), false);
+-checkTrue('the three notes are what go inside',
+-  /const detailNotes = \[skipNote, dedupedNote, blockedNote\]\.filter\(Boolean\)/.test(SRC));
++// Four notes now: directNote joined them when dispatch mode started falling
++// back to a driver's own cell and had to SAY so. The rule being pinned is that
++// every note folds into the <details> and none is emitted loose -- add to the
++// list here when a fifth arrives, do not drop the check.
++checkTrue('every note goes inside the summary',
++  /const detailNotes = \[directNote, skipNote, dedupedNote, blockedNote\]\.filter\(Boolean\)/.test(SRC));
+ check('and they are no longer emitted loose above the buttons',
+   /\$\{skipNote\}\$\{dedupedNote\}\$\{blockedNote\}/.test(SRC), false);
+ 
+-- 
+2.43.0
+

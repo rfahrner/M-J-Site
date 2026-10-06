@@ -1,0 +1,1194 @@
+From 6e4bf80087438192cbfb0a03d382e60db44e355c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 6 Oct 2026 15:24:27 +0000
+Subject: [PATCH 1/3] Dispatch mode on for blasts, and it reaches the drivers
+ without a dispatcher
+
+Three corrections on top of #207, which merged an earlier draft of the same
+work.
+
+1. "Text dispatch where applicable" now defaults ON for the Text a Group
+   modal, and stays OFF for the board's "text selected loads" -- the second is
+   a message about a load someone is already running, not a solicitation. Each
+   opener sets it; the markup carries no `checked` attribute, because the two
+   openers disagree on purpose and a markup default could only be wrong for
+   one of them.
+
+2. A member with no dispatcher number falls back to their own cell again
+   rather than being skipped. #207 skipped them, which reads as the safer
+   choice until the numbers are counted: a THIRD of every pool has no
+   dispatcher number on file -- 204 of 538 preferred, 999 of 3,128 Atlanta,
+   107 of 202 Mondelez. With dispatch mode now on by default, skipping would
+   have quietly cut a third of the drivers out of every blast. Reaching them
+   matters more than the channel.
+
+   The fallback is flagged rather than hidden: applyPhoneMode() sets
+   directPhoneFallback and the progress panel names those drivers, because
+   this message is about to land on their personal phone and they are exactly
+   the list worth filling dispatcher numbers in for. The silence was the bug,
+   not the fallback.
+
+3. The Do not text checkbox moves above Driver cell and loses its
+   explanation -- just the box and the label.
+
+scripts/do-not-text-driver.test.mjs is updated to match and verified red
+against the default reverting to off and against the fallback being removed
+again. scripts/text-modal-layout.test.mjs pins the fourth note folding into
+the same Details summary rather than being emitted loose.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01G31nAipMUTYgpxUWm5ZDWp
+---
+ CLAUDE.md                           | 40 +++++++++++-------
+ driverlist.html                     |  8 ++--
+ loadboard.js                        | 65 ++++++++++++++++-------------
+ scripts/do-not-text-driver.test.mjs | 65 +++++++++++++++++++++--------
+ scripts/text-modal-layout.test.mjs  |  8 +++-
+ 5 files changed, 118 insertions(+), 68 deletions(-)
+
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 95bac8d..6507ec0 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -344,24 +344,32 @@ Two things it has to get right, both silent failures:
+ **everywhere**, including one-to-one. Do not migrate them onto the new flag --
+ that would quietly make them textable again.
+ 
+-## Dispatch mode drops, it does not fall back
++## Dispatch mode: on for blasts, off for loads in progress, never silent
+ 
+ "Text dispatch where applicable" addresses each member at their dispatcher's
+-number. A member with **no** dispatcher number on file is now left out and
+-counted, not quietly sent to their own cell. The old fallback meant the option
+-that exists to keep messages off a driver's personal phone could put one there,
+-and said nothing, so nobody knew whose dispatcher number was missing. They
+-arrive in `skipped` with `noDispatcherPhone`, and the progress panel reports
+-the two skip reasons separately -- no phone at all is a profile to fill in; no
+-dispatcher number is a deliberate drop.
+-
+-**The option defaults OFF, on purpose.** `0f6c842` ("Default board and alert
+-text actions to driver phone numbers") set it false on every modal open, but
+-the markup kept `checked` on the input -- so for three weeks the box read as on
+-and was off. That is why the incident above was reported as "I'm pretty sure
+-text dispatch number was checked": the driver had a dispatcher number on file
+-the whole time. The attribute is gone. If the default is ever meant to change,
+-change the script; do not put the attribute back on its own.
++number. **The Text a Group modal opens with it ON** and the board's "text
++selected loads" opens with it OFF -- the second is a message about a load
++someone is already running, not a solicitation. Each opener sets it, and the
++markup carries **no `checked` attribute**: `0f6c842` ("Default board and alert
++text actions to driver phone numbers") set it false in script while leaving
++`checked` on the input, so for three weeks the box read as on and was off.
++That is why the incident below was reported as "I'm pretty sure text dispatch
++number was checked" -- the driver had a dispatcher number on file the whole
++time. Now that the two openers disagree on purpose, a markup default could
++only ever be wrong for one of them. Do not reintroduce it.
++
++**A member with no dispatcher number falls back to their own cell.** Dropping
++them instead was built and reversed the same day (owner's ruling, 2026-10-06)
++once the numbers were counted: **a third of every pool has no dispatcher
++number on file** -- 204 of 538 preferred, 999 of 3,128 Atlanta, 107 of 202
++Mondelez. Skipping them would quietly cut a third of the drivers out of every
++blast, which is worse than reaching them on the wrong channel.
++
++The fallback is flagged, not hidden. `applyPhoneMode()` sets
++`directPhoneFallback` and the progress panel names those drivers: this message
++is about to land on their personal phone, and they are exactly the list worth
++filling dispatcher numbers in for. **The silence was the bug, not the
++fallback** -- if the flag or the note is ever removed, the bug is back.
+ 
+ ## Deleting a load vs. deleting a route
+ 
+diff --git a/driverlist.html b/driverlist.html
+index f7353eb..952bc61 100644
+--- a/driverlist.html
++++ b/driverlist.html
+@@ -93,6 +93,9 @@
+           <input type="text" id="ad-name">
+           <div class="field-error">Required.</div>
+         </div>
++        <div class="field">
++          <label><input type="checkbox" id="ad-do-not-text"> Do not text</label>
++        </div>
+         <div class="field">
+           <label for="ad-phone">Driver cell</label>
+           <input type="tel" id="ad-phone">
+@@ -159,11 +162,6 @@
+           <label for="ad-notes">Notes</label>
+           <textarea id="ad-notes"></textarea>
+         </div>
+-        <div class="field">
+-          <label><input type="checkbox" id="ad-do-not-text"> Do not text</label>
+-          <div class="subtext">Leaves this driver out of the Text a Group blasts. They can still be
+-            texted one at a time from a board row, an alert or the pre-shift prompt.</div>
+-        </div>
+         <div class="field">
+           <label>Trailer interchange agreement</label>
+           <div class="radio-row">
+diff --git a/loadboard.js b/loadboard.js
+index 85b135a..a7b61a8 100644
+--- a/loadboard.js
++++ b/loadboard.js
+@@ -4413,6 +4413,9 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+     groupTextState = null;
+     $("#tg-group-tabs-wrap").classList.add("hidden"); // no group to pick — the checkboxes already picked them
+     $("#tg-message").value = "";
++    // OFF here, deliberately: these drivers are already on a load that day, so
++    // this is a message about work in progress, not a solicitation. The group
++    // blast opens with it ON instead -- see openTextGroupModal.
+     const dispatchModeCheckbox = $("#tg-dispatch-mode");
+     if (dispatchModeCheckbox) dispatchModeCheckbox.checked = false;
+     $("#tg-setup-step").classList.remove("hidden");
+@@ -5319,8 +5322,12 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+     ratingTextRefresh++;
+     const msgEl = $("#tg-message");
+     if (msgEl) msgEl.value = "";
++    // ON for the blasts (owner's ruling, 2026-10-06): a recruiting message
++    // belongs with the dispatcher where there is one. Anyone without a
++    // dispatcher number still gets it on their own cell -- see applyPhoneMode
++    // -- and the count note says how many that is.
+     const dispatchModeCheckbox = $("#tg-dispatch-mode");
+-    if (dispatchModeCheckbox) dispatchModeCheckbox.checked = false;
++    if (dispatchModeCheckbox) dispatchModeCheckbox.checked = true;
+ 
+     // Both independent options default on whenever the modal opens.
+     // The exclusion date starts on the user's current local date.
+@@ -5598,20 +5605,26 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+    * "text selected rows"). With dispatch mode on, each member is addressed at
+    * their dispatcher's number.
+    *
+-   * A member with NO dispatcher number on file is DROPPED, not quietly sent to
+-   * their own cell. The old fallback meant "text dispatch" could still put a
+-   * message on a driver's personal phone, which is the one outcome the option
+-   * exists to prevent -- and it did it silently, so nobody knew which drivers
+-   * were missing a dispatcher number. They come back in `skipped` instead, and
+-   * the progress panel names the count.
++   * A member with NO dispatcher number on file falls back to their own cell.
++   * Dropping them instead was tried and reversed on the owner's ruling
++   * (2026-10-06): a THIRD of every pool has no dispatcher number on file --
++   * 204 of 538 preferred, 999 of 3,128 Atlanta, 107 of 202 Mondelez -- so
++   * skipping them would quietly cut a third of the drivers out of every blast.
++   * Reaching them matters more than the channel.
++   *
++   * The fallback is flagged, not hidden. `directPhoneFallback` is what the
++   * count note counts, so the dispatcher is told how many of this group will
++   * get the message on their personal phone rather than discovering it later.
++   * That visibility is the whole of the fix; the silence was the bug.
+    *
+    * De-duplication for shared dispatcher numbers happens downstream in
+    * beginTextBatchFlow, so this only has to pick the right number per member.
+    *
+-   * NOTE: dispatch mode defaults OFF. The markup used to carry `checked` while
+-   * 0f6c842 ("Default board and alert text actions to driver phone numbers")
+-   * turned it off in script on every open -- so the box read as on and was not.
+-   * The attribute is gone; do not put it back without changing the script too.
++   * The checkbox's state is set by whichever function OPENS the modal --
++   * openTextGroupModal() on, openTextSelectedModal() off -- and the markup
++   * deliberately carries no `checked` attribute. It used to, while the script
++   * set false on every open, so the box read as on and was off for three
++   * weeks. One source of truth; do not reintroduce the attribute.
+    */
+   function applyPhoneMode(members) {
+     const checkbox = $("#tg-dispatch-mode");
+@@ -5619,7 +5632,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+     if (!dispatchMode) return members;
+     return members.map((m) => {
+       const dispatchPhone = m.dispatcherPhone && String(m.dispatcherPhone).trim();
+-      if (!dispatchPhone) return { ...m, phone: "", noDispatcherPhone: true };
++      if (!dispatchPhone) return { ...m, directPhoneFallback: true };
+       return { ...m, name: `${m.name} (dispatch)`, phone: dispatchPhone };
+     });
+   }
+@@ -5640,12 +5653,9 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+     });
+ 
+     if (withPhone.length === 0) {
+-      const allMissingDispatcher = skipped.length && skipped.every((d) => d.noDispatcherPhone);
+       errEl.textContent = filtered.blocked.length
+         ? `No textable recipients remain in ${label}; every matching recipient is marked DNU.`
+-        : allMissingDispatcher
+-          ? `Nobody in ${label} has a dispatcher number on file. "Text dispatch where applicable" is on, so nobody was texted directly — add dispatcher numbers or untick that box.`
+-          : `No one in ${label} has a phone number on file.`;
++        : `No one in ${label} has a phone number on file.`;
+       errEl.classList.remove("hidden");
+       return;
+     }
+@@ -5872,18 +5882,17 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+     const s = groupTextState;
+     if (!s) return;
+     const isDone = s.batchIndex >= s.batches.length;
+-    // Two different reasons land in `skipped`, and they need different
+-    // answers: no phone at all is a profile to fill in, while no DISPATCHER
+-    // number with dispatch mode on is a deliberate drop (see applyPhoneMode)
+-    // and tells you exactly whose dispatcher number is missing.
+-    const noDispatcher = s.skipped.filter((d) => d.noDispatcherPhone);
+-    const noPhone = s.skipped.filter((d) => !d.noDispatcherPhone);
++    // With dispatch mode on, anyone without a dispatcher number on file is
++    // texted on their own cell (see applyPhoneMode). That is the chosen
++    // behaviour, but it must not be a surprise -- these are the drivers whose
++    // personal phone this message is about to land on, and the same list is
++    // the one worth filling dispatcher numbers in for.
++    const direct = s.batches.flat().filter((d) => d.directPhoneFallback);
++    const directNote = direct.length
++      ? `<div class="calc-note" style="margin-top:8px;">${direct.length} driver(s) have no dispatcher number on file and will be texted directly: ${escapeHtml(direct.map((d) => d.name).join(", "))}</div>`
++      : "";
+     const skipNote = s.skipped.length
+-      ? `<div class="calc-note" style="margin-top:8px;">${
+-          noPhone.length ? `${noPhone.length} driver(s) in this group have no phone on file and were skipped: ${escapeHtml(noPhone.map((d) => d.name).join(", "))}` : ""
+-        }${noPhone.length && noDispatcher.length ? "<br>" : ""}${
+-          noDispatcher.length ? `${noDispatcher.length} driver(s) have no dispatcher number on file and were left out rather than texted directly: ${escapeHtml(noDispatcher.map((d) => d.name).join(", "))}` : ""
+-        }</div>`
++      ? `<div class="calc-note" style="margin-top:8px;">${s.skipped.length} driver(s) in this group have no phone on file and were skipped: ${escapeHtml(s.skipped.map((d) => d.name).join(", "))}</div>`
+       : "";
+     const dedupedNote = s.deduped && s.deduped.length
+       ? `<div class="calc-note" style="margin-top:4px;">${s.deduped.length} driver(s) share a number with someone already in this batch, so only one text went to that number: ${escapeHtml(s.deduped.map((d) => d.name).join(", "))}</div>`
+@@ -5895,7 +5904,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+     // Three stacked yellow notes pushed the buttons off the bottom of a long
+     // batch. They are worth keeping -- who was skipped and why is exactly what
+     // gets asked afterwards -- so they fold into one summary that starts shut.
+-    const detailNotes = [skipNote, dedupedNote, blockedNote].filter(Boolean).join("");
++    const detailNotes = [directNote, skipNote, dedupedNote, blockedNote].filter(Boolean).join("");
+     const details = detailNotes
+       ? `<details class="text-modal-details"><summary>Details</summary>${detailNotes}</details>`
+       : "";
+diff --git a/scripts/do-not-text-driver.test.mjs b/scripts/do-not-text-driver.test.mjs
+index bdc6682..e42119d 100644
+--- a/scripts/do-not-text-driver.test.mjs
++++ b/scripts/do-not-text-driver.test.mjs
+@@ -115,8 +115,16 @@ test('a flagged driver is dropped from the blast that actually SENDS', async ()
+ 
+   assert.equal(batches.length, 1, 'a batch was started');
+   const phones = sent(batches).map((d) => String(d.phone).replace(/\D/g, ''));
+-  assert.ok(!phones.includes('6307709231'), 'the flagged number is not in the batch');
+-  assert.ok(phones.includes('7705550100'), 'the unflagged A driver still is');
++
++  // The modal opens with dispatch mode ON, so the unflagged driver arrives at
++  // his DISPATCHER's number, not his cell.
++  assert.ok(phones.includes('7705550200'), 'the unflagged A driver is in, via his dispatcher');
++
++  // The flagged driver is gone entirely -- neither his cell nor his
++  // dispatcher's number. Excluding the man and then texting his dispatcher
++  // about him would be the same blast by another route.
++  assert.ok(!phones.includes('6307709231'), 'the flagged cell is not in the batch');
++  assert.ok(!phones.includes('3096430963'), 'and neither is his dispatcher');
+ });
+ 
+ test('the flag follows the PHONE, so a duplicate profile cannot leak it', async () => {
+@@ -186,8 +194,8 @@ test('the one-to-one send path is untouched by the flag', () => {
+   assert.equal(/splitDoNotTextRecipients/.test(begin), false);
+ });
+ 
+-/* ---------------- dispatch mode drops, it does not fall back ------------- */
+-test('dispatch mode leaves out a driver with no dispatcher number instead of texting their cell', async () => {
++/* ---------------- dispatch mode falls back, and SAYS it did -------------- */
++test('dispatch mode falls back to the cell when there is no dispatcher number', async () => {
+   const { window, $ } = setup();
+   $('#tg-dispatch-mode').checked = true;
+ 
+@@ -198,26 +206,49 @@ test('dispatch mode leaves out a driver with no dispatcher number instead of tex
+ 
+   assert.equal(out[0].phone, '770-555-0200');
+   assert.match(out[0].name, /\(dispatch\)$/);
++  assert.equal(!!out[0].directPhoneFallback, false);
+ 
+-  // The one that matters: their own cell must NOT be the fallback.
+-  assert.equal(out[1].phone, '');
+-  assert.equal(out[1].noDispatcherPhone, true);
++  // Dropping these was tried and reversed: a third of every pool has no
++  // dispatcher number on file (204/538 preferred, 999/3128 Atlanta), so
++  // skipping them would cut a third of the drivers out of every blast.
++  assert.equal(out[1].phone, '770-555-0101', 'reached on their own cell');
+   assert.equal(out[1].name, 'No Dispatcher', 'not labelled as a dispatch send');
++
++  // But it is flagged, because a silent fallback is the original bug.
++  assert.equal(out[1].directPhoneFallback, true);
+ });
+ 
+-test('dispatch mode off still texts the driver directly -- that default is deliberate', async () => {
+-  const { window, $ } = setup();
+-  assert.equal($('#tg-dispatch-mode').checked, false, 'the modal opens with it off');
+-  const out = window.applyPhoneMode([{ name: 'D', phone: '770-555-0101', dispatcherPhone: '' }]);
+-  assert.equal(out[0].phone, '770-555-0101');
++test('the progress panel names who is getting it on their personal phone', () => {
++  const render = board.match(/function renderGroupTextProgress\([^]*?\n  \}/)[0];
++  assert.match(render, /directPhoneFallback/);
++  assert.match(render, /will be texted directly/);
++  // and it has to actually reach the rendered output, not just be computed
++  assert.match(render, /\[directNote, skipNote/);
++});
++
++test('the Text a Group modal opens with dispatch mode ON', async () => {
++  const { window, $, settle } = setup();
++  window.openModal();
++  await settle();
++  assert.equal($('#tg-dispatch-mode').checked, true);
++});
++
++test('the board\'s "text selected loads" still opens with it OFF', () => {
++  // Same modal, different mode: those drivers are already on a load that day,
++  // so it is a message about work in progress, not a solicitation.
++  const fn = board.match(/function openTextSelectedModal\([^]*?\n  \}/)[0];
++  assert.match(fn, /dispatchModeCheckbox\.checked = false/);
++
++  const group = board.match(/function openTextGroupModal\([^]*?\n  \}/)[0];
++  assert.match(group, /dispatchModeCheckbox\.checked = true/);
+ });
+ 
+-test('the markup no longer claims dispatch mode is on when the script turns it off', () => {
+-  // This exact mismatch is why the incident was reported as "I'm pretty sure
+-  // text dispatch number was checked": the attribute said checked, every
+-  // open set it to false.
++test('the markup carries no checked attribute -- the opener decides', () => {
++  // The attribute said checked while every open set it false, so for three
++  // weeks the box read as on and was off. Now that the two openers disagree
++  // with each other on purpose, a markup default could only be wrong for one
++  // of them.
+   assert.match(html, /id="tg-dispatch-mode"(?![^>]*\bchecked\b)/);
+-  assert.match(board, /dispatchModeCheckbox\.checked = false/);
+ });
+ 
+ /* ---------------- the flag has to survive a round trip ------------------- */
+diff --git a/scripts/text-modal-layout.test.mjs b/scripts/text-modal-layout.test.mjs
+index 34f1175..dffa4f2 100644
+--- a/scripts/text-modal-layout.test.mjs
++++ b/scripts/text-modal-layout.test.mjs
+@@ -79,8 +79,12 @@ for (const page of SEND_PAGES) {
+ console.log('\n3. the notes collapse into one summary that starts closed');
+ checkTrue('the render builds a <details>', /<details class="text-modal-details"><summary>Details<\/summary>/.test(SRC));
+ check('it is never rendered open', /text-modal-details"[^>]*\sopen/.test(SRC), false);
+-checkTrue('the three notes are what go inside',
+-  /const detailNotes = \[skipNote, dedupedNote, blockedNote\]\.filter\(Boolean\)/.test(SRC));
++// Four notes now: directNote joined them when dispatch mode started falling
++// back to a driver's own cell and had to SAY so. The rule being pinned is that
++// every note folds into the <details> and none is emitted loose -- add to the
++// list here when a fifth arrives, do not drop the check.
++checkTrue('every note goes inside the summary',
++  /const detailNotes = \[directNote, skipNote, dedupedNote, blockedNote\]\.filter\(Boolean\)/.test(SRC));
+ check('and they are no longer emitted loose above the buttons',
+   /\$\{skipNote\}\$\{dedupedNote\}\$\{blockedNote\}/.test(SRC), false);
+ 
+-- 
+2.43.0
+
+
+From 718849a7041b93e7cf49bceed1dca0079821d78b Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 6 Oct 2026 16:04:15 +0000
+Subject: [PATCH 2/3] A browser sandbox, because jsdom cannot see the screen
+
+Every test in scripts/ runs in jsdom, which has no layout engine: scrollTop is
+always 0, every bounding box is zero, nothing has a height. So a whole class of
+bug is invisible to the entire suite by construction -- the board jumping when
+you click, a modal resizing under the pointer, a picker covering the text being
+typed, a column flickering. Those are also the ones dispatchers notice first,
+and the ones that make a deploy feel unsafe.
+
+This runs the real pages in real Chromium against a fake Supabase:
+
+- serve.mjs serves the repo exactly as Pages does, no build step, so what the
+  browser runs is what ships.
+- fake-supabase.js is served IN PLACE of supabase.min.js by route
+  interception. addInitScript alone loses the race -- the real bundle loads
+  after it, overwrites window.supabase, and the real GoTrue client redirects to
+  login.html because there is no session.
+- It also RECORDS realtime handlers, so a test can replay another dispatcher's
+  edit landing mid-keystroke via window.__sandboxEmit(). That condition is
+  behind several of the bugs already documented in CLAUDE.md and could not be
+  staged any other way.
+
+Two specs to start: the board holds its scroll position through click, type,
+arrow and pick; the Text a Group modal opens checked, preselects nothing, and
+does not change height when a rating is clicked.
+
+One thing worth recording for whoever reads this next: the board scrolls inside
+`.grid-scroll`, NOT the window. window.scrollY barely moves. Asserting on it
+reports zero drift while the board slides several rows.
+
+scroll-tracer.js is the companion for bugs that only appear on live data: paste
+it into the console on the real board, use it until it jumps, then call
+__whyDidItMove() for the stack that moved it. Observe-only.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01G31nAipMUTYgpxUWm5ZDWp
+---
+ sandbox/README.md             |  54 +++++++++++++++
+ sandbox/board-scroll.spec.mjs | 126 ++++++++++++++++++++++++++++++++++
+ sandbox/fake-supabase.js      |  90 ++++++++++++++++++++++++
+ sandbox/fixtures.mjs          |  33 +++++++++
+ sandbox/scroll-tracer.js      |  74 ++++++++++++++++++++
+ sandbox/serve.mjs             |  27 ++++++++
+ sandbox/text-group.spec.mjs   |  83 ++++++++++++++++++++++
+ 7 files changed, 487 insertions(+)
+ create mode 100644 sandbox/README.md
+ create mode 100644 sandbox/board-scroll.spec.mjs
+ create mode 100644 sandbox/fake-supabase.js
+ create mode 100644 sandbox/fixtures.mjs
+ create mode 100644 sandbox/scroll-tracer.js
+ create mode 100644 sandbox/serve.mjs
+ create mode 100644 sandbox/text-group.spec.mjs
+
+diff --git a/sandbox/README.md b/sandbox/README.md
+new file mode 100644
+index 0000000..be0177b
+--- /dev/null
++++ b/sandbox/README.md
+@@ -0,0 +1,54 @@
++# Browser sandbox
++
++Runs the real pages in real Chromium against a fake Supabase, so a patch can be
++exercised before it goes near production.
++
++```bash
++node sandbox/serve.mjs . 8787 &     # serves the repo exactly as Pages does
++node sandbox/board-scroll.spec.mjs  # board holds its scroll position
++node sandbox/text-group.spec.mjs    # Text a Group modal opens and behaves
++```
++
++## Why this exists alongside scripts/
++
++Every test in `scripts/` runs in **jsdom, which has no layout engine**. Scroll
++positions are always 0, every bounding box is zero, and nothing has a height.
++A whole class of bug — the page jumping, a modal resizing as you click, a
++column flickering, a picker covering the text you are typing — is invisible
++there by construction. Those are also the bugs dispatchers notice first.
++
++This does not replace `scripts/`. Those are fast, run in CI, and pin logic.
++These are slower and pin what the screen does.
++
++## How the fake works
++
++`fake-supabase.js` is served **in place of** `supabase.min.js` via Playwright
++route interception. `addInitScript` is not enough on its own: the real bundle
++loads afterwards and overwrites `window.supabase`, and the real GoTrue client
++then redirects to `login.html` because the sandbox has no session.
++
++It answers `from()` out of `window.__SANDBOX_ROWS` (see `fixtures.mjs`),
++reports a signed-in dispatcher, and **records realtime handlers** so a test can
++replay another dispatcher's edit arriving mid-keystroke:
++
++```js
++await page.evaluate(() => window.__sandboxEmit('loads_shifts',
++  { eventType: 'UPDATE', new: { id: 1005, pro_number: 'PRO9005' }, old: { id: 1005 } }));
++```
++
++That condition — a remote change landing while someone is typing — is behind
++several of the bugs in CLAUDE.md and cannot be staged any other way.
++
++## The board scrolls in `.grid-scroll`, not the window
++
++`window.scrollY` barely moves on the board; the rows live in a `.grid-scroll`
++container with its own `scrollTop`. Assert against that, or a jump of several
++rows will read as zero drift.
++
++## scroll-tracer.js
++
++For bugs that only happen on live data. Paste it into the console on the real
++board, use the board until it jumps, then run `__whyDidItMove()`. It records
++every `scrollIntoView`, `scrollTop` write, `focus()` without `preventScroll`,
++and `window.scrollTo/By`, with the stack that asked for it. Observe-only;
++reload to remove.
+diff --git a/sandbox/board-scroll.spec.mjs b/sandbox/board-scroll.spec.mjs
+new file mode 100644
+index 0000000..fd3661f
+--- /dev/null
++++ b/sandbox/board-scroll.spec.mjs
+@@ -0,0 +1,126 @@
++/*
++ * Browser sandbox: the board must hold its place when you click a cell.
++ *
++ * "the load board keeps moving on its own. literally I try to click on a
++ * driver name and it moves up 2 spaces."
++ *
++ * Nothing in scripts/ can catch this. Every test there runs in jsdom, which
++ * has no layout engine: scrollTop is always 0, every bounding box is zero, and
++ * a page that jumps looks identical to one that does not. This runs the real
++ * pages in real Chromium against a fake Supabase, so geometry means something.
++ *
++ * The board scrolls inside `.grid-scroll`, NOT the window -- the window barely
++ * moves at all, which is why this reads as "the board moved on its own"
++ * rather than "the page scrolled".
++ *
++ * Run: node sandbox/board-scroll.spec.mjs   (needs sandbox/serve.mjs running)
++ */
++import { chromium } from 'playwright';
++import { readFileSync } from 'node:fs';
++import { boardFixture } from './fixtures.mjs';
++
++const FAKE = readFileSync(new URL('./fake-supabase.js', import.meta.url), 'utf8');
++const BASE = process.env.SANDBOX_URL || 'http://127.0.0.1:8787';
++const CHROME = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
++
++const results = [];
++function check(label, ok, detail = '') {
++  results.push({ label, ok });
++  console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${label}${detail ? ` -- ${detail}` : ''}`);
++}
++
++const browser = await chromium.launch({ executablePath: CHROME });
++const page = await browser.newPage({ viewport: { width: 1400, height: 800 } });
++
++const errors = [];
++page.on('pageerror', (e) => errors.push(String(e).slice(0, 200)));
++
++await page.addInitScript(({ rows }) => { window.__SANDBOX_ROWS = rows; },
++  { rows: boardFixture({ shifts: 40, drivers: 40 }) });
++await page.route('**/supabase.min.js', (route) =>
++  route.fulfill({ contentType: 'text/javascript', body: FAKE }));
++
++await page.goto(`${BASE}/index.html`, { waitUntil: 'networkidle' });
++await page.waitForTimeout(2500);
++
++const rowCount = await page.locator('#board-table tbody tr').count();
++check('the board rendered rows', rowCount > 10, `${rowCount} rows`);
++check('no page errors while loading', errors.length === 0, errors.slice(0, 2).join(' | '));
++
++const scroller = page.locator('.grid-scroll');
++const rowHeight = await page.evaluate(() => {
++  const tr = document.querySelector('#board-table tbody tr');
++  return tr ? tr.getBoundingClientRect().height : 0;
++});
++check('rows have real height (layout is live)', rowHeight > 5, `${Math.round(rowHeight)}px per row`);
++
++// Scroll the board down so a jump has somewhere to show.
++await scroller.evaluate((el) => { el.scrollTop = 400; });
++await page.waitForTimeout(250);
++
++const inputs = page.locator('#board-table tbody td.pin-driver input[data-driver-ac]');
++const n = await inputs.count();
++check('driver cells are reachable', n > 0, `${n} driver inputs`);
++
++async function scrollTop() { return scroller.evaluate((el) => el.scrollTop); }
++
++if (n > 0) {
++  // A cell currently visible inside the scrolled viewport.
++  const idx = await page.evaluate(() => {
++    const sc = document.querySelector('.grid-scroll');
++    const box = sc.getBoundingClientRect();
++    const all = [...document.querySelectorAll('#board-table tbody td.pin-driver input[data-driver-ac]')];
++    return all.findIndex((el) => {
++      const r = el.getBoundingClientRect();
++      return r.top > box.top + 40 && r.bottom < box.bottom - 40;
++    });
++  });
++  const target = inputs.nth(idx < 0 ? 0 : idx);
++
++  // ---- 1. clicking ----
++  const before = await scrollTop();
++  const yBefore = (await target.boundingBox())?.y ?? 0;
++  await target.click();
++  await page.waitForTimeout(700);
++  const after = await scrollTop();
++  const yAfter = (await target.boundingBox())?.y ?? 0;
++
++  const rowsMoved = rowHeight ? Math.abs(after - before) / rowHeight : 0;
++  check('the board does not scroll when a driver cell is clicked',
++    Math.abs(after - before) <= 2,
++    `scrollTop ${Math.round(before)} -> ${Math.round(after)} (${rowsMoved.toFixed(1)} rows)`);
++  check('the clicked cell stays put on screen', Math.abs(yAfter - yBefore) <= 2,
++    `y ${Math.round(yBefore)} -> ${Math.round(yAfter)}`);
++
++  // ---- 2. typing ----
++  const beforeType = await scrollTop();
++  await page.keyboard.type('Driver 1', { delay: 25 });
++  await page.waitForTimeout(500);
++  const afterType = await scrollTop();
++  check('the board does not scroll while a driver name is typed',
++    Math.abs(afterType - beforeType) <= 2,
++    `scrollTop ${Math.round(beforeType)} -> ${Math.round(afterType)}`);
++
++  // ---- 3. arrowing the suggestions (where scrollIntoView lives) ----
++  const beforeArrow = await scrollTop();
++  await page.keyboard.press('ArrowDown');
++  await page.waitForTimeout(350);
++  const afterArrow = await scrollTop();
++  check('the board does not scroll when arrowing the suggestions',
++    Math.abs(afterArrow - beforeArrow) <= 2,
++    `scrollTop ${Math.round(beforeArrow)} -> ${Math.round(afterArrow)}`);
++
++  // ---- 4. committing the pick ----
++  const beforeEnter = await scrollTop();
++  await page.keyboard.press('Enter');
++  await page.waitForTimeout(600);
++  const afterEnter = await scrollTop();
++  check('the board does not scroll when a driver is picked',
++    Math.abs(afterEnter - beforeEnter) <= 2,
++    `scrollTop ${Math.round(beforeEnter)} -> ${Math.round(afterEnter)}`);
++}
++
++await browser.close();
++const failed = results.filter((r) => !r.ok).length;
++console.log(`\n${results.length - failed} passed, ${failed} failed`);
++process.exit(failed ? 1 : 0);
+diff --git a/sandbox/fake-supabase.js b/sandbox/fake-supabase.js
+new file mode 100644
+index 0000000..16eebe5
+--- /dev/null
++++ b/sandbox/fake-supabase.js
+@@ -0,0 +1,90 @@
++/*
++ * A fake Supabase client for the browser sandbox.
++ *
++ * It is injected BEFORE supabase.min.js runs and simply wins the race:
++ * loadboard.js waits for `window.supabase` and calls createClient on whatever
++ * it finds. Nothing else in the app is patched, so the real init(), the real
++ * renderers and the real event handlers all run against it.
++ *
++ * The point is LAYOUT. Every test in scripts/ runs in jsdom, which has no
++ * layout engine at all -- no scroll position, no element geometry -- so a bug
++ * where the page jumps when you click something is invisible to all of them.
++ * This runs in real Chromium, where window.scrollY means something.
++ *
++ * Fixtures come from window.__SANDBOX_ROWS, set per test.
++ */
++(function () {
++  const rows = () => (window.__SANDBOX_ROWS || {});
++
++  function result(data) {
++    // A PostgREST builder is a thenable that also answers every filter method
++    // by returning itself. Tests care about what comes back, not the WHERE.
++    const builder = {
++      then: (resolve) => resolve({ data, error: null, count: data.length }),
++      catch: undefined, // deliberately absent -- the real builder has none either
++    };
++    const passthrough = ['select', 'eq', 'neq', 'in', 'is', 'not', 'gte', 'lte', 'gt', 'lt',
++      'or', 'order', 'limit', 'range', 'filter', 'contains', 'ilike', 'like', 'match'];
++    passthrough.forEach((m) => { builder[m] = () => builder; });
++    ['insert', 'update', 'upsert', 'delete'].forEach((m) => {
++      builder[m] = () => ({ ...builder, select: () => builder, maybeSingle: async () => ({ data: data[0] || null, error: null }) });
++    });
++    builder.single = async () => ({ data: data[0] || null, error: null });
++    builder.maybeSingle = async () => ({ data: data[0] || null, error: null });
++    return builder;
++  }
++
++  // Realtime handlers are RECORDED, so a test can play another dispatcher's
++  // edit arriving mid-keystroke. That is the condition most of this app's
++  // nastiest bugs need, and it cannot be staged any other way.
++  const handlers = [];
++  const channel = () => {
++    const ch = {
++      on: (_evt, filter, cb) => { handlers.push({ filter: filter || {}, cb: cb || filter }); return ch; },
++      subscribe: (cb) => { if (typeof cb === 'function') cb('SUBSCRIBED'); return ch; },
++      unsubscribe: () => {},
++    };
++    return ch;
++  };
++
++  // window.__sandboxEmit('loads_shifts', { eventType: 'UPDATE', new: {...} })
++  window.__sandboxEmit = (table, payload) => {
++    let delivered = 0;
++    handlers.forEach(({ filter, cb }) => {
++      if (filter && filter.table && filter.table !== table) return;
++      try { cb({ table, ...payload }); delivered++; } catch (e) { console.error('[sandbox] handler threw', e); }
++    });
++    return delivered;
++  };
++  window.__sandboxHandlerCount = () => handlers.length;
++
++  window.supabase = {
++    createClient() {
++      return {
++        from: (table) => result(rows()[table] || []),
++        rpc: async () => ({ data: null, error: null }),
++        channel,
++        removeChannel: () => {},
++        removeAllChannels: () => {},
++        storage: {
++          from: () => ({
++            createSignedUrl: async () => ({ data: { signedUrl: '' }, error: null }),
++            createSignedUrls: async () => ({ data: [], error: null }),
++            upload: async () => ({ error: null }),
++            remove: async () => ({ error: null }),
++            list: async () => ({ data: [], error: null }),
++          }),
++        },
++        auth: {
++          // A signed-in dispatcher. requireAuth() does redirect to login.html
++          // when this is empty, and a redirect mid-test looks exactly like a
++          // crash, so the fake answers it properly.
++          getSession: async () => ({ data: { session: { user: { id: 'sandbox-user', email: 'sandbox@dltransport.com' } } }, error: null }),
++          getUser: async () => ({ data: { user: { id: 'sandbox-user', email: 'sandbox@dltransport.com' } }, error: null }),
++          onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } }),
++          signOut: async () => ({ error: null }),
++        },
++      };
++    },
++  };
++})();
+diff --git a/sandbox/fixtures.mjs b/sandbox/fixtures.mjs
+new file mode 100644
+index 0000000..981a50e
+--- /dev/null
++++ b/sandbox/fixtures.mjs
+@@ -0,0 +1,33 @@
++// Enough of a real day to fill the screen and then some: the board has to be
++// taller than the viewport or a scroll jump has nowhere to show itself.
++export function boardFixture({ shifts = 30, drivers = 40, location = 'atlanta', date } = {}) {
++  const shiftDate = date || new Date().toISOString().slice(0, 10);
++  return {
++    loads_shifts: Array.from({ length: shifts }, (_, i) => ({
++      id: 1000 + i,
++      location,
++      shift_date: shiftDate,
++      driver_id: i % 3 === 0 ? null : 500 + (i % drivers),
++      driver_name_text: i % 3 === 0 ? '' : `Driver ${String(i % drivers).padStart(2, '0')}`,
++      pro_number: `PRO${9000 + i}`,
++      shift_start: `${String(4 + (i % 16)).padStart(2, '0')}:00`,
++      carrier_rate: 700 + i,
++    })),
++    loads_trips: [],
++    trip_stops: [],
++    atlanta_drivers: Array.from({ length: drivers }, (_, i) => ({
++      id: 500 + i,
++      'Driver Name': `Driver ${String(i).padStart(2, '0')}`,
++      'Driver Cell': `770-555-${String(1000 + i).slice(-4)}`,
++      'Dispatcher phone number': i % 3 === 0 ? '' : `770-555-${String(2000 + i).slice(-4)}`,
++      'Driver Rating': ['A', 'B', 'C', 'A1', 'B2'][i % 5],
++      'E mail': `driver${i}@example.com`,
++      MC: 100000 + i,
++      location,
++      do_not_text: false,
++    })),
++    location_notes: [],
++    board_rate_tiers: [],
++    loads_accounting: [],
++  };
++}
+diff --git a/sandbox/scroll-tracer.js b/sandbox/scroll-tracer.js
+new file mode 100644
+index 0000000..00f5deb
+--- /dev/null
++++ b/sandbox/scroll-tracer.js
+@@ -0,0 +1,74 @@
++/*
++ * Paste this into the browser console on the live load board, then use the
++ * board normally. The next time it jumps, run  __whyDidItMove()  and it will
++ * print what moved it and the code that asked.
++ *
++ * It only observes -- it patches nothing permanently and changes no behaviour.
++ * Reload the page to remove it.
++ */
++(() => {
++  const log = [];
++  const stack = () => new Error().stack.split('\n').slice(3, 7).map(s => s.trim()).join('\n      ');
++  const label = (el) => {
++    if (el === document.documentElement || el === document.body) return 'the page';
++    return (el.tagName || '?') + (el.id ? '#' + el.id : '') +
++      (el.className ? '.' + String(el.className).split(' ').slice(0, 2).join('.') : '');
++  };
++
++  const scrollIntoView = Element.prototype.scrollIntoView;
++  Element.prototype.scrollIntoView = function (...a) {
++    log.push({ what: 'scrollIntoView', on: label(this), at: new Date().toISOString().slice(11, 23), stack: stack() });
++    return scrollIntoView.apply(this, a);
++  };
++
++  const topDesc = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop');
++  Object.defineProperty(Element.prototype, 'scrollTop', {
++    configurable: true,
++    get() { return topDesc.get.call(this); },
++    set(v) {
++      log.push({ what: 'scrollTop = ' + Math.round(v), on: label(this), at: new Date().toISOString().slice(11, 23), stack: stack() });
++      return topDesc.set.call(this, v);
++    },
++  });
++
++  const focus = HTMLElement.prototype.focus;
++  HTMLElement.prototype.focus = function (opts) {
++    // focus() without preventScroll is allowed to scroll the page to the
++    // element -- a classic cause of "it moved on its own".
++    if (!opts || opts.preventScroll !== true) {
++      log.push({ what: 'focus() without preventScroll', on: label(this), at: new Date().toISOString().slice(11, 23), stack: stack() });
++    }
++    return focus.call(this, opts);
++  };
++
++  ['scrollTo', 'scrollBy'].forEach((m) => {
++    const orig = window[m];
++    window[m] = function (...a) {
++      log.push({ what: 'window.' + m, on: 'the page', at: new Date().toISOString().slice(11, 23), stack: stack() });
++      return orig.apply(window, a);
++    };
++  });
++
++  // Watch the thing that actually scrolls on this board.
++  const scroller = document.querySelector('.grid-scroll');
++  let last = scroller ? scroller.scrollTop : 0;
++  if (scroller) {
++    scroller.addEventListener('scroll', () => {
++      const now = scroller.scrollTop;
++      if (Math.abs(now - last) > 4) {
++        log.push({ what: `board scrolled ${Math.round(last)} -> ${Math.round(now)}`, on: '.grid-scroll',
++          at: new Date().toISOString().slice(11, 23), stack: '(see the entries just above this one)' });
++      }
++      last = now;
++    }, { passive: true });
++  }
++
++  window.__whyDidItMove = (n = 12) => {
++    console.log(`%cLast ${Math.min(n, log.length)} things that could move the board:`, 'font-weight:bold');
++    log.slice(-n).forEach((e) => console.log(`${e.at}  ${e.what}  on ${e.on}\n      ${e.stack}`));
++    return `${log.length} events recorded. Call __whyDidItMove(40) for more.`;
++  };
++  window.__scrollLog = log;
++  console.log('%cScroll tracer armed.', 'color:green;font-weight:bold',
++    'Use the board until it jumps, then run:  __whyDidItMove()');
++})();
+diff --git a/sandbox/serve.mjs b/sandbox/serve.mjs
+new file mode 100644
+index 0000000..f07e62a
+--- /dev/null
++++ b/sandbox/serve.mjs
+@@ -0,0 +1,27 @@
++// Static server for the sandbox. Serves the repo exactly as GitHub Pages does
++// -- same files, same module graph, no build step -- so what the browser runs
++// here is what ships.
++import http from 'node:http';
++import fs from 'node:fs';
++import path from 'node:path';
++
++const ROOT = path.resolve(process.argv[2] || '.');
++const PORT = Number(process.argv[3] || 8787);
++
++const TYPES = {
++  '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
++  '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml',
++  '.png': 'image/png', '.jpg': 'image/jpeg', '.ico': 'image/x-icon',
++  '.woff2': 'font/woff2', '.map': 'application/json',
++};
++
++http.createServer((req, res) => {
++  const url = decodeURIComponent(req.url.split('?')[0]);
++  const file = path.join(ROOT, url === '/' ? 'index.html' : url);
++  if (!file.startsWith(ROOT)) { res.writeHead(403).end('no'); return; }
++  fs.readFile(file, (err, body) => {
++    if (err) { res.writeHead(404).end('not found'); return; }
++    res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream' });
++    res.end(body);
++  });
++}).listen(PORT, () => console.log(`sandbox serving ${ROOT} on http://127.0.0.1:${PORT}`));
+diff --git a/sandbox/text-group.spec.mjs b/sandbox/text-group.spec.mjs
+new file mode 100644
+index 0000000..00e3d52
+--- /dev/null
++++ b/sandbox/text-group.spec.mjs
+@@ -0,0 +1,83 @@
++/*
++ * Browser sandbox: does the Text a Group modal still work, in a real browser,
++ * with the pending dispatch-default change applied?
++ *
++ * The jsdom tests in scripts/ drive the functions directly. This loads the
++ * actual driverlist.html page, opens the modal the way a dispatcher does, and
++ * checks what is on screen.
++ *
++ * Run: node sandbox/text-group.spec.mjs   (needs sandbox/serve.mjs running)
++ */
++import { chromium } from 'playwright';
++import { readFileSync } from 'node:fs';
++import { boardFixture } from './fixtures.mjs';
++
++const FAKE = readFileSync(new URL('./fake-supabase.js', import.meta.url), 'utf8');
++const BASE = process.env.SANDBOX_URL || 'http://127.0.0.1:8787';
++const CHROME = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
++
++const results = [];
++const check = (label, ok, detail = '') => {
++  results.push(ok);
++  console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${label}${detail ? ` -- ${detail}` : ''}`);
++};
++
++const browser = await chromium.launch({ executablePath: CHROME });
++const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
++const errors = [];
++page.on('pageerror', (e) => errors.push(String(e).slice(0, 200)));
++
++const fixture = boardFixture({ shifts: 10, drivers: 40 });
++// one driver flagged, sharing a cell with a second unflagged profile
++fixture.atlanta_drivers[0].do_not_text = true;
++fixture.atlanta_drivers.push({ ...fixture.atlanta_drivers[0], id: 9999, do_not_text: false });
++fixture.atlanta_drivers.forEach((d) => { d.location = 'preferred'; });
++
++await page.addInitScript(({ rows }) => { window.__SANDBOX_ROWS = rows; }, { rows: fixture });
++await page.route('**/supabase.min.js', (route) =>
++  route.fulfill({ contentType: 'text/javascript', body: FAKE }));
++
++await page.goto(`${BASE}/driverlist.html`, { waitUntil: 'networkidle' });
++await page.waitForTimeout(2500);
++check('the driver list page loaded without errors', errors.length === 0, errors.slice(0, 2).join(' | '));
++
++const btn = page.locator('#btn-text-group');
++check('the Text a Group button is there', await btn.count() === 1);
++
++if (await btn.count() === 1) {
++  await btn.click();
++  await page.waitForTimeout(800);
++
++  const modalVisible = await page.locator('#modal-text-group').isVisible();
++  check('the modal opens', modalVisible);
++
++  // The pending change: it must open CHECKED here.
++  const dispatchChecked = await page.locator('#tg-dispatch-mode').isChecked();
++  check('"Text dispatch where applicable" opens checked', dispatchChecked);
++
++  // It must not come up with a group pre-selected.
++  const pressed = await page.locator('#tg-rating-buttons [aria-pressed="true"]').count();
++  check('no rating is preselected', pressed === 0, `${pressed} pressed`);
++
++  const ratingButtons = await page.locator('#tg-rating-buttons .rate-rating-toggle').count();
++  check('the rating buttons rendered', ratingButtons > 0, `${ratingButtons} buttons`);
++
++  check('no dropdown left behind', await page.locator('#tg-rate-select').count() === 0);
++  check('no error banner', !(await page.locator('#tg-error').isVisible()));
++
++  // The modal must not resize as ratings are picked -- "we dont want it to
++  // spazz out on us". Measure it, click a rating, measure again.
++  const h1 = (await page.locator('#modal-text-group .modal-card, #modal-text-group').first().boundingBox())?.height ?? 0;
++  await page.locator('#tg-rating-buttons .rate-rating-toggle').first().click();
++  await page.waitForTimeout(600);
++  const h2 = (await page.locator('#modal-text-group .modal-card, #modal-text-group').first().boundingBox())?.height ?? 0;
++  check('the modal does not jump height when a rating is picked', Math.abs(h2 - h1) <= 4,
++    `${Math.round(h1)}px -> ${Math.round(h2)}px`);
++
++  check('still no page errors after interacting', errors.length === 0, errors.slice(0, 2).join(' | '));
++}
++
++await browser.close();
++const failed = results.filter((r) => !r).length;
++console.log(`\n${results.length - failed} passed, ${failed} failed`);
++process.exit(failed ? 1 : 0);
+-- 
+2.43.0
+
+
+From 71c5fc8a4245e5bcede9fff438f076bb0bc509ee Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 6 Oct 2026 16:13:52 +0000
+Subject: [PATCH 3/3] Sandbox: replay a redraw landing mid-edit, and trace the
+ editor moving
+
+From Ron's screen recording: he is typing a driver name into a BLANK row and
+250ms later the editor is in the row ABOVE, with that row's existing name open
+in an edit box and its own suggestion list. In the frames either side, the
+blank row he was typing in has disappeared and everything below has shifted up
+-- "it moves up 2 spaces".
+
+That is the failure CLAUDE.md already describes, "the cursor jumping to the row
+above after a redraw", in a shape the data-trip fix does not cover: a
+placeholder row with no dbId, which is exactly the row a restore selector
+cannot find again if it is rebuilt or pruned.
+
+- focus-jump.spec.mjs stages it: type into a blank row under a filled one,
+  land a realtime echo, and assert the cursor is still in the same row with
+  the draft intact. It passes against synthetic blank rows, so the live board
+  has a condition the fixtures do not -- most likely a true placeholder row
+  being INSERTed mid-keystroke, where the realtime echo arrives before the
+  local row has its dbId and handleRealtimeShiftChange adopts it as a second
+  row. Left in place as the scaffold to finish against real evidence.
+
+- fake-supabase: channel.send/track/untrack/presenceState were missing, so
+  every realtime redraw threw "boardChannel.send is not a function" and the
+  handler aborted before the part under test. Any realtime test written before
+  this was passing for the wrong reason.
+
+- scroll-tracer now records EDITOR MOVED (focus crossing to a different
+  data-row) and ROWS CHANGED (rows added or removed from the tbody) alongside
+  the scroll calls, because the recording shows the symptom is the editor
+  moving and a row vanishing, not the container scrolling.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01G31nAipMUTYgpxUWm5ZDWp
+---
+ sandbox/fake-supabase.js    |   7 +++
+ sandbox/focus-jump.spec.mjs | 107 ++++++++++++++++++++++++++++++++++++
+ sandbox/scroll-tracer.js    |  39 ++++++++++++-
+ 3 files changed, 151 insertions(+), 2 deletions(-)
+ create mode 100644 sandbox/focus-jump.spec.mjs
+
+diff --git a/sandbox/fake-supabase.js b/sandbox/fake-supabase.js
+index 16eebe5..cadb06b 100644
+--- a/sandbox/fake-supabase.js
++++ b/sandbox/fake-supabase.js
+@@ -43,6 +43,13 @@
+       on: (_evt, filter, cb) => { handlers.push({ filter: filter || {}, cb: cb || filter }); return ch; },
+       subscribe: (cb) => { if (typeof cb === 'function') cb('SUBSCRIBED'); return ch; },
+       unsubscribe: () => {},
++      // The board broadcasts presence/typing over the channel; without this
++      // every realtime redraw threw "boardChannel.send is not a function"
++      // and the handler aborted before the part under test.
++      send: async () => ({ status: 'ok' }),
++      track: async () => ({ status: 'ok' }),
++      untrack: async () => ({ status: 'ok' }),
++      presenceState: () => ({}),
+     };
+     return ch;
+   };
+diff --git a/sandbox/focus-jump.spec.mjs b/sandbox/focus-jump.spec.mjs
+new file mode 100644
+index 0000000..88107e3
+--- /dev/null
++++ b/sandbox/focus-jump.spec.mjs
+@@ -0,0 +1,107 @@
++/*
++ * Browser sandbox: typing in a blank row must survive a redraw.
++ *
++ * From Ron's screen recording (2026-10-06): he is typing a driver name into a
++ * BLANK row; 250ms later the editor is in the row ABOVE, with that row's
++ * existing driver name ("Ewan") sitting in an open edit box and its own
++ * suggestion list. He never clicked there.
++ *
++ * This is the failure CLAUDE.md already describes -- "the cursor jumping to
++ * the row above after a redraw" -- in a shape the data-trip fix did not
++ * cover. A redraw lands (realtime echo, the driver pool arriving, a
++ * neighbouring save), captureFocusForRerender() tries to put the cursor back,
++ * and it lands on the wrong row.
++ *
++ * Run: node sandbox/focus-jump.spec.mjs   (needs sandbox/serve.mjs running)
++ */
++import { chromium } from 'playwright';
++import { readFileSync } from 'node:fs';
++import { boardFixture } from './fixtures.mjs';
++
++const FAKE = readFileSync(new URL('./fake-supabase.js', import.meta.url), 'utf8');
++const BASE = process.env.SANDBOX_URL || 'http://127.0.0.1:8787';
++const CHROME = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
++
++const results = [];
++const check = (label, ok, detail = '') => {
++  results.push(ok);
++  console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${label}${detail ? ` -- ${detail}` : ''}`);
++};
++
++const browser = await chromium.launch({ executablePath: CHROME });
++const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
++page.on('pageerror', (e) => console.log('[pageerror]', String(e).slice(0, 160)));
++
++const fixture = boardFixture({ shifts: 12, drivers: 40 });
++await page.addInitScript(({ rows }) => { window.__SANDBOX_ROWS = rows; }, { rows: fixture });
++await page.route('**/supabase.min.js', (route) =>
++  route.fulfill({ contentType: 'text/javascript', body: FAKE }));
++await page.goto(`${BASE}/index.html`, { waitUntil: 'networkidle' });
++await page.waitForTimeout(2500);
++
++// Find a BLANK driver cell (the "Type driver name…" placeholder) that has a
++// FILLED row above it -- the exact shape in the recording.
++const picked = await page.evaluate(() => {
++  const inputs = [...document.querySelectorAll('#board-table tbody td.pin-driver input[data-driver-ac]')];
++  for (let i = 1; i < inputs.length; i++) {
++    if (!inputs[i].value.trim() && inputs[i - 1].value.trim()) {
++      return { index: i, myRow: inputs[i].dataset.row, rowAbove: inputs[i - 1].dataset.row,
++               nameAbove: inputs[i - 1].value };
++    }
++  }
++  return null;
++});
++check('found a blank row under a filled one', !!picked, picked ? `blank=${picked.myRow}, above=${picked.nameAbove}` : '');
++
++if (picked) {
++  const input = page.locator('#board-table tbody td.pin-driver input[data-driver-ac]').nth(picked.index);
++  await input.click();
++  await page.keyboard.type('Driv', { delay: 40 });
++  await page.waitForTimeout(300);
++
++  const whereBefore = await page.evaluate(() => ({
++    row: document.activeElement?.dataset?.row,
++    value: document.activeElement?.value,
++  }));
++  check('the cursor starts in the blank row', whereBefore.row === picked.myRow,
++    `in ${whereBefore.row}, typed "${whereBefore.value}"`);
++
++  // A redraw lands mid-edit. In production this is a coworker's save echoing
++  // back, the driver pool arriving, or this row's own debounced write.
++  await page.evaluate(() => {
++    window.__sandboxEmit('loads_shifts', {
++      eventType: 'UPDATE',
++      new: { id: 1003, location: 'atlanta', shift_date: new Date().toISOString().slice(0, 10),
++             pro_number: 'PRO9003-edited', driver_name_text: 'Someone Else' },
++      old: { id: 1003 },
++    });
++  });
++  await page.waitForTimeout(900);
++
++  const whereAfter = await page.evaluate(() => ({
++    row: document.activeElement?.dataset?.row,
++    value: document.activeElement?.value,
++    tag: document.activeElement?.tagName,
++  }));
++
++  check('the cursor is still in the SAME row after the redraw',
++    whereAfter.row === picked.myRow,
++    `was ${picked.myRow}, now ${whereAfter.row} (${whereAfter.tag}, value "${whereAfter.value}")`);
++  check('it did not land in the row above',
++    whereAfter.row !== picked.rowAbove,
++    whereAfter.row === picked.rowAbove ? `jumped into "${picked.nameAbove}"` : 'ok');
++  check('what was typed survived', (whereAfter.value || '').startsWith('Driv'),
++    `value "${whereAfter.value}"`);
++
++  // And the same with the pool landing, which every board does on load.
++  await page.evaluate(() => document.dispatchEvent(new Event('drivers:loaded')));
++  await page.waitForTimeout(700);
++  const afterPool = await page.evaluate(() => ({ row: document.activeElement?.dataset?.row, value: document.activeElement?.value }));
++  check('the cursor survives the driver pool landing', afterPool.row === picked.myRow,
++    `now ${afterPool.row}, value "${afterPool.value}"`);
++}
++
++await browser.close();
++const failed = results.filter((r) => !r).length;
++console.log(`\n${results.length - failed} passed, ${failed} failed`);
++process.exit(failed ? 1 : 0);
+diff --git a/sandbox/scroll-tracer.js b/sandbox/scroll-tracer.js
+index 00f5deb..5c93cd0 100644
+--- a/sandbox/scroll-tracer.js
++++ b/sandbox/scroll-tracer.js
+@@ -63,12 +63,47 @@
+     }, { passive: true });
+   }
+ 
++  // --- what the recording actually showed: the EDITOR moves, and a row
++  // --- vanishes from under it. Record both, with the stack that did it.
++  let lastFocus = null;
++  document.addEventListener('focusin', (e) => {
++    const t = e.target;
++    const row = t?.dataset?.row, field = t?.dataset?.field;
++    if (!row) return;
++    if (lastFocus && (lastFocus.row !== row || lastFocus.field !== field)) {
++      log.push({ what: `EDITOR MOVED  ${lastFocus.row}/${lastFocus.field} -> ${row}/${field}`,
++        on: `value "${String(t.value || '').slice(0, 30)}"`,
++        at: new Date().toISOString().slice(11, 23), stack: stack() });
++    }
++    lastFocus = { row, field };
++  }, true);
++
++  const board = document.querySelector('#board-table tbody');
++  if (board) {
++    let lastIds = [...board.querySelectorAll('tr')].map((tr) => tr.id).join('|');
++    new MutationObserver(() => {
++      const nowIds = [...board.querySelectorAll('tr')].map((tr) => tr.id).join('|');
++      if (nowIds === lastIds) return;
++      const before = lastIds.split('|'), after = nowIds.split('|');
++      const gone = before.filter((id) => id && !after.includes(id));
++      const added = after.filter((id) => id && !before.includes(id));
++      if (gone.length || added.length) {
++        log.push({ what: `ROWS CHANGED  -${gone.length} +${added.length}` +
++            (gone.length ? `  removed: ${gone.slice(0, 3).join(', ')}` : '') +
++            (added.length ? `  added: ${added.slice(0, 3).join(', ')}` : ''),
++          on: `${before.length} -> ${after.length} rows`,
++          at: new Date().toISOString().slice(11, 23), stack: '(a redraw -- see entries above)' });
++      }
++      lastIds = nowIds;
++    }).observe(board, { childList: true, subtree: false });
++  }
++
+   window.__whyDidItMove = (n = 12) => {
+     console.log(`%cLast ${Math.min(n, log.length)} things that could move the board:`, 'font-weight:bold');
+     log.slice(-n).forEach((e) => console.log(`${e.at}  ${e.what}  on ${e.on}\n      ${e.stack}`));
+     return `${log.length} events recorded. Call __whyDidItMove(40) for more.`;
+   };
+   window.__scrollLog = log;
+-  console.log('%cScroll tracer armed.', 'color:green;font-weight:bold',
+-    'Use the board until it jumps, then run:  __whyDidItMove()');
++  console.log('%cBoard tracer armed.', 'color:green;font-weight:bold',
++    'Use the board until it jumps or the cursor moves, then run:  __whyDidItMove()');
+ })();
+-- 
+2.43.0
+
