@@ -635,8 +635,27 @@ function setReportData(rangeData) {
     .filter((row) => row.rowType === 'day' || row.rowType === 'weekRecap');
 }
 
-const REPORT_DAILY_FIELDS = ['drivers', 'mileage', 'routes', 'stops', 'turn']
-  .map((key) => FIELD_DEFS.find((def) => def.key === key));
+/*
+ * The breakdown carries revenue and NOTHING else financial -- no cost, no
+ * margin, no GM%. It goes out to the customer, and what we are paid is what
+ * they SPEND, so it is labelled from their side of the invoice. Our carrier
+ * cost and what we keep are ours.
+ *
+ * The label is overridden here rather than in FIELD_DEFS, because the same
+ * `revenue` field is still "Revenue" everywhere internal -- the analytics
+ * sheet, the recap summary, the Accounting page.
+ */
+const REPORT_DAILY_FIELDS = [
+  { key: 'drivers' },
+  { key: 'mileage' },
+  { key: 'routes' },
+  { key: 'stops' },
+  { key: 'turn' },
+  { key: 'revenue', label: 'Spend' },
+].map(({ key, label }) => {
+  const def = FIELD_DEFS.find((d) => d.key === key);
+  return label ? { ...def, label } : def;
+});
 
 function reportDailyLabels(row) {
   if (row.rowType === 'weekRecap') return [`Weekly Recap (${row.rangeStart} to ${row.rangeEnd})`, ''];

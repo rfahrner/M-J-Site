@@ -54,13 +54,24 @@ assert.match(summary, /Salvage: 1\nBackhauls: 1$/);
 assert.ok(!summary.includes('Revenue:'), 'existing default summary is preserved');
 const text = api.buildReportText();
 assert.ok(text.startsWith(`${summary}\n\nDaily Breakdown\n`));
-assert.match(text, /09\/27\/2026\tSUNDAY\t2\t200.9\t2\t4\t1.00/);
-assert.match(text, /Weekly Recap \(2026-09-27 to 2026-09-28\)\t\t4\t380.9\t4\t8\t1.00/);
-assert.ok(!text.includes('Revenue') && !text.includes('$'), 'default report excludes revenue');
+assert.match(text, /09\/27\/2026\tSUNDAY\t2\t200.9\t2\t4\t1.00\t\$1,250.00/);
+assert.match(text, /Weekly Recap \(2026-09-27 to 2026-09-28\)\t\t4\t380.9\t4\t8\t1.00\t\$2,050.00/);
+// The owner's call (2026-10-06): the customer gets what they SPEND, right of
+// Turn, and nothing else financial. Revenue under its own name, our carrier
+// cost, our margin and GM% all stay internal.
+assert.ok(text.includes('Spend'), 'the breakdown carries Spend');
+assert.ok(!text.includes('Revenue'), 'and never the internal name for it');
+for (const internal of ['Cost', 'Margin', 'GM%']) {
+  assert.ok(!text.includes(internal), `${internal} is ours, not the customer's`);
+}
 api.renderRecapPreview();
 const html = elements['#sr-preview'].innerHTML;
-assert.equal((html.match(/scope="col"/g) || []).length, 7);
-assert.ok(!html.includes('Revenue') && !html.includes('$'), 'daily preview excludes revenue');
+assert.equal((html.match(/scope="col"/g) || []).length, 8, 'Date, Day and six metrics');
+assert.ok(html.includes('Spend') && html.includes('$1,250.00'), 'the preview shows Spend too');
+assert.ok(!html.includes('Revenue'), 'and not under its internal name');
+for (const internal of ['Cost', 'Margin', 'GM%']) {
+  assert.ok(!html.includes(internal), `${internal} stays off the customer's copy`);
+}
 assert.equal((html.match(/scope="row"/g) || []).length, 2);
 assert.ok(html.indexOf('<table') > html.indexOf('Backhauls: 1'));
 assert.match(html, /border-bottom:3px solid #000/);
@@ -102,4 +113,4 @@ assert.equal(fullRecaps[0].stops, 261);
 assert.equal(fullRecaps[0].turn, 127 / 71);
 assert.match(api.buildReportText(), /Weekly Recap \(2026-09-27 to 2026-10-03\)\t\t71\t16,302.7\t127\t261\t1.79/);
 assert.equal((source.match(/setReportData\(rangeData\);/g) || []).length, 3, 'weekly, custom and main Generate Report paths refresh the breakdown');
-console.log('Report summary, daily rows without revenue, TONUs, partial weeks, range changes and email body passed.');
+console.log('Report summary, daily rows with Spend (and no other money), TONUs, partial weeks, range changes and email body passed.');
