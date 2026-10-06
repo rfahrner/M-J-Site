@@ -5196,9 +5196,19 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       const result = await res.json();
       if (sendTextModalState !== requestState) return;
       if (!res.ok) throw new Error(result.error || `Send failed (${res.status})`);
-      if (sendTextModalState.markShiftIdsOnSent) await markPreShiftTextSent(sendTextModalState.markShiftIdsOnSent);
+      // Same order as the Outlook fallback, for the same reason: the message
+      // is gone, so close and dismiss before touching the database.
+      const sentIds = sendTextModalState.markShiftIdsOnSent;
       finishSendTextModalAsSent();
       setDriverSyncStatus("Text sent.", "success");
+      if (sentIds) {
+        try {
+          await markPreShiftTextSent(sentIds);
+        } catch (err) {
+          console.error("couldn't record the pre-shift text after sending:", err);
+          setDriverSyncStatus(`Text sent, but couldn't record it on the load (${err.message || err}). The load may still show as un-texted.`, "error");
+        }
+      }
     } catch (e) {
       console.error("send-text failed, falling back to email client:", e);
       if (sendTextModalState !== requestState) return;
@@ -5219,9 +5229,30 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       sendBtn.classList.add("hidden");
       // The existing Cancel button stays first in the footer.
       sendBtn.insertAdjacentHTML("beforebegin", textDraftControlsHtml("send-text-draft"));
+      /*
+       * The draft is open in the dispatcher's mail client -- the text HAS been
+       * sent as far as they are concerned, so the alert goes NOW. Recording it
+       * on the load comes second and is not allowed to undo that.
+       *
+       * It used to await the write first and finish after. Three silent ways
+       * that lost the dismissal and left the alert sitting there: the write
+       * rejecting (markPreShiftTextSent swallows its own query error, but
+       * logChange/labelForRow after that try are uncovered), sendTextModalState
+       * being read a SECOND time after an await that gives the modal a chance
+       * to close, and nothing awaiting or catching markSent() so the rejection
+       * went nowhere. Reported as "I sent a text from the alerts pop up and it
+       * didn't make the alert go away".
+       */
       const markSent = async () => {
-        if (sendTextModalState.markShiftIdsOnSent) await markPreShiftTextSent(sendTextModalState.markShiftIdsOnSent);
+        const ids = sendTextModalState && sendTextModalState.markShiftIdsOnSent;
         finishSendTextModalAsSent();
+        if (!ids) return;
+        try {
+          await markPreShiftTextSent(ids);
+        } catch (err) {
+          console.error("couldn't record the pre-shift text after an Outlook draft:", err);
+          setDriverSyncStatus(`Text sent, but couldn't record it on the load (${err.message || err}). The load may still show as un-texted.`, "error");
+        }
       };
       wireTextDraftControls("send-text-draft", addresses, () => $("#send-text-message").value.trim(), { onOpened: markSent });
     } finally {
