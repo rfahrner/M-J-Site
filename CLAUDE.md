@@ -749,6 +749,37 @@ quiet week look identical on these pages. That is also why
 `fetchAllRows()` reports the failure in a banner rather than letting it draw as
 zero — do not let anything here swallow an error and render a number.
 
+## The emailed report is pasted, not put in the mailto:
+
+A `mailto:` body carries plain text and nothing else. That is the format, not
+a limitation to code around -- there is no `mailto:` that can hand Outlook a
+table. Sent that way, the daily breakdown arrived as tab-separated lines that
+wrap into one another and read as a wall of numbers, while the preview beside
+it showed a proper table.
+
+So "Open in Email" puts the report on the clipboard as **text/html** (plus a
+text/plain flavour for anything that cannot take HTML) and opens the draft with
+the recipients and subject filled in and the body EMPTY. The dispatcher pastes
+once. `buildReportEmailHtml()` is the preview's two pieces in the preview's
+order, so the two cannot drift.
+
+Two things to keep true:
+
+- **The fallback must still work.** The clipboard needs a secure context, a
+  real user gesture and `ClipboardItem`. When any of that is missing,
+  `copyReportToClipboard()` returns false and the old plain-text body goes into
+  the mailto after all -- never worse than before the formatting existed. The
+  status line says which of the two happened.
+- **Inline styles only.** Mail clients discard `<style>` blocks, which is why
+  the table has been built with inline styles from the start. The summary
+  block above it carries its own `font-family` for the same reason: the preview
+  can say `inherit` because it sits in our page, an email has nothing to
+  inherit from.
+
+If a one-click send is ever wanted instead, that needs the Microsoft Graph work
+that is currently shelved -- see the archive section. Do not reach for it
+without being asked.
+
 ## Analytics recaps and driver counts
 
 Location Analytics and Volume add the daily driver counts for weekly, period,
