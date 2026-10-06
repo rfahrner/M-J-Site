@@ -21,6 +21,7 @@ class ClipboardItem {
 const window = {
   location: { href: '' },
   ClipboardItem,
+  crypto: { randomUUID: () => "test-boundary" },
 };
 const navigator = {
   clipboard: {
@@ -30,7 +31,7 @@ const navigator = {
     },
   },
 };
-const api = new Function('dateKey', 'addDays', '$', 'escapeHtml', 'window', 'navigator', 'Blob', `${executable}; return { state: laState, setReportData, buildRecapText, buildReportText, renderRecapPreview, openReportInEmail, buildReportEmailHtml };`)(dateKey, addDays, (selector) => elements[selector] || null, escapeHtml, window, navigator, Blob);
+const api = new Function('dateKey', 'addDays', '$', 'escapeHtml', 'window', 'navigator', 'Blob', `${executable}; return { state: laState, setReportData, buildRecapText, buildReportText, renderRecapPreview, copyReportPreview, buildReportEmailDraft, previousReportWeek, buildReportEmailHtml };`)(dateKey, addDays, (selector) => elements[selector] || null, escapeHtml, window, navigator, Blob);
 const shifts = [
   { id: 1, shift_date: '2026-09-26', driver_id: 1 },
   { id: 2, shift_date: '2026-09-27', driver_id: 1 },
@@ -97,43 +98,38 @@ for (const internal of ['Cost', 'Margin', 'GM%']) {
 assert.equal((html.match(/scope="row"/g) || []).length, 2);
 assert.ok(html.indexOf('<table') > html.indexOf('Backhauls: 1'));
 assert.match(html, /border-bottom:3px solid #000/);
-/*
- * The emailed report must LOOK like the preview. A mailto: body is plain text
- * and nothing else, so the formatted version goes on the clipboard as
- * text/html and the dispatcher pastes it into the draft.
- */
-await api.openReportInEmail();
+// Clipboard and draft carry the same HTML as the rendered preview.
+await api.copyReportPreview();
 const parts = clipboard.written;
-assert.ok(parts, 'the report was copied to the clipboard');
-const copiedHtml = await parts['text/html'].text();
-assert.ok(copiedHtml.includes('<table'), 'as a real table, not tab-separated text');
-assert.ok(copiedHtml.includes('Spend') && copiedHtml.includes('$1,250.00'));
-assert.ok(copiedHtml.includes('Drivers: 5'), 'with the recap summary above it');
-assert.equal(await parts['text/plain'].text(), text, 'and a plain-text flavour for anything that cannot take HTML');
-let url = new URL(window.location.href);
-assert.equal(decodeURIComponent(url.pathname), 'recipient@example.com', 'addressed to the recipient');
-assert.equal(url.searchParams.get('subject'), 'Atlanta report');
-assert.equal(url.searchParams.get('body'), null, 'the body is left empty for the paste');
-assert.match(elements['#sr-status'].textContent, /Ctrl\+V/, 'and the dispatcher is told to paste');
-
-// If the browser refuses the clipboard -- insecure context, no permission, no
-// ClipboardItem -- the old plain-text body still goes in. Never worse than it
-// was before the formatting existed.
+assert.equal(await parts['text/html'].text(), html);
+assert.equal(await parts['text/plain'].text(), text);
+assert.match(elements['#sr-status'].textContent, /Ctrl\+V/);
+const draft = api.buildReportEmailDraft('recipient@example.com', 'Atlanta report — test');
+assert.match(draft, /X-Unsent: 1/);
+assert.match(draft, /To: recipient@example.com/);
+const encodedSubject = draft.match(/Subject: =\?UTF-8\?B\?(.+)\?=/)[1];
+assert.equal(Buffer.from(encodedSubject, 'base64').toString(), 'Atlanta report — test');
+const bodies = [...draft.matchAll(/Content-Transfer-Encoding: base64\r\n\r\n([\s\S]*?)\r\n--report-/g)]
+  .map((match) => Buffer.from(match[1].replaceAll('\r\n', ''), 'base64').toString());
+assert.equal(bodies[0], text);
+assert.ok(bodies[1].includes(`<body>${html}</body>`));
+assert.ok(!api.buildReportEmailDraft('x@example.com\r\nBcc: bad@example.com', 'x\r\nInjected: y').includes('\r\nBcc:'));
+// A refused rich copy is reported without silently substituting plain text.
 clipboard.written = null;
 clipboard.refuse = true;
-window.location.href = '';
-// The refusal is logged by design -- a clipboard that silently does nothing is
-// how this would go unnoticed. Muted here so the expected error does not read
-// as a failing test.
 const realError = console.error;
 console.error = () => {};
-await api.openReportInEmail();
+await api.copyReportPreview();
 console.error = realError;
 assert.equal(clipboard.written, null);
-url = new URL(window.location.href);
-assert.equal(url.searchParams.get('body'), text, 'falls back to the plain-text body');
-assert.match(elements['#sr-status'].textContent, /plain-text/);
+assert.match(elements['#sr-status'].textContent, /Allow clipboard/);
 clipboard.refuse = false;
+// Every day of the current week returns the same completed Sun–Sat week.
+for (let day = 4; day <= 10; day++) {
+  assert.deepEqual(api.previousReportWeek(new Date(2026, 9, day)), { start: '2026-09-27', end: '2026-10-03' });
+}
+assert.deepEqual(api.previousReportWeek(new Date(2027, 0, 1)), { start: '2026-12-20', end: '2026-12-26' });
+assert.deepEqual(api.previousReportWeek(new Date(2026, 2, 8)), { start: '2026-03-01', end: '2026-03-07' });
 api.state.reportRange = { start: '2026-09-30', end: '2026-10-04' };
 api.setReportData({ shifts: [], trips: [], accountingRows: [] });
 assert.equal(api.state.reportRows.filter((r) => r.rowType === 'day').length, 5, 'includes quiet days');

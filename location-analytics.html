@@ -84,12 +84,12 @@
         <div class="field">
           <label>Timeframe</label>
           <div class="radio-row">
-            <label><input type="radio" name="sr-timeframe" value="period" checked> Period (this quarter)</label>
-            <label><input type="radio" name="sr-timeframe" value="weekly"> Weekly</label>
+            <label><input type="radio" name="sr-timeframe" value="period"> Period (this quarter)</label>
+            <label><input type="radio" name="sr-timeframe" value="weekly" checked> Weekly</label>
             <label><input type="radio" name="sr-timeframe" value="custom"> Custom timeframe</label>
           </div>
         </div>
-        <div class="field hidden" id="sr-week-field">
+        <div class="field" id="sr-week-field">
           <label for="sr-week-pick">Pick any day in the week (Sun–Sat)</label>
           <input type="date" class="cell-input" id="sr-week-pick" style="width:auto;">
         </div>
@@ -121,7 +121,8 @@
       <div class="modal-footer">
         <span id="sr-status" class="subtext" aria-live="polite" style="margin-right:auto;"></span>
         <button class="btn btn-ghost" id="sr-cancel">Cancel</button>
-        <button class="btn" id="sr-open-email">Open in Email</button>
+        <button class="btn btn-ghost" id="sr-copy">Copy</button>
+        <button class="btn" id="sr-open-email">Generate email</button>
       </div>
     </div>
   </div>

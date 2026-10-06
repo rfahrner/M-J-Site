@@ -140,6 +140,10 @@ function startOfWeek(d) {
   out.setDate(out.getDate() - diff);
   return out;
 }
+function previousReportWeek(now = todayDate()) {
+  const start = addDays(startOfWeek(now), -7);
+  return { start: dateKey(start), end: dateKey(addDays(start, 6)) };
+}
 function quarterRange(year, qIdx) {
   const start = new Date(year, qIdx * 3, 1);
   const end = new Date(year, qIdx * 3 + 3, 0); // last day of the quarter
@@ -696,7 +700,7 @@ function buildReportText() {
 function renderRecapPreview() {
   const el = $('#sr-preview');
   if (!el) return;
-  el.innerHTML = `<pre style="white-space:pre-wrap; margin:0; font-family:inherit;">${escapeHtml(buildRecapText())}</pre>${buildDailyBreakdownHtml()}`;
+  el.innerHTML = buildReportEmailHtml();
 }
 
 // Generic — works for any date range (a week or a period), not just a
@@ -726,6 +730,7 @@ async function openGenerateReportModal(labelOverride) {
   const kind = labelOverride || 'Report';
   const { start, end } = laState.reportRange;
   if (subjectInput) subjectInput.value = `${locLabel} ${kind} — ${start === end ? start : `${start} to ${end}`}`;
+  setReportStatus('');
   renderFieldCheckboxes();
   renderRecapPreview();
 }
@@ -753,40 +758,20 @@ async function applyReportTimeframe(mode) {
   }
   const rangeData = await fetchRangeData(laState.reportRange.start, laState.reportRange.end, laState.activeTab);
   setReportData(rangeData);
+  const subject = $('#sr-subject');
+  const locLabel = LA_LOCATIONS.find((l) => l.key === laState.activeTab)?.label || laState.activeTab;
+  if (subject) subject.value = `${locLabel} Report — ${laState.reportRange.start} to ${laState.reportRange.end}`;
   renderRecapPreview();
 }
 
-/*
- * The email body, as the preview draws it. Same two pieces in the same order:
- * the recap summary, then the daily table.
- *
- * The preview can say font-family:inherit because it is sitting inside our own
- * page. An email is pasted into Outlook, where there is nothing to inherit
- * from, so the summary carries its own font. Everything else is already
- * inline-styled -- mail clients discard <style> blocks, so the table was built
- * that way from the start.
- */
+// Shared, inline-styled body for the preview, rich clipboard and MIME draft.
 function buildReportEmailHtml() {
   const summary = escapeHtml(buildRecapText());
   return `<div style="font-family:Aptos,Calibri,Arial,sans-serif; font-size:12px; white-space:pre-wrap; margin:0 0 4px 0;">${summary}</div>${buildDailyBreakdownHtml()}`;
 }
 
-/*
- * Put the report on the clipboard as RICH text so it can be pasted into
- * Outlook with the table intact.
- *
- * A mailto: link carries plain text and nothing else -- that is the format,
- * not a bug -- so the emailed report arrived as tab-separated lines that wrap
- * into each other and read as a wall of numbers. There is no mailto: that can
- * hand Outlook a table.
- *
- * Both flavours go on the clipboard together: text/html for Outlook and
- * anything else that understands it, text/plain for whatever does not.
- * Returns false if the browser refuses -- the clipboard needs a secure
- * context, a real user gesture, and a browser with ClipboardItem -- so the
- * caller can fall back to the old plain-text body rather than opening an
- * empty draft.
- */
+// Include HTML for rich editors and plain text for plain-text destinations.
+// A refused rich copy is reported to the user so formatting is never silently lost.
 async function copyReportToClipboard(html, text) {
   try {
     if (!navigator.clipboard || typeof window.ClipboardItem !== 'function') return false;
@@ -806,20 +791,59 @@ function setReportStatus(message) {
   if (el) el.textContent = message || '';
 }
 
-async function openReportInEmail() {
+async function copyReportPreview() {
+  const copied = await copyReportToClipboard(buildReportEmailHtml(), buildReportText());
+  setReportStatus(copied
+    ? 'Copied — paste with Ctrl+V to keep the table formatting.'
+    : 'Could not copy the formatted report. Allow clipboard access and try again.');
+}
+
+// mailto cannot carry HTML. An unsent MIME draft can, including the exact
+// preview table, and X-Unsent opens it for editing in desktop Outlook.
+function mimeBase64(value) {
+  const bytes = new TextEncoder().encode(value);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function buildReportEmailDraft(to, subject) {
+  const cleanHeader = (value) => value.replace(/[\r\n]+/g, ' ').trim();
+  const boundary = 'report-' + window.crypto.randomUUID();
+  const encodeBody = (value) => mimeBase64(value).match(/.{1,76}/g)?.join('\r\n') || '';
+  const html = `<!doctype html><html><head><meta charset="utf-8"></head><body>${buildReportEmailHtml()}</body></html>`;
+  return [
+    'X-Unsent: 1',
+    `To: ${cleanHeader(to).replace(/;/g, ',')}`,
+    `Subject: =?UTF-8?B?${mimeBase64(cleanHeader(subject))}?=`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '', encodeBody(buildReportText()),
+    `--${boundary}`,
+    'Content-Type: text/html; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '', encodeBody(html),
+    `--${boundary}--`, '',
+  ].join('\r\n');
+}
+
+function openReportInEmail() {
   const to = ($('#sr-to').value || '').trim();
   const subject = ($('#sr-subject').value || '').trim();
-  const text = buildReportText();
-  const copied = await copyReportToClipboard(buildReportEmailHtml(), text);
-  setReportStatus(copied
-    ? 'Report copied — press Ctrl+V in the draft to paste it in.'
-    : 'Couldn\u2019t copy the formatted report, so the draft has the plain-text version.');
-  // When the copy worked the body is left empty and the dispatcher pastes the
-  // formatted version. When it did not, the old plain-text body still goes in,
-  // so this is never worse than it was.
-  const mailto = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}`
-    + (copied ? '' : `&body=${encodeURIComponent(text)}`);
-  window.location.href = mailto;
+  const draft = buildReportEmailDraft(to, subject);
+  const url = URL.createObjectURL(new Blob([draft], { type: 'message/rfc822' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `Report-${laState.reportRange.start}-${laState.reportRange.end}.eml`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  setReportStatus('Email draft generated — open the downloaded .eml in Outlook. The formatted preview is already included.');
 }
 
 export async function initLocationAnalyticsPage() {
@@ -892,21 +916,20 @@ export async function initLocationAnalyticsPage() {
   on('rp-apply', 'click', applyRangePickerSelection);
 
   on('btn-send-recap', 'click', async () => {
-    const now = todayDate();
-    const { start, end } = quarterRange(now.getFullYear(), quarterIndex(now));
-    const rangeData = await fetchRangeData(dateKey(start), dateKey(clampToToday(end)), laState.activeTab);
-    laState.reportRange = { start: dateKey(start), end: dateKey(clampToToday(end)) };
+    laState.reportRange = previousReportWeek();
+    const weekInput = $('#sr-week-pick');
+    if (weekInput) weekInput.value = laState.reportRange.start;
+    const weeklyRadio = document.querySelector('input[name="sr-timeframe"][value="weekly"]');
+    if (weeklyRadio) weeklyRadio.checked = true;
+    $('#sr-custom-range-field')?.classList.add('hidden');
+    $('#sr-week-field')?.classList.remove('hidden');
+    const rangeData = await fetchRangeData(laState.reportRange.start, laState.reportRange.end, laState.activeTab);
     setReportData(rangeData);
     await openGenerateReportModal();
-    const periodRadio = document.querySelector('input[name="sr-timeframe"][value="period"]');
-    if (periodRadio) periodRadio.checked = true;
-    const customField = $('#sr-custom-range-field');
-    if (customField) customField.classList.add('hidden');
-    const weekField = $('#sr-week-field');
-    if (weekField) weekField.classList.add('hidden');
   });
   on('sr-close', 'click', closeGenerateReportModal);
   on('sr-cancel', 'click', closeGenerateReportModal);
+  on('sr-copy', 'click', copyReportPreview);
   on('sr-open-email', 'click', openReportInEmail);
 
   document.querySelectorAll('input[name="sr-timeframe"]').forEach((radio) => {
