@@ -68,7 +68,7 @@ test('rate sender passes only the selected rating at the chosen rate and still e
   const context=vm.createContext({$,state:{driverListTab:'preferred',drivers:pool},rateTextMode:true,rateTextRates:new Set(['400']),rateTextRatings:new Set(['A']),
     driversForLocation:()=>pool,driverClassification:classify,isNeverTextDriver:d=>classify(d)==='DNU',
     rateMembers,selectedRateMembers,getBoardRateTiers:()=>({atlanta:tiers}),scheduledDriversOn:async()=>new Set(['1']),driverIsScheduled:(d,s)=>s.has(d.id),
-    applyPhoneMode:m=>m,beginTextBatchFlow:(...args)=>batches.push(args)});
+    splitDoNotTextRecipients:m=>({allowed:m,blocked:[]}),applyPhoneMode:m=>m,beginTextBatchFlow:(...args)=>batches.push(args)});
   vm.runInContext(lift('rateTextLabel')+'\n'+lift('startGroupTexting'), context);
   await vm.runInContext('startGroupTexting()',context);
   assert.deepEqual(Array.from(batches[0][0],d=>d.id),['2']);
@@ -91,7 +91,7 @@ test('rate counts start unselected, apply eligibility, and stale async refreshes
   const resolvers=[];
   const context=vm.createContext({$,state:{drivers:pool},rateTextMode:true,rateTextRates:new Set(['400']),rateTextRefresh:0,rateTextRatings:new Set(),rateTextEligible:[],
     driversForLocation:()=>pool,driverClassification:classify,rateMembers,ratingGroups,selectedRateMembers,getBoardRateTiers:()=>({atlanta:tiers}),
-    filterNeverTextRecipients:m=>({allowed:m.filter(d=>classify(d)!=='DNU')}),applyPhoneMode:m=>m,
+    splitDoNotTextRecipients:m=>({allowed:m,blocked:[]}),filterNeverTextRecipients:m=>({allowed:m.filter(d=>classify(d)!=='DNU')}),applyPhoneMode:m=>m,
     formatTextAddress:p=>p,driverIsScheduled:(d,s)=>s.has(d.id),escapeHtml:x=>x,
     availableDriverClasses:()=>['A','B'],variantTitle:()=>'',
     scheduledDriversOn:()=>new Promise(resolve=>resolvers.push(resolve))});

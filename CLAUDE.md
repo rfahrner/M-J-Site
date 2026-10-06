@@ -311,6 +311,58 @@ that page alone, while the modal SHELL is copied into the four board pages.
 `scripts/text-group-modal-opens.test.mjs` and
 `scripts/rating-variant-buckets.test.mjs` drive the real functions.
 
+## "Do not text" is not DNU
+
+A driver can ask not to receive the recruiting blasts without becoming
+undispatchable. `atlanta_drivers.do_not_text` is that flag, set from the
+**Do not text** checkbox on the driver profile. The owner's ruling
+(2026-10-06, after a blast reached a driver his carrier has on a do-not-text
+list): flagged drivers stay on the boards, stay assignable, and stay textable
+**one at a time** from a board row, an alert or the pre-shift prompt. Only the
+Text a Group modal drops them.
+
+So the exclusion is deliberately NOT in `beginTextBatchFlow()`, which the
+board's "text selected loads" button shares with the blast -- those drivers are
+already on a load that day, which is operational, not solicitation. It is not
+in `openSendTextModal()` either. `scripts/do-not-text-driver.test.mjs` asserts
+the absence from all three, because "while I'm here" is exactly how a
+narrow flag turns into a second DNU.
+
+Two things it has to get right, both silent failures:
+
+- **`startGroupTexting()` rebuilds its member list from the pool** rather than
+  reusing `ratingTextEligible` / `rateTextEligible`. Filtering only the two
+  count refreshers shows the correct smaller number on the buttons and still
+  sends to everyone. Filter all three.
+- **It blocks on the PHONE NUMBER, not the profile row.** The same person
+  routinely has a "preferred" profile and a location profile carrying the same
+  cell (581 duplicates outstanding), so flagging the row in front of you and
+  sending from the other one is the obvious failure. `doNotTextPhones()` keys
+  on `textPhoneKeys()`, the same way `neverTextRules()` has always keyed DNU.
+
+`NEVER_TEXT_DRIVER_NAMES` stays what it is: three names hard-blocked
+**everywhere**, including one-to-one. Do not migrate them onto the new flag --
+that would quietly make them textable again.
+
+## Dispatch mode drops, it does not fall back
+
+"Text dispatch where applicable" addresses each member at their dispatcher's
+number. A member with **no** dispatcher number on file is now left out and
+counted, not quietly sent to their own cell. The old fallback meant the option
+that exists to keep messages off a driver's personal phone could put one there,
+and said nothing, so nobody knew whose dispatcher number was missing. They
+arrive in `skipped` with `noDispatcherPhone`, and the progress panel reports
+the two skip reasons separately -- no phone at all is a profile to fill in; no
+dispatcher number is a deliberate drop.
+
+**The option defaults OFF, on purpose.** `0f6c842` ("Default board and alert
+text actions to driver phone numbers") set it false on every modal open, but
+the markup kept `checked` on the input -- so for three weeks the box read as on
+and was off. That is why the incident above was reported as "I'm pretty sure
+text dispatch number was checked": the driver had a dispatcher number on file
+the whole time. The attribute is gone. If the default is ever meant to change,
+change the script; do not put the attribute back on its own.
+
 ## Deleting a load vs. deleting a route
 
 The ROUTES column's pills are rendered inside a load's FIRST `<tr>`, and routes

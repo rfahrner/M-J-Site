@@ -15,7 +15,11 @@ const start = source.indexOf('const NEVER_TEXT_DRIVER_NAMES');
 const end = source.indexOf('let sendTextModalState', start);
 if (start < 0 || end < 0) throw new Error('Could not find the DNU text guard in loadboard.js');
 
-const guardSource = source.slice(start, end);
+// The slice now also carries splitDoNotTextRecipients (the softer "do not
+// text" flag, which lives beside this guard because they share textPhoneKeys
+// and setsIntersect). It is exported; `export` is not valid inside a Function
+// body, so it comes off here. The guard under test is unchanged.
+const guardSource = source.slice(start, end).replace(/^\s*export\s+/gm, '  ');
 const state = {
   drivers: [
     { name: 'Nathaniel Davis', phone: '(615) 555-0101', mc: '100', rating: 'DNU' },
@@ -26,9 +30,9 @@ const state = {
   ],
 };
 
-const { filterNeverTextRecipients } = new Function('state', `
+const { filterNeverTextRecipients, splitDoNotTextRecipients } = new Function('state', `
   ${guardSource}
-  return { filterNeverTextRecipients };
+  return { filterNeverTextRecipients, splitDoNotTextRecipients };
 `)(state);
 
 let failures = 0;

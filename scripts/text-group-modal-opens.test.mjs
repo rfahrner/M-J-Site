@@ -64,6 +64,7 @@ function openOn(page) {
     dateKey: () => '2026-10-05', todayDate: () => new Date(),
     filterNeverTextRecipients: (l) => ({ allowed: l, blocked: [] }),
     formatTextAddress: (p) => String(p || ''), applyPhoneMode: (l) => l,
+    splitDoNotTextRecipients:m=>({allowed:m,blocked:[]}),
     scheduledDriversOn: async () => ({}), driverIsScheduled: () => false,
     isNeverTextDriver: (d) => String(d.rating || '').toUpperCase().includes('DNU'),
     refreshRateTextRatings: async () => {},
