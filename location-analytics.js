@@ -82,6 +82,8 @@ const laState = {
   notesByDate: {},
   includedFields: new Set(FIELD_DEFS.filter((f) => f.category === 'default').map((f) => f.key)),
   reportRange: { start: '', end: '' }, // Generate Report's own single range — separate from selectedRanges, since a report is for one coherent period, not a multi-select combination
+  reportRecap: null,
+  reportRows: [],
   loadError: null, // a query that came back empty because it FAILED, not because the period was quiet — see reportFetchFailure()
 };
 
@@ -619,15 +621,62 @@ function buildRecapText() {
   const rangeLabel = start === end ? start : `${start} to ${end}`;
   const lines = [`${locLabel} Report — ${rangeLabel}`, ''];
   FIELD_DEFS.filter((d) => laState.includedFields.has(d.key)).forEach((def) => {
-    lines.push(`${def.label}: ${fmtValue(def, laState.recap ? laState.recap[def.key] : null)}`);
+    lines.push(`${def.label}: ${fmtValue(def, laState.reportRecap ? laState.reportRecap[def.key] : null)}`);
   });
   return lines.join('\n');
+}
+
+// Keep the report's exact range separate from the analytics sheet's selection.
+// Reuse its day/week calculations so daily figures and recaps cannot drift.
+function setReportData(rangeData) {
+  laState.reportRecap = computeAggregate(rangeData);
+  laState.reportRows = buildDisplayRows(rangeData, laState.reportRange.start, laState.reportRange.end)
+    .filter((row) => row.rowType === 'day' || row.rowType === 'weekRecap');
+}
+
+const REPORT_DAILY_FIELDS = ['drivers', 'mileage', 'routes', 'stops', 'turn', 'revenue']
+  .map((key) => FIELD_DEFS.find((def) => def.key === key));
+
+function reportDailyLabels(row) {
+  if (row.rowType === 'weekRecap') return [`Weekly Recap (${row.rangeStart} to ${row.rangeEnd})`, ''];
+  const [year, month, day] = row.date.split('-');
+  return [`${month}/${day}/${year}`, DAY_NAMES[new Date(row.date + 'T00:00:00').getDay()].toUpperCase()];
+}
+
+function buildDailyBreakdownText() {
+  const lines = ['Daily Breakdown', ['Date', 'Day', ...REPORT_DAILY_FIELDS.map((def) => def.label)].join('\t')];
+  laState.reportRows.forEach((row) => {
+    lines.push([...reportDailyLabels(row), ...REPORT_DAILY_FIELDS.map((def) => fmtValue(def, row[def.key]))].join('\t'));
+  });
+  return lines.join('\n');
+}
+
+function buildDailyBreakdownHtml() {
+  let dayIndex = 0;
+  const rows = laState.reportRows.map((row) => {
+    const recap = row.rowType === 'weekRecap';
+    const background = recap ? '#54b2e5' : dayIndex++ % 2 ? '#DAECF5' : '#fff';
+    const style = `padding:6px 8px; border:1px solid #aaa; white-space:nowrap; background:${background};${recap ? 'font-weight:700; border-bottom:3px solid #000;' : ''}${row.weekStart ? 'border-top:3px solid #000;' : ''}`;
+    const labels = reportDailyLabels(row);
+    const labelCells = recap
+      ? `<th scope="row" colspan="2" style="${style} border-left:3px solid #000; text-align:left;">${escapeHtml(labels[0])}</th>`
+      : labels.map((label, i) => `<td style="${style}${i === 0 ? ' border-left:3px solid #000;' : ''}">${escapeHtml(label)}</td>`).join('');
+    const metricCells = REPORT_DAILY_FIELDS.map((def, i) => `<td style="${style} text-align:right;${i === REPORT_DAILY_FIELDS.length - 1 ? ' border-right:3px solid #000;' : ''}">${escapeHtml(fmtValue(def, row[def.key]))}</td>`).join('');
+    return `<tr>${labelCells}${metricCells}</tr>`;
+  }).join('');
+  const headers = ['Date', 'Day', ...REPORT_DAILY_FIELDS.map((def) => def.label)]
+    .map((label) => `<th scope="col" style="padding:6px 8px; border:1px solid #aaa; background:#f1f1f1; white-space:nowrap;">${escapeHtml(label)}</th>`).join('');
+  return `<div style="margin-top:16px; overflow-x:auto;"><table style="border-collapse:collapse; font-size:12px; width:100%;"><caption style="text-align:left; font-weight:700; margin-bottom:8px;">Daily Breakdown</caption><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function buildReportText() {
+  return `${buildRecapText()}\n\n${buildDailyBreakdownText()}`;
 }
 
 function renderRecapPreview() {
   const el = $('#sr-preview');
   if (!el) return;
-  el.innerHTML = `<pre style="white-space:pre-wrap; margin:0; font-family:inherit;">${escapeHtml(buildRecapText())}</pre>`;
+  el.innerHTML = `<pre style="white-space:pre-wrap; margin:0; font-family:inherit;">${escapeHtml(buildRecapText())}</pre>${buildDailyBreakdownHtml()}`;
 }
 
 // Generic — works for any date range (a week or a period), not just a
@@ -636,7 +685,7 @@ function renderRecapPreview() {
 async function openReportForRange(startKey, endKey, isWeekly) {
   laState.reportRange = { start: startKey, end: endKey };
   const rangeData = await fetchRangeData(startKey, endKey, laState.activeTab);
-  laState.recap = computeAggregate(rangeData);
+  setReportData(rangeData);
   await openGenerateReportModal(isWeekly ? 'Weekly Report' : 'Period Report');
   const customRadio = document.querySelector('input[name="sr-timeframe"][value="custom"]');
   if (customRadio) customRadio.checked = true;
@@ -683,14 +732,14 @@ async function applyReportTimeframe(mode) {
     if (endInput && endInput.value) laState.reportRange.end = endInput.value;
   }
   const rangeData = await fetchRangeData(laState.reportRange.start, laState.reportRange.end, laState.activeTab);
-  laState.recap = computeAggregate(rangeData);
+  setReportData(rangeData);
   renderRecapPreview();
 }
 
 function openReportInEmail() {
   const to = ($('#sr-to').value || '').trim();
   const subject = ($('#sr-subject').value || '').trim();
-  const body = buildRecapText();
+  const body = buildReportText();
   const mailto = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   window.location.href = mailto;
 }
@@ -768,8 +817,8 @@ export async function initLocationAnalyticsPage() {
     const now = todayDate();
     const { start, end } = quarterRange(now.getFullYear(), quarterIndex(now));
     const rangeData = await fetchRangeData(dateKey(start), dateKey(clampToToday(end)), laState.activeTab);
-    laState.recap = computeAggregate(rangeData);
     laState.reportRange = { start: dateKey(start), end: dateKey(clampToToday(end)) };
+    setReportData(rangeData);
     await openGenerateReportModal();
     const periodRadio = document.querySelector('input[name="sr-timeframe"][value="period"]');
     if (periodRadio) periodRadio.checked = true;
