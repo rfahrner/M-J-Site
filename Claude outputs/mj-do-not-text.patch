@@ -1,0 +1,798 @@
+From d2ed5a3d0cb166e8f0ce1a051fa3c3a3f4e57a69 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 6 Oct 2026 13:50:14 +0000
+Subject: [PATCH] A driver can say "do not text" without becoming
+ undispatchable
+
+A group blast reached a driver whose carrier has him on a do-not-text list.
+Until now the only way to record that was NEVER_TEXT_DRIVER_NAMES -- three
+names hardcoded in loadboard.js, which is a deploy, and which blocks a driver
+EVERYWHERE including one-to-one.
+
+atlanta_drivers.do_not_text is the softer flag, set from a Do not text
+checkbox on the driver profile. A flagged driver stays on the boards, stays
+assignable, and stays textable one at a time from a board row, an alert or the
+pre-shift prompt. Only the Text a Group modal drops them. The exclusion is
+therefore deliberately NOT in beginTextBatchFlow(), which the board's "text
+selected loads" button shares with the blast -- those drivers are already on a
+load that day -- and not in openSendTextModal(). The test asserts its absence
+from all three, because "while I'm here" is how a narrow flag becomes a second
+DNU.
+
+Two things it has to get right, both of which fail silently:
+
+- startGroupTexting() rebuilds its member list from the driver pool rather
+  than reusing ratingTextEligible/rateTextEligible. Filtering only the two
+  count refreshers would show the correct smaller number on the buttons and
+  still send to everyone. All three are filtered.
+- It blocks on the PHONE NUMBER, not the profile row. The same person
+  routinely has a preferred profile and a location profile carrying the same
+  cell -- 581 duplicates outstanding -- so flagging the row in front of you
+  and sending from the other one is the obvious failure. Same keying
+  neverTextRules() has always used for DNU. A flagged driver's DISPATCHER is
+  dropped with him, or the blast just takes another route to the same man.
+
+Dispatch mode, which is how this text reached a personal phone at all:
+
+"Text dispatch where applicable" now defaults ON for the Text a Group modal
+and stays OFF for the board's "text selected loads" -- the second is about a
+load someone is already running, not a solicitation. Each opener sets it and
+the markup carries no `checked` attribute. It used to: 0f6c842 ("Default board
+and alert text actions to driver phone numbers") set it false in script and
+left the attribute alone, so for three weeks the box read as on and was off.
+The driver in this incident had a dispatcher number on file the whole time.
+
+A member with no dispatcher number still falls back to their own cell.
+Dropping them was built first and reversed once the numbers were counted: a
+third of every pool has no dispatcher number on file -- 204 of 538 preferred,
+999 of 3,128 Atlanta, 107 of 202 Mondelez -- so skipping them would quietly
+cut a third of the drivers out of every blast. The fallback is flagged rather
+than hidden: applyPhoneMode() sets directPhoneFallback and the progress panel
+names those drivers, because the silence was the bug, not the fallback.
+
+NEVER_TEXT_DRIVER_NAMES is untouched. Migrating those three onto the new flag
+would quietly make them textable again.
+
+scripts/do-not-text-driver.test.mjs drives the real modal in jsdom. Verified
+red against the half-fix that filters only the counts, against the default
+reverting to off, and against the fallback being removed again.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01G31nAipMUTYgpxUWm5ZDWp
+---
+ .github/workflows/ci.yml                 |   3 +
+ CLAUDE.md                                |  60 +++++
+ driverlist.html                          |   5 +-
+ loadboard.js                             | 121 +++++++++-
+ scripts/dnu-text-guard.test.mjs          |  10 +-
+ scripts/do-not-text-driver.test.mjs      | 269 +++++++++++++++++++++++
+ scripts/preferred-rate-groups.test.mjs   |   4 +-
+ scripts/text-group-modal-opens.test.mjs  |   1 +
+ scripts/text-group-rate-buttons.test.mjs |   1 +
+ scripts/text-modal-layout.test.mjs       |   8 +-
+ scripts/text-rating-toggles.test.mjs     |   1 +
+ 11 files changed, 464 insertions(+), 19 deletions(-)
+ create mode 100644 scripts/do-not-text-driver.test.mjs
+
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 0209282..c5b7f24 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -87,6 +87,9 @@ jobs:
+       - name: Test group Outlook session fallback
+         run: node --test scripts/group-outlook-session.test.mjs
+ 
++      - name: Test Do Not Text keeps drivers out of blasts only
++        run: node --test scripts/do-not-text-driver.test.mjs
++
+       - name: Test accounting checkbox persistence
+         run: node --test scripts/accounting-save.test.mjs scripts/accounting-note-icon.test.mjs
+ 
+diff --git a/CLAUDE.md b/CLAUDE.md
+index d6ca19f..6507ec0 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -311,6 +311,66 @@ that page alone, while the modal SHELL is copied into the four board pages.
+ `scripts/text-group-modal-opens.test.mjs` and
+ `scripts/rating-variant-buckets.test.mjs` drive the real functions.
+ 
++## "Do not text" is not DNU
++
++A driver can ask not to receive the recruiting blasts without becoming
++undispatchable. `atlanta_drivers.do_not_text` is that flag, set from the
++**Do not text** checkbox on the driver profile. The owner's ruling
++(2026-10-06, after a blast reached a driver his carrier has on a do-not-text
++list): flagged drivers stay on the boards, stay assignable, and stay textable
++**one at a time** from a board row, an alert or the pre-shift prompt. Only the
++Text a Group modal drops them.
++
++So the exclusion is deliberately NOT in `beginTextBatchFlow()`, which the
++board's "text selected loads" button shares with the blast -- those drivers are
++already on a load that day, which is operational, not solicitation. It is not
++in `openSendTextModal()` either. `scripts/do-not-text-driver.test.mjs` asserts
++the absence from all three, because "while I'm here" is exactly how a
++narrow flag turns into a second DNU.
++
++Two things it has to get right, both silent failures:
++
++- **`startGroupTexting()` rebuilds its member list from the pool** rather than
++  reusing `ratingTextEligible` / `rateTextEligible`. Filtering only the two
++  count refreshers shows the correct smaller number on the buttons and still
++  sends to everyone. Filter all three.
++- **It blocks on the PHONE NUMBER, not the profile row.** The same person
++  routinely has a "preferred" profile and a location profile carrying the same
++  cell (581 duplicates outstanding), so flagging the row in front of you and
++  sending from the other one is the obvious failure. `doNotTextPhones()` keys
++  on `textPhoneKeys()`, the same way `neverTextRules()` has always keyed DNU.
++
++`NEVER_TEXT_DRIVER_NAMES` stays what it is: three names hard-blocked
++**everywhere**, including one-to-one. Do not migrate them onto the new flag --
++that would quietly make them textable again.
++
++## Dispatch mode: on for blasts, off for loads in progress, never silent
++
++"Text dispatch where applicable" addresses each member at their dispatcher's
++number. **The Text a Group modal opens with it ON** and the board's "text
++selected loads" opens with it OFF -- the second is a message about a load
++someone is already running, not a solicitation. Each opener sets it, and the
++markup carries **no `checked` attribute**: `0f6c842` ("Default board and alert
++text actions to driver phone numbers") set it false in script while leaving
++`checked` on the input, so for three weeks the box read as on and was off.
++That is why the incident below was reported as "I'm pretty sure text dispatch
++number was checked" -- the driver had a dispatcher number on file the whole
++time. Now that the two openers disagree on purpose, a markup default could
++only ever be wrong for one of them. Do not reintroduce it.
++
++**A member with no dispatcher number falls back to their own cell.** Dropping
++them instead was built and reversed the same day (owner's ruling, 2026-10-06)
++once the numbers were counted: **a third of every pool has no dispatcher
++number on file** -- 204 of 538 preferred, 999 of 3,128 Atlanta, 107 of 202
++Mondelez. Skipping them would quietly cut a third of the drivers out of every
++blast, which is worse than reaching them on the wrong channel.
++
++The fallback is flagged, not hidden. `applyPhoneMode()` sets
++`directPhoneFallback` and the progress panel names those drivers: this message
++is about to land on their personal phone, and they are exactly the list worth
++filling dispatcher numbers in for. **The silence was the bug, not the
++fallback** -- if the flag or the note is ever removed, the bug is back.
++
+ ## Deleting a load vs. deleting a route
+ 
+ The ROUTES column's pills are rendered inside a load's FIRST `<tr>`, and routes
+diff --git a/driverlist.html b/driverlist.html
+index c4301f0..952bc61 100644
+--- a/driverlist.html
++++ b/driverlist.html
+@@ -93,6 +93,9 @@
+           <input type="text" id="ad-name">
+           <div class="field-error">Required.</div>
+         </div>
++        <div class="field">
++          <label><input type="checkbox" id="ad-do-not-text"> Do not text</label>
++        </div>
+         <div class="field">
+           <label for="ad-phone">Driver cell</label>
+           <input type="tel" id="ad-phone">
+@@ -210,7 +213,7 @@
+           </div>
+           <div class="field">
+             <div class="radio-row" style="flex-direction:column; align-items:flex-start; gap:8px;">
+-              <label><input type="checkbox" id="tg-dispatch-mode" checked> Text dispatch where applicable</label>
++              <label><input type="checkbox" id="tg-dispatch-mode"> Text dispatch where applicable</label>
+               <label><input type="checkbox" id="tg-exclude-scheduled" checked> Exclude already scheduled drivers</label>
+             </div>
+           </div>
+diff --git a/loadboard.js b/loadboard.js
+index f1da97a..a7b61a8 100644
+--- a/loadboard.js
++++ b/loadboard.js
+@@ -367,6 +367,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+       "Driver Cell": d.phone,
+       "MC": d.mc === "" || d.mc == null ? null : Number(d.mc),
+       "Dispatcher phone number": d.dispatcherPhone || null,
++      "do_not_text": !!d.doNotText,
+       "E mail": d.email,
+       "2nd email": d.email2 || null,
+       "Driver Rating": d.rating || null,
+@@ -391,6 +392,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+       phone: row["Driver Cell"] || "",
+       mc: row["MC"] != null ? String(row["MC"]) : "",
+       dispatcherPhone: row["Dispatcher phone number"] || "",
++      doNotText: !!row["do_not_text"],
+       email: row["E mail"] || "",
+       email2: row["2nd email"] || "",
+       rating: row["Driver Rating"] || null,
+@@ -4411,6 +4413,9 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+     groupTextState = null;
+     $("#tg-group-tabs-wrap").classList.add("hidden"); // no group to pick — the checkboxes already picked them
+     $("#tg-message").value = "";
++    // OFF here, deliberately: these drivers are already on a load that day, so
++    // this is a message about work in progress, not a solicitation. The group
++    // blast opens with it ON instead -- see openTextGroupModal.
+     const dispatchModeCheckbox = $("#tg-dispatch-mode");
+     if (dispatchModeCheckbox) dispatchModeCheckbox.checked = false;
+     $("#tg-setup-step").classList.remove("hidden");
+@@ -4893,6 +4898,50 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+     return { blockedNames, blockedPhones };
+   }
+ 
++  /*
++   * "Do not text" is a driver asking to be left out of the RECRUITING BLASTS,
++   * and nothing more. It is deliberately not DNU: a flagged driver is still
++   * dispatchable, still on the boards, and still textable one at a time from a
++   * board row, an alert or the pre-shift prompt. Only the Text a Group modal
++   * drops them -- the owner's ruling, 2026-10-06, after a blast reached a
++   * driver whose carrier has him on a do-not-text list.
++   *
++   * It blocks by PHONE NUMBER, not by profile row. The same person routinely
++   * has more than one row -- a "preferred" profile and a location profile with
++   * the same cell (there are 581 duplicate profiles outstanding) -- so flagging
++   * the row that happens to be in front of you and texting them from the other
++   * one is the obvious way for this to fail silently. Same reasoning as
++   * neverTextRules(), which has always keyed DNU on names and phones rather
++   * than ids.
++   */
++  function doNotTextPhones() {
++    const blocked = new Set();
++    (state.drivers || []).forEach((driver) => {
++      if (!driver || !driver.doNotText) return;
++      textPhoneKeys(driver.phone).forEach((phone) => blocked.add(phone));
++    });
++    return blocked;
++  }
++
++  // Returns { allowed, blocked } so callers can SAY how many were left out.
++  // A blast that silently shrinks is how a do-not-text list stops being
++  // trusted; the count note names the number every time.
++  export function splitDoNotTextRecipients(recipients) {
++    const candidates = (Array.isArray(recipients) ? recipients : []).filter(Boolean);
++    const blockedPhones = doNotTextPhones();
++    if (!blockedPhones.size) return { allowed: candidates, blocked: [] };
++
++    const allowed = [];
++    const blocked = [];
++    candidates.forEach((recipient) => {
++      // Check the recipient's own flag too: a member object built from
++      // something other than the driver pool still carries it.
++      const flagged = !!recipient.doNotText || setsIntersect(textPhoneKeys(recipient.phone), blockedPhones);
++      (flagged ? blocked : allowed).push(recipient);
++    });
++    return { allowed, blocked };
++  }
++
+   function filterNeverTextRecipients(recipients, { allowDnu = false } = {}) {
+     const candidates = (Array.isArray(recipients) ? recipients : []).filter(Boolean);
+     // The only bypass is the dispatcher explicitly choosing the DNU group.
+@@ -5273,8 +5322,12 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+     ratingTextRefresh++;
+     const msgEl = $("#tg-message");
+     if (msgEl) msgEl.value = "";
++    // ON for the blasts (owner's ruling, 2026-10-06): a recruiting message
++    // belongs with the dispatcher where there is one. Anyone without a
++    // dispatcher number still gets it on their own cell -- see applyPhoneMode
++    // -- and the count note says how many that is.
+     const dispatchModeCheckbox = $("#tg-dispatch-mode");
+-    if (dispatchModeCheckbox) dispatchModeCheckbox.checked = false;
++    if (dispatchModeCheckbox) dispatchModeCheckbox.checked = true;
+ 
+     // Both independent options default on whenever the modal opens.
+     // The exclusion date starts on the user's current local date.
+@@ -5422,8 +5475,9 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+     note.textContent = "Checking eligible drivers…";
+     try {
+       const pool = driversForLocation(state.driverListTab || "atlanta");
+-      const ordinary = filterNeverTextRecipients(applyPhoneMode(pool.filter(d => !isNeverTextDriver(d)))).allowed;
+-      const dnu = applyPhoneMode(pool.filter(isNeverTextDriver));
++      const textable = splitDoNotTextRecipients(pool).allowed;
++      const ordinary = filterNeverTextRecipients(applyPhoneMode(textable.filter(d => !isNeverTextDriver(d)))).allowed;
++      const dnu = applyPhoneMode(textable.filter(isNeverTextDriver));
+       let members = [...ordinary, ...dnu].filter(d => !!formatTextAddress(d.phone));
+       if ($("#tg-exclude-scheduled").checked) {
+         const day = $("#tg-day").value;
+@@ -5461,6 +5515,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+           members.push(driver);
+         }
+       }
++      members = splitDoNotTextRecipients(members).allowed;
+       members = filterNeverTextRecipients(applyPhoneMode(members)).allowed.filter(d => !!formatTextAddress(d.phone));
+       if ($("#tg-exclude-scheduled").checked) {
+         const day = $("#tg-day").value;
+@@ -5545,19 +5600,39 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+     $("#tg-rate-rating-label")?.classList.toggle("hidden", !visible);
+   }
+ 
+-  // Shared by both Text Group flows (driver-list group texting and the
+-  // board's "text selected rows") — when dispatch mode is on, prefers
+-  // each member's dispatcher phone if one's on file, falling back to
+-  // their own cell if not. De-duplication for shared dispatcher numbers
+-  // happens downstream in beginTextBatchFlow, so this only needs to
+-  // pick the right number per member.
++  /*
++   * Shared by both Text Group flows (driver-list group texting and the board's
++   * "text selected rows"). With dispatch mode on, each member is addressed at
++   * their dispatcher's number.
++   *
++   * A member with NO dispatcher number on file falls back to their own cell.
++   * Dropping them instead was tried and reversed on the owner's ruling
++   * (2026-10-06): a THIRD of every pool has no dispatcher number on file --
++   * 204 of 538 preferred, 999 of 3,128 Atlanta, 107 of 202 Mondelez -- so
++   * skipping them would quietly cut a third of the drivers out of every blast.
++   * Reaching them matters more than the channel.
++   *
++   * The fallback is flagged, not hidden. `directPhoneFallback` is what the
++   * count note counts, so the dispatcher is told how many of this group will
++   * get the message on their personal phone rather than discovering it later.
++   * That visibility is the whole of the fix; the silence was the bug.
++   *
++   * De-duplication for shared dispatcher numbers happens downstream in
++   * beginTextBatchFlow, so this only has to pick the right number per member.
++   *
++   * The checkbox's state is set by whichever function OPENS the modal --
++   * openTextGroupModal() on, openTextSelectedModal() off -- and the markup
++   * deliberately carries no `checked` attribute. It used to, while the script
++   * set false on every open, so the box read as on and was off for three
++   * weeks. One source of truth; do not reintroduce the attribute.
++   */
+   function applyPhoneMode(members) {
+     const checkbox = $("#tg-dispatch-mode");
+     const dispatchMode = checkbox ? checkbox.checked : false;
+     if (!dispatchMode) return members;
+     return members.map((m) => {
+       const dispatchPhone = m.dispatcherPhone && String(m.dispatcherPhone).trim();
+-      if (!dispatchPhone) return m;
++      if (!dispatchPhone) return { ...m, directPhoneFallback: true };
+       return { ...m, name: `${m.name} (dispatch)`, phone: dispatchPhone };
+     });
+   }
+@@ -5706,6 +5781,18 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+       label = `${[...rateTextRates].map(rateTextLabel).join(" / ")} — ${[...rateTextRatings].join(", ")}`;
+     }
+ 
++    // startGroupTexting rebuilds `members` from the pool rather than reusing
++    // ratingTextEligible / rateTextEligible, so filtering the COUNTS alone
++    // would show the right number and still send to everyone.
++    const doNotText = splitDoNotTextRecipients(members);
++    members = doNotText.allowed;
++    if (!members.length) {
++      errEl.textContent = `Everyone in ${label} (${doNotText.blocked.length}) is marked do not text.`;
++      errEl.classList.remove("hidden");
++      return;
++    }
++    if (doNotText.blocked.length) label = `${label} — ${doNotText.blocked.length} do not text`;
++
+     const excludeScheduledCheckbox = $("#tg-exclude-scheduled");
+     const excludeScheduled = !!(excludeScheduledCheckbox && excludeScheduledCheckbox.checked);
+     if (excludeScheduled) {
+@@ -5795,6 +5882,15 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+     const s = groupTextState;
+     if (!s) return;
+     const isDone = s.batchIndex >= s.batches.length;
++    // With dispatch mode on, anyone without a dispatcher number on file is
++    // texted on their own cell (see applyPhoneMode). That is the chosen
++    // behaviour, but it must not be a surprise -- these are the drivers whose
++    // personal phone this message is about to land on, and the same list is
++    // the one worth filling dispatcher numbers in for.
++    const direct = s.batches.flat().filter((d) => d.directPhoneFallback);
++    const directNote = direct.length
++      ? `<div class="calc-note" style="margin-top:8px;">${direct.length} driver(s) have no dispatcher number on file and will be texted directly: ${escapeHtml(direct.map((d) => d.name).join(", "))}</div>`
++      : "";
+     const skipNote = s.skipped.length
+       ? `<div class="calc-note" style="margin-top:8px;">${s.skipped.length} driver(s) in this group have no phone on file and were skipped: ${escapeHtml(s.skipped.map((d) => d.name).join(", "))}</div>`
+       : "";
+@@ -5808,7 +5904,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+     // Three stacked yellow notes pushed the buttons off the bottom of a long
+     // batch. They are worth keeping -- who was skipped and why is exactly what
+     // gets asked afterwards -- so they fold into one summary that starts shut.
+-    const detailNotes = [skipNote, dedupedNote, blockedNote].filter(Boolean).join("");
++    const detailNotes = [directNote, skipNote, dedupedNote, blockedNote].filter(Boolean).join("");
+     const details = detailNotes
+       ? `<details class="text-modal-details"><summary>Details</summary>${detailNotes}</details>`
+       : "";
+@@ -7133,6 +7229,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+     if (prefillName) setVal("ad-name", prefillName);
+     const mcFieldAdd = $("#ad-mc"); if (mcFieldAdd) mcFieldAdd.dataset.lastCheckedMc = "";
+     $all('input[name="ad-tia"]', $("#modal-add-driver")).forEach((r) => (r.checked = r.value === "no"));
++    const doNotTextAdd = $("#ad-do-not-text"); if (doNotTextAdd) doNotTextAdd.checked = false;
+     const addingFromMondelez = (state.activeLocation || state.driverListTab) === "mondelez";
+     $all('input[name="ad-runs-out-of"]').forEach((c) => { c.checked = addingFromMondelez && c.value === "mondelez"; });
+     ensureDelawareRateSection();
+@@ -7182,6 +7279,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+     setVal("ad-notes", d.notes || "");
+     setVal("ad-rate", d.normalRate || "");
+     $all('input[name="ad-tia"]', $("#modal-add-driver")).forEach((r) => (r.checked = r.value === (d.tia ? "yes" : "no")));
++    const doNotTextEdit = $("#ad-do-not-text"); if (doNotTextEdit) doNotTextEdit.checked = !!d.doNotText;
+     setVal("ad-tii-amount", d.tiiAmount != null ? d.tiiAmount : "");
+     const runsOutOf = d.runsOutOf || [];
+     $all('input[name="ad-runs-out-of"]').forEach((c) => { c.checked = runsOutOf.includes(c.value); });
+@@ -7344,6 +7442,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
+       carrier: getVal("ad-carrier").trim(),
+       rateBooking: getVal("ad-rate-booking").trim(),
+       tia: ($all('input[name="ad-tia"]', $("#modal-add-driver")).find((r) => r.checked) || {}).value === "yes",
++      doNotText: !!$("#ad-do-not-text")?.checked,
+       tiiAmount: getVal("ad-tii-amount").trim() ? Number(getVal("ad-tii-amount")) : null,
+       normalRate: getVal("ad-rate").trim() || null,
+       runsOutOf: $all('input[name="ad-runs-out-of"]').filter((c) => c.checked).map((c) => c.value),
+diff --git a/scripts/dnu-text-guard.test.mjs b/scripts/dnu-text-guard.test.mjs
+index 090e23e..4055d5f 100644
+--- a/scripts/dnu-text-guard.test.mjs
++++ b/scripts/dnu-text-guard.test.mjs
+@@ -15,7 +15,11 @@ const start = source.indexOf('const NEVER_TEXT_DRIVER_NAMES');
+ const end = source.indexOf('let sendTextModalState', start);
+ if (start < 0 || end < 0) throw new Error('Could not find the DNU text guard in loadboard.js');
+ 
+-const guardSource = source.slice(start, end);
++// The slice now also carries splitDoNotTextRecipients (the softer "do not
++// text" flag, which lives beside this guard because they share textPhoneKeys
++// and setsIntersect). It is exported; `export` is not valid inside a Function
++// body, so it comes off here. The guard under test is unchanged.
++const guardSource = source.slice(start, end).replace(/^\s*export\s+/gm, '  ');
+ const state = {
+   drivers: [
+     { name: 'Nathaniel Davis', phone: '(615) 555-0101', mc: '100', rating: 'DNU' },
+@@ -26,9 +30,9 @@ const state = {
+   ],
+ };
+ 
+-const { filterNeverTextRecipients } = new Function('state', `
++const { filterNeverTextRecipients, splitDoNotTextRecipients } = new Function('state', `
+   ${guardSource}
+-  return { filterNeverTextRecipients };
++  return { filterNeverTextRecipients, splitDoNotTextRecipients };
+ `)(state);
+ 
+ let failures = 0;
+diff --git a/scripts/do-not-text-driver.test.mjs b/scripts/do-not-text-driver.test.mjs
+new file mode 100644
+index 0000000..e42119d
+--- /dev/null
++++ b/scripts/do-not-text-driver.test.mjs
+@@ -0,0 +1,269 @@
++/*
++ * Regression test: "Do not text" keeps a driver out of the GROUP BLASTS and
++ * nowhere else.
++ *
++ * A blast reached a driver whose carrier has him on a do-not-text list
++ * (2026-10-06). Before this there was no way to record that short of the
++ * hardcoded NEVER_TEXT_DRIVER_NAMES set, which is a code deploy and which
++ * blocks a driver everywhere -- too blunt. The owner's ruling: flagged drivers
++ * stay dispatchable and stay textable one at a time from a board row, an
++ * alert or the pre-shift prompt; only the Text a Group modal drops them.
++ *
++ * Two things this has to get right, both of which fail silently:
++ *
++ *  1. startGroupTexting() REBUILDS its member list from the driver pool
++ *     instead of reusing ratingTextEligible / rateTextEligible. Filtering only
++ *     the count refreshers would show the correct, smaller number on the
++ *     buttons and still send to everyone.
++ *  2. The block is keyed on PHONE NUMBER, not profile row. The same person
++ *     routinely has two profiles with the same cell (581 duplicates
++ *     outstanding), so flagging the row in front of you and sending from the
++ *     other one is the obvious failure.
++ *
++ * Also pinned here: with "Text dispatch where applicable" ON, a driver with no
++ * dispatcher number is dropped rather than quietly texted on their own cell.
++ *
++ * Run: node --test scripts/do-not-text-driver.test.mjs
++ */
++
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs';
++import { JSDOM } from 'jsdom';
++
++const board = fs.readFileSync('loadboard.js', 'utf8');
++const html = fs.readFileSync('driverlist.html', 'utf8');
++const helperSource = fs.readFileSync('preferred-rate-groups.js', 'utf8');
++const helpers = await import(`data:text/javascript;base64,${Buffer.from(helperSource).toString('base64')}`);
++
++// Some of these are exported from loadboard.js; `export` is not valid inside
++// an eval, so it comes off on the way in.
++function lift(name) {
++  return board.match(new RegExp(`  (?:export )?(?:async )?function ${name}\\([^]*?\\n  \\}`))[0]
++    .replace(/^\s*export\s+/, '  ');
++}
++
++function setup(poolOverride) {
++  const dom = new JSDOM(html, { runScripts: 'outside-only' });
++  const { window } = dom;
++  const $ = (selector) => window.document.querySelector(selector);
++
++  // Najm's real shape: the same cell on two profile rows, a "preferred" one
++  // and a location one. Only the preferred row carries the flag.
++  const pool = poolOverride || [
++    { id: 'najm-pref', name: 'Najm M', rating: 'A', phone: '630-770-9231', dispatcherPhone: '309-643-0963', doNotText: true,  atlantaRateOverrides: { tiers: { target: 400 } } },
++    { id: 'najm-atl',  name: 'Najm M', rating: 'A', phone: '630-770-9231', dispatcherPhone: '309-643-0963', doNotText: false, atlantaRateOverrides: { tiers: { target: 400 } } },
++    { id: 'ok',        name: 'Textable Driver', rating: 'A', phone: '770-555-0100', dispatcherPhone: '770-555-0200', atlantaRateOverrides: { tiers: { target: 400 } } },
++    { id: 'b',         name: 'Driver B', rating: 'B', phone: '770-555-0101', atlantaRateOverrides: { tiers: { target: 400 } } },
++  ];
++
++  const batches = [];
++  Object.assign(window, helpers, {
++    $,
++    $all: (selector, root) => [...(root || window.document).querySelectorAll(selector)],
++    state: { driverListTab: 'preferred', drivers: pool },
++    driversForLocation: () => pool,
++    isNeverTextDriver: (d) => String(d.rating || '').toUpperCase().includes('DNU'),
++    filterNeverTextRecipients: (members) => ({ allowed: members.filter((d) => !String(d.rating || '').toUpperCase().includes('DNU')), blocked: [] }),
++    formatTextAddress: (p) => (String(p || '').replace(/\D/g, '').length >= 10 ? String(p) : ''),
++    escapeHtml: (s) => String(s),
++    getBoardRateTiers: () => ({ atlanta: [{ id: 'target', min: 61, max: 140 }] }),
++    dateKey: () => '2026-10-06',
++    todayDate: () => new Date(),
++    scheduledDriversOn: async () => new Set(),
++    driverIsScheduled: () => false,
++    beginTextBatchFlow: (...args) => batches.push(args),
++  });
++
++  const names = [
++    'driverClassification', 'availableDriverClasses', 'setsIntersect', 'textPhoneKeys',
++    'doNotTextPhones', 'splitDoNotTextRecipients', 'applyPhoneMode',
++    'openTextGroupModal', 'setupRateTextOptions', 'setTextGroupMode', 'ratingTextClass',
++    'toggleRatingTextGroup', 'renderRatingTextGroups', 'refreshRatingTextGroups',
++    'refreshRateTextRatings', 'renderRateTextRatings', 'rateTextLabel',
++    'renderRateTextOptions', 'setRateRatingLabelVisible', 'startGroupTexting',
++    // Added by the multi-rate work (PR #205): the rating buttons carry the
++    // real ratings behind each letter as a title.
++    'variantTitle',
++  ];
++  const PHRASE_TABLE = /  const RATING_PHRASE_CLASSES = \{[\s\S]*?\n  \};/.exec(board)[0];
++  window.eval(`const KNOWN_DRIVER_CLASSES=['A','B','C','D','DNU','R'];${PHRASE_TABLE}
++    let groupTextState=null,rateTextMode=false,rateTextRatings=new Set(),rateTextRefresh=0,rateTextEligible=[],ratingTextRatings=new Set(),ratingTextEligible=[],ratingTextRefresh=0,rateTextRates=new Set(),rateTextOptions=[];
++    ${names.map(lift).join('\n')}
++    window.openModal=openTextGroupModal;window.toggle=toggleRatingTextGroup;
++    window.refreshRating=refreshRatingTextGroups;window.start=startGroupTexting;
++    window.splitDoNotText=splitDoNotTextRecipients;window.applyPhoneMode=applyPhoneMode;
++  `);
++
++  const settle = async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); };
++  return { window, $, pool, batches, settle };
++}
++
++const sent = (batches) => (batches.at(-1) ? batches.at(-1)[0] : []);
++
++/* ------------------------------------------------------------------ */
++test('a flagged driver is dropped from the blast that actually SENDS', async () => {
++  const { window, $, batches, settle } = setup();
++  window.openModal();
++  await settle();
++  window.toggle('A');
++  await settle();
++
++  $('#tg-message').value = 'Loads open tomorrow, who wants one?';
++  await window.start();
++  await settle();
++
++  assert.equal(batches.length, 1, 'a batch was started');
++  const phones = sent(batches).map((d) => String(d.phone).replace(/\D/g, ''));
++
++  // The modal opens with dispatch mode ON, so the unflagged driver arrives at
++  // his DISPATCHER's number, not his cell.
++  assert.ok(phones.includes('7705550200'), 'the unflagged A driver is in, via his dispatcher');
++
++  // The flagged driver is gone entirely -- neither his cell nor his
++  // dispatcher's number. Excluding the man and then texting his dispatcher
++  // about him would be the same blast by another route.
++  assert.ok(!phones.includes('6307709231'), 'the flagged cell is not in the batch');
++  assert.ok(!phones.includes('3096430963'), 'and neither is his dispatcher');
++});
++
++test('the flag follows the PHONE, so a duplicate profile cannot leak it', async () => {
++  const { window } = setup();
++  // Only the 'preferred' row is flagged; the Atlanta row is not. Both carry
++  // the same cell, so both must be blocked -- this is the duplicate-profile
++  // failure, and it is the whole reason the rule is keyed on the number.
++  const result = window.splitDoNotText([
++    { id: 'najm-atl', name: 'Najm M', phone: '630-770-9231', doNotText: false },
++  ]);
++  assert.equal(result.allowed.length, 0);
++  assert.equal(result.blocked.length, 1);
++});
++
++test('formatting differences in the number do not defeat the block', async () => {
++  const { window } = setup();
++  for (const spelling of ['6307709231', '(630) 770-9231', '1-630-770-9231', '630.770.9231']) {
++    const r = window.splitDoNotText([{ name: 'Najm M', phone: spelling }]);
++    assert.equal(r.blocked.length, 1, `${spelling} should be blocked`);
++  }
++});
++
++test('nobody is blocked when nobody is flagged -- no accidental empty blasts', async () => {
++  const { window } = setup([
++    { id: 'a', name: 'A', phone: '770-555-0100' },
++    { id: 'b', name: 'B', phone: '770-555-0101' },
++  ]);
++  const r = window.splitDoNotText([{ name: 'A', phone: '770-555-0100' }, { name: 'B', phone: '770-555-0101' }]);
++  assert.equal(r.blocked.length, 0);
++  assert.equal(r.allowed.length, 2);
++});
++
++test('a blast where everyone is flagged refuses and says so, rather than sending nothing quietly', async () => {
++  const { window, $, batches, settle } = setup([
++    { id: 'x', name: 'Only Driver', rating: 'A', phone: '630-770-9231', doNotText: true, atlantaRateOverrides: { tiers: { target: 400 } } },
++  ]);
++  window.openModal();
++  await settle();
++  window.toggle('A');
++  await settle();
++  $('#tg-message').value = 'anyone?';
++  await window.start();
++  await settle();
++
++  assert.equal(batches.length, 0, 'nothing was sent');
++  assert.match($('#tg-error').textContent, /do not text/i);
++  assert.equal($('#tg-error').classList.contains('hidden'), false);
++});
++
++/* ---------------- it must NOT reach the individual paths ---------------- */
++test('the one-to-one send path is untouched by the flag', () => {
++  // openSendTextModal is what a board row, an alert and the pre-shift prompt
++  // all call. It filters DNU and nothing else -- if splitDoNotTextRecipients
++  // ever appears in it, flagged drivers stop being textable at all, which is
++  // not what was asked for.
++  const fn = board.match(/export function openSendTextModal\([^]*?\n  \}/)[0];
++  assert.equal(/splitDoNotTextRecipients|doNotText/.test(fn), false);
++
++  // Same for the board's "text selected loads" batch: those drivers are
++  // already on a load that day, so it is operational, not a blast.
++  const selected = board.match(/function startTextSelected\([^]*?\n  \}/)[0];
++  assert.equal(/splitDoNotTextRecipients|doNotText/.test(selected), false);
++
++  // And beginTextBatchFlow itself stays neutral, because it is shared between
++  // the blast and "text selected loads".
++  const begin = board.match(/export function beginTextBatchFlow\([^]*?\n  \}/)[0];
++  assert.equal(/splitDoNotTextRecipients/.test(begin), false);
++});
++
++/* ---------------- dispatch mode falls back, and SAYS it did -------------- */
++test('dispatch mode falls back to the cell when there is no dispatcher number', async () => {
++  const { window, $ } = setup();
++  $('#tg-dispatch-mode').checked = true;
++
++  const out = window.applyPhoneMode([
++    { name: 'Has Dispatcher', phone: '770-555-0100', dispatcherPhone: '770-555-0200' },
++    { name: 'No Dispatcher', phone: '770-555-0101', dispatcherPhone: '' },
++  ]);
++
++  assert.equal(out[0].phone, '770-555-0200');
++  assert.match(out[0].name, /\(dispatch\)$/);
++  assert.equal(!!out[0].directPhoneFallback, false);
++
++  // Dropping these was tried and reversed: a third of every pool has no
++  // dispatcher number on file (204/538 preferred, 999/3128 Atlanta), so
++  // skipping them would cut a third of the drivers out of every blast.
++  assert.equal(out[1].phone, '770-555-0101', 'reached on their own cell');
++  assert.equal(out[1].name, 'No Dispatcher', 'not labelled as a dispatch send');
++
++  // But it is flagged, because a silent fallback is the original bug.
++  assert.equal(out[1].directPhoneFallback, true);
++});
++
++test('the progress panel names who is getting it on their personal phone', () => {
++  const render = board.match(/function renderGroupTextProgress\([^]*?\n  \}/)[0];
++  assert.match(render, /directPhoneFallback/);
++  assert.match(render, /will be texted directly/);
++  // and it has to actually reach the rendered output, not just be computed
++  assert.match(render, /\[directNote, skipNote/);
++});
++
++test('the Text a Group modal opens with dispatch mode ON', async () => {
++  const { window, $, settle } = setup();
++  window.openModal();
++  await settle();
++  assert.equal($('#tg-dispatch-mode').checked, true);
++});
++
++test('the board\'s "text selected loads" still opens with it OFF', () => {
++  // Same modal, different mode: those drivers are already on a load that day,
++  // so it is a message about work in progress, not a solicitation.
++  const fn = board.match(/function openTextSelectedModal\([^]*?\n  \}/)[0];
++  assert.match(fn, /dispatchModeCheckbox\.checked = false/);
++
++  const group = board.match(/function openTextGroupModal\([^]*?\n  \}/)[0];
++  assert.match(group, /dispatchModeCheckbox\.checked = true/);
++});
++
++test('the markup carries no checked attribute -- the opener decides', () => {
++  // The attribute said checked while every open set it false, so for three
++  // weeks the box read as on and was off. Now that the two openers disagree
++  // with each other on purpose, a markup default could only be wrong for one
++  // of them.
++  assert.match(html, /id="tg-dispatch-mode"(?![^>]*\bchecked\b)/);
++});
++
++/* ---------------- the flag has to survive a round trip ------------------- */
++test('do_not_text maps both ways, or the checkbox saves nothing', () => {
++  const toDb = board.match(/function driverToDbRow\([^]*?\n  \}/)[0];
++  const fromDb = board.match(/export function driverFromDbRow\([^]*?\n  \}/)[0];
++  assert.match(toDb, /"do_not_text": !!d\.doNotText/);
++  assert.match(fromDb, /doNotText: !!row\["do_not_text"\]/);
++
++  // And the form has to read it, or the mapper writes false forever.
++  assert.match(board, /doNotText: !!\$\("#ad-do-not-text"\)\?\.checked/);
++  assert.match(html, /id="ad-do-not-text"/);
++
++  // Edit populates it; Add clears it. A checkbox that keeps the last driver's
++  // value is how the wrong person gets flagged.
++  assert.match(board, /doNotTextEdit.*checked = !!d\.doNotText/);
++  assert.match(board, /doNotTextAdd.*checked = false/);
++});
+diff --git a/scripts/preferred-rate-groups.test.mjs b/scripts/preferred-rate-groups.test.mjs
+index 3d5cc3d..3b84b5b 100644
+--- a/scripts/preferred-rate-groups.test.mjs
++++ b/scripts/preferred-rate-groups.test.mjs
+@@ -68,7 +68,7 @@ test('rate sender passes only the selected rating at the chosen rate and still e
+   const context=vm.createContext({$,state:{driverListTab:'preferred',drivers:pool},rateTextMode:true,rateTextRates:new Set(['400']),rateTextRatings:new Set(['A']),
+     driversForLocation:()=>pool,driverClassification:classify,isNeverTextDriver:d=>classify(d)==='DNU',
+     rateMembers,selectedRateMembers,getBoardRateTiers:()=>({atlanta:tiers}),scheduledDriversOn:async()=>new Set(['1']),driverIsScheduled:(d,s)=>s.has(d.id),
+-    applyPhoneMode:m=>m,beginTextBatchFlow:(...args)=>batches.push(args)});
++    splitDoNotTextRecipients:m=>({allowed:m,blocked:[]}),applyPhoneMode:m=>m,beginTextBatchFlow:(...args)=>batches.push(args)});
+   vm.runInContext(lift('rateTextLabel')+'\n'+lift('startGroupTexting'), context);
+   await vm.runInContext('startGroupTexting()',context);
+   assert.deepEqual(Array.from(batches[0][0],d=>d.id),['2']);
+@@ -91,7 +91,7 @@ test('rate counts start unselected, apply eligibility, and stale async refreshes
+   const resolvers=[];
+   const context=vm.createContext({$,state:{drivers:pool},rateTextMode:true,rateTextRates:new Set(['400']),rateTextRefresh:0,rateTextRatings:new Set(),rateTextEligible:[],
+     driversForLocation:()=>pool,driverClassification:classify,rateMembers,ratingGroups,selectedRateMembers,getBoardRateTiers:()=>({atlanta:tiers}),
+-    filterNeverTextRecipients:m=>({allowed:m.filter(d=>classify(d)!=='DNU')}),applyPhoneMode:m=>m,
++    splitDoNotTextRecipients:m=>({allowed:m,blocked:[]}),filterNeverTextRecipients:m=>({allowed:m.filter(d=>classify(d)!=='DNU')}),applyPhoneMode:m=>m,
+     formatTextAddress:p=>p,driverIsScheduled:(d,s)=>s.has(d.id),escapeHtml:x=>x,
+     availableDriverClasses:()=>['A','B'],variantTitle:()=>'',
+     scheduledDriversOn:()=>new Promise(resolve=>resolvers.push(resolve))});
+diff --git a/scripts/text-group-modal-opens.test.mjs b/scripts/text-group-modal-opens.test.mjs
+index 372c0f2..f496355 100644
+--- a/scripts/text-group-modal-opens.test.mjs
++++ b/scripts/text-group-modal-opens.test.mjs
+@@ -64,6 +64,7 @@ function openOn(page) {
+     dateKey: () => '2026-10-05', todayDate: () => new Date(),
+     filterNeverTextRecipients: (l) => ({ allowed: l, blocked: [] }),
+     formatTextAddress: (p) => String(p || ''), applyPhoneMode: (l) => l,
++    splitDoNotTextRecipients:m=>({allowed:m,blocked:[]}),
+     scheduledDriversOn: async () => ({}), driverIsScheduled: () => false,
+     isNeverTextDriver: (d) => String(d.rating || '').toUpperCase().includes('DNU'),
+     refreshRateTextRatings: async () => {},
+diff --git a/scripts/text-group-rate-buttons.test.mjs b/scripts/text-group-rate-buttons.test.mjs
+index e75e3ad..338b097 100644
+--- a/scripts/text-group-rate-buttons.test.mjs
++++ b/scripts/text-group-rate-buttons.test.mjs
+@@ -81,6 +81,7 @@ const env = {
+   dateKey: () => '2026-10-05', todayDate: () => new Date(),
+   filterNeverTextRecipients: (l) => ({ allowed: l, blocked: [] }),
+   formatTextAddress: (p) => String(p || ''), applyPhoneMode: (l) => l,
++  splitDoNotTextRecipients:m=>({allowed:m,blocked:[]}),
+   scheduledDriversOn: async () => ({}), driverIsScheduled: () => false,
+   isNeverTextDriver: (d) => String(d.rating || '').toUpperCase().includes('DNU'),
+   ratingTextClass: (d) => d.rating || 'Unrated',
+diff --git a/scripts/text-modal-layout.test.mjs b/scripts/text-modal-layout.test.mjs
+index 34f1175..dffa4f2 100644
+--- a/scripts/text-modal-layout.test.mjs
++++ b/scripts/text-modal-layout.test.mjs
+@@ -79,8 +79,12 @@ for (const page of SEND_PAGES) {
+ console.log('\n3. the notes collapse into one summary that starts closed');
+ checkTrue('the render builds a <details>', /<details class="text-modal-details"><summary>Details<\/summary>/.test(SRC));
+ check('it is never rendered open', /text-modal-details"[^>]*\sopen/.test(SRC), false);
+-checkTrue('the three notes are what go inside',
+-  /const detailNotes = \[skipNote, dedupedNote, blockedNote\]\.filter\(Boolean\)/.test(SRC));
++// Four notes now: directNote joined them when dispatch mode started falling
++// back to a driver's own cell and had to SAY so. The rule being pinned is that
++// every note folds into the <details> and none is emitted loose -- add to the
++// list here when a fifth arrives, do not drop the check.
++checkTrue('every note goes inside the summary',
++  /const detailNotes = \[directNote, skipNote, dedupedNote, blockedNote\]\.filter\(Boolean\)/.test(SRC));
+ check('and they are no longer emitted loose above the buttons',
+   /\$\{skipNote\}\$\{dedupedNote\}\$\{blockedNote\}/.test(SRC), false);
+ 
+diff --git a/scripts/text-rating-toggles.test.mjs b/scripts/text-rating-toggles.test.mjs
+index a113e52..2729dd3 100644
+--- a/scripts/text-rating-toggles.test.mjs
++++ b/scripts/text-rating-toggles.test.mjs
+@@ -23,6 +23,7 @@ function setup() {
+     $, $all:(selector,root)=>[...(root||window.document).querySelectorAll(selector)], state:{driverListTab:'preferred',drivers:pool},
+     driversForLocation:()=>pool, isNeverTextDriver:d=>d.rating==='DNU',
+     filterNeverTextRecipients:members=>({allowed:members.filter(d=>d.rating!=='DNU')}), formatTextAddress:p=>p,
++    splitDoNotTextRecipients:m=>({allowed:m,blocked:[]}),
+     escapeHtml:s=>String(s), getBoardRateTiers:()=>({atlanta:[{id:'target',min:61,max:140}]}),
+     dateKey:()=> '2026-10-05', todayDate:()=>new Date(),
+     scheduledDriversOn:async()=>scheduled, driverIsScheduled:(d,index)=>index.has(d.id),
+-- 
+2.43.0
+

@@ -79,8 +79,12 @@ for (const page of SEND_PAGES) {
 console.log('\n3. the notes collapse into one summary that starts closed');
 checkTrue('the render builds a <details>', /<details class="text-modal-details"><summary>Details<\/summary>/.test(SRC));
 check('it is never rendered open', /text-modal-details"[^>]*\sopen/.test(SRC), false);
-checkTrue('the three notes are what go inside',
-  /const detailNotes = \[skipNote, dedupedNote, blockedNote\]\.filter\(Boolean\)/.test(SRC));
+// Four notes now: directNote joined them when dispatch mode started falling
+// back to a driver's own cell and had to SAY so. The rule being pinned is that
+// every note folds into the <details> and none is emitted loose -- add to the
+// list here when a fifth arrives, do not drop the check.
+checkTrue('every note goes inside the summary',
+  /const detailNotes = \[directNote, skipNote, dedupedNote, blockedNote\]\.filter\(Boolean\)/.test(SRC));
 check('and they are no longer emitted loose above the buttons',
   /\$\{skipNote\}\$\{dedupedNote\}\$\{blockedNote\}/.test(SRC), false);
 

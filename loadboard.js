@@ -4413,6 +4413,9 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     groupTextState = null;
     $("#tg-group-tabs-wrap").classList.add("hidden"); // no group to pick — the checkboxes already picked them
     $("#tg-message").value = "";
+    // OFF here, deliberately: these drivers are already on a load that day, so
+    // this is a message about work in progress, not a solicitation. The group
+    // blast opens with it ON instead -- see openTextGroupModal.
     const dispatchModeCheckbox = $("#tg-dispatch-mode");
     if (dispatchModeCheckbox) dispatchModeCheckbox.checked = false;
     $("#tg-setup-step").classList.remove("hidden");
@@ -5319,8 +5322,12 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     ratingTextRefresh++;
     const msgEl = $("#tg-message");
     if (msgEl) msgEl.value = "";
+    // ON for the blasts (owner's ruling, 2026-10-06): a recruiting message
+    // belongs with the dispatcher where there is one. Anyone without a
+    // dispatcher number still gets it on their own cell -- see applyPhoneMode
+    // -- and the count note says how many that is.
     const dispatchModeCheckbox = $("#tg-dispatch-mode");
-    if (dispatchModeCheckbox) dispatchModeCheckbox.checked = false;
+    if (dispatchModeCheckbox) dispatchModeCheckbox.checked = true;
 
     // Both independent options default on whenever the modal opens.
     // The exclusion date starts on the user's current local date.
@@ -5598,20 +5605,26 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
    * "text selected rows"). With dispatch mode on, each member is addressed at
    * their dispatcher's number.
    *
-   * A member with NO dispatcher number on file is DROPPED, not quietly sent to
-   * their own cell. The old fallback meant "text dispatch" could still put a
-   * message on a driver's personal phone, which is the one outcome the option
-   * exists to prevent -- and it did it silently, so nobody knew which drivers
-   * were missing a dispatcher number. They come back in `skipped` instead, and
-   * the progress panel names the count.
+   * A member with NO dispatcher number on file falls back to their own cell.
+   * Dropping them instead was tried and reversed on the owner's ruling
+   * (2026-10-06): a THIRD of every pool has no dispatcher number on file --
+   * 204 of 538 preferred, 999 of 3,128 Atlanta, 107 of 202 Mondelez -- so
+   * skipping them would quietly cut a third of the drivers out of every blast.
+   * Reaching them matters more than the channel.
+   *
+   * The fallback is flagged, not hidden. `directPhoneFallback` is what the
+   * count note counts, so the dispatcher is told how many of this group will
+   * get the message on their personal phone rather than discovering it later.
+   * That visibility is the whole of the fix; the silence was the bug.
    *
    * De-duplication for shared dispatcher numbers happens downstream in
    * beginTextBatchFlow, so this only has to pick the right number per member.
    *
-   * NOTE: dispatch mode defaults OFF. The markup used to carry `checked` while
-   * 0f6c842 ("Default board and alert text actions to driver phone numbers")
-   * turned it off in script on every open -- so the box read as on and was not.
-   * The attribute is gone; do not put it back without changing the script too.
+   * The checkbox's state is set by whichever function OPENS the modal --
+   * openTextGroupModal() on, openTextSelectedModal() off -- and the markup
+   * deliberately carries no `checked` attribute. It used to, while the script
+   * set false on every open, so the box read as on and was off for three
+   * weeks. One source of truth; do not reintroduce the attribute.
    */
   function applyPhoneMode(members) {
     const checkbox = $("#tg-dispatch-mode");
@@ -5619,7 +5632,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     if (!dispatchMode) return members;
     return members.map((m) => {
       const dispatchPhone = m.dispatcherPhone && String(m.dispatcherPhone).trim();
-      if (!dispatchPhone) return { ...m, phone: "", noDispatcherPhone: true };
+      if (!dispatchPhone) return { ...m, directPhoneFallback: true };
       return { ...m, name: `${m.name} (dispatch)`, phone: dispatchPhone };
     });
   }
@@ -5640,12 +5653,9 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     });
 
     if (withPhone.length === 0) {
-      const allMissingDispatcher = skipped.length && skipped.every((d) => d.noDispatcherPhone);
       errEl.textContent = filtered.blocked.length
         ? `No textable recipients remain in ${label}; every matching recipient is marked DNU.`
-        : allMissingDispatcher
-          ? `Nobody in ${label} has a dispatcher number on file. "Text dispatch where applicable" is on, so nobody was texted directly — add dispatcher numbers or untick that box.`
-          : `No one in ${label} has a phone number on file.`;
+        : `No one in ${label} has a phone number on file.`;
       errEl.classList.remove("hidden");
       return;
     }
@@ -5872,18 +5882,17 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     const s = groupTextState;
     if (!s) return;
     const isDone = s.batchIndex >= s.batches.length;
-    // Two different reasons land in `skipped`, and they need different
-    // answers: no phone at all is a profile to fill in, while no DISPATCHER
-    // number with dispatch mode on is a deliberate drop (see applyPhoneMode)
-    // and tells you exactly whose dispatcher number is missing.
-    const noDispatcher = s.skipped.filter((d) => d.noDispatcherPhone);
-    const noPhone = s.skipped.filter((d) => !d.noDispatcherPhone);
+    // With dispatch mode on, anyone without a dispatcher number on file is
+    // texted on their own cell (see applyPhoneMode). That is the chosen
+    // behaviour, but it must not be a surprise -- these are the drivers whose
+    // personal phone this message is about to land on, and the same list is
+    // the one worth filling dispatcher numbers in for.
+    const direct = s.batches.flat().filter((d) => d.directPhoneFallback);
+    const directNote = direct.length
+      ? `<div class="calc-note" style="margin-top:8px;">${direct.length} driver(s) have no dispatcher number on file and will be texted directly: ${escapeHtml(direct.map((d) => d.name).join(", "))}</div>`
+      : "";
     const skipNote = s.skipped.length
-      ? `<div class="calc-note" style="margin-top:8px;">${
-          noPhone.length ? `${noPhone.length} driver(s) in this group have no phone on file and were skipped: ${escapeHtml(noPhone.map((d) => d.name).join(", "))}` : ""
-        }${noPhone.length && noDispatcher.length ? "<br>" : ""}${
-          noDispatcher.length ? `${noDispatcher.length} driver(s) have no dispatcher number on file and were left out rather than texted directly: ${escapeHtml(noDispatcher.map((d) => d.name).join(", "))}` : ""
-        }</div>`
+      ? `<div class="calc-note" style="margin-top:8px;">${s.skipped.length} driver(s) in this group have no phone on file and were skipped: ${escapeHtml(s.skipped.map((d) => d.name).join(", "))}</div>`
       : "";
     const dedupedNote = s.deduped && s.deduped.length
       ? `<div class="calc-note" style="margin-top:4px;">${s.deduped.length} driver(s) share a number with someone already in this batch, so only one text went to that number: ${escapeHtml(s.deduped.map((d) => d.name).join(", "))}</div>`
@@ -5895,7 +5904,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     // Three stacked yellow notes pushed the buttons off the bottom of a long
     // batch. They are worth keeping -- who was skipped and why is exactly what
     // gets asked afterwards -- so they fold into one summary that starts shut.
-    const detailNotes = [skipNote, dedupedNote, blockedNote].filter(Boolean).join("");
+    const detailNotes = [directNote, skipNote, dedupedNote, blockedNote].filter(Boolean).join("");
     const details = detailNotes
       ? `<details class="text-modal-details"><summary>Details</summary>${detailNotes}</details>`
       : "";

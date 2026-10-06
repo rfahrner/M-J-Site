@@ -115,8 +115,16 @@ test('a flagged driver is dropped from the blast that actually SENDS', async () 
 
   assert.equal(batches.length, 1, 'a batch was started');
   const phones = sent(batches).map((d) => String(d.phone).replace(/\D/g, ''));
-  assert.ok(!phones.includes('6307709231'), 'the flagged number is not in the batch');
-  assert.ok(phones.includes('7705550100'), 'the unflagged A driver still is');
+
+  // The modal opens with dispatch mode ON, so the unflagged driver arrives at
+  // his DISPATCHER's number, not his cell.
+  assert.ok(phones.includes('7705550200'), 'the unflagged A driver is in, via his dispatcher');
+
+  // The flagged driver is gone entirely -- neither his cell nor his
+  // dispatcher's number. Excluding the man and then texting his dispatcher
+  // about him would be the same blast by another route.
+  assert.ok(!phones.includes('6307709231'), 'the flagged cell is not in the batch');
+  assert.ok(!phones.includes('3096430963'), 'and neither is his dispatcher');
 });
 
 test('the flag follows the PHONE, so a duplicate profile cannot leak it', async () => {
@@ -186,8 +194,8 @@ test('the one-to-one send path is untouched by the flag', () => {
   assert.equal(/splitDoNotTextRecipients/.test(begin), false);
 });
 
-/* ---------------- dispatch mode drops, it does not fall back ------------- */
-test('dispatch mode leaves out a driver with no dispatcher number instead of texting their cell', async () => {
+/* ---------------- dispatch mode falls back, and SAYS it did -------------- */
+test('dispatch mode falls back to the cell when there is no dispatcher number', async () => {
   const { window, $ } = setup();
   $('#tg-dispatch-mode').checked = true;
 
@@ -198,26 +206,49 @@ test('dispatch mode leaves out a driver with no dispatcher number instead of tex
 
   assert.equal(out[0].phone, '770-555-0200');
   assert.match(out[0].name, /\(dispatch\)$/);
+  assert.equal(!!out[0].directPhoneFallback, false);
 
-  // The one that matters: their own cell must NOT be the fallback.
-  assert.equal(out[1].phone, '');
-  assert.equal(out[1].noDispatcherPhone, true);
+  // Dropping these was tried and reversed: a third of every pool has no
+  // dispatcher number on file (204/538 preferred, 999/3128 Atlanta), so
+  // skipping them would cut a third of the drivers out of every blast.
+  assert.equal(out[1].phone, '770-555-0101', 'reached on their own cell');
   assert.equal(out[1].name, 'No Dispatcher', 'not labelled as a dispatch send');
+
+  // But it is flagged, because a silent fallback is the original bug.
+  assert.equal(out[1].directPhoneFallback, true);
 });
 
-test('dispatch mode off still texts the driver directly -- that default is deliberate', async () => {
-  const { window, $ } = setup();
-  assert.equal($('#tg-dispatch-mode').checked, false, 'the modal opens with it off');
-  const out = window.applyPhoneMode([{ name: 'D', phone: '770-555-0101', dispatcherPhone: '' }]);
-  assert.equal(out[0].phone, '770-555-0101');
+test('the progress panel names who is getting it on their personal phone', () => {
+  const render = board.match(/function renderGroupTextProgress\([^]*?\n  \}/)[0];
+  assert.match(render, /directPhoneFallback/);
+  assert.match(render, /will be texted directly/);
+  // and it has to actually reach the rendered output, not just be computed
+  assert.match(render, /\[directNote, skipNote/);
 });
 
-test('the markup no longer claims dispatch mode is on when the script turns it off', () => {
-  // This exact mismatch is why the incident was reported as "I'm pretty sure
-  // text dispatch number was checked": the attribute said checked, every
-  // open set it to false.
+test('the Text a Group modal opens with dispatch mode ON', async () => {
+  const { window, $, settle } = setup();
+  window.openModal();
+  await settle();
+  assert.equal($('#tg-dispatch-mode').checked, true);
+});
+
+test('the board\'s "text selected loads" still opens with it OFF', () => {
+  // Same modal, different mode: those drivers are already on a load that day,
+  // so it is a message about work in progress, not a solicitation.
+  const fn = board.match(/function openTextSelectedModal\([^]*?\n  \}/)[0];
+  assert.match(fn, /dispatchModeCheckbox\.checked = false/);
+
+  const group = board.match(/function openTextGroupModal\([^]*?\n  \}/)[0];
+  assert.match(group, /dispatchModeCheckbox\.checked = true/);
+});
+
+test('the markup carries no checked attribute -- the opener decides', () => {
+  // The attribute said checked while every open set it false, so for three
+  // weeks the box read as on and was off. Now that the two openers disagree
+  // with each other on purpose, a markup default could only be wrong for one
+  // of them.
   assert.match(html, /id="tg-dispatch-mode"(?![^>]*\bchecked\b)/);
-  assert.match(board, /dispatchModeCheckbox\.checked = false/);
 });
 
 /* ---------------- the flag has to survive a round trip ------------------- */
