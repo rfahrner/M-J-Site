@@ -65,22 +65,22 @@ test('rate sender passes only the selected rating at the chosen rate and still e
   $('#tg-exclude-scheduled').checked=true;
   $('#tg-day').value='2026-10-05';
   const batches=[];
-  const context=vm.createContext({$,state:{driverListTab:'preferred',drivers:pool},rateTextMode:true,rateTextRate:'400',rateTextRatings:new Set(['A']),
+  const context=vm.createContext({$,state:{driverListTab:'preferred',drivers:pool},rateTextMode:true,rateTextRates:new Set(['400']),rateTextRatings:new Set(['A']),
     driversForLocation:()=>pool,driverClassification:classify,isNeverTextDriver:d=>classify(d)==='DNU',
     rateMembers,selectedRateMembers,getBoardRateTiers:()=>({atlanta:tiers}),scheduledDriversOn:async()=>new Set(['1']),driverIsScheduled:(d,s)=>s.has(d.id),
     applyPhoneMode:m=>m,beginTextBatchFlow:(...args)=>batches.push(args)});
   vm.runInContext(lift('rateTextLabel')+'\n'+lift('startGroupTexting'), context);
   await vm.runInContext('startGroupTexting()',context);
-  assert.deepEqual(batches[0][0].map(d=>d.id),['2']);
+  assert.deepEqual(Array.from(batches[0][0],d=>d.id),['2']);
   assert.equal(batches[0][3].allowDnu,false);
   context.rateTextRatings=new Set();
   await vm.runInContext('startGroupTexting()',context);
   assert.equal(batches.length,1);
   assert.match($('#tg-error').textContent,/Select at least one/);
-  context.rateTextRate='DEFAULT';
+  context.rateTextRates=new Set(['DEFAULT']);
   context.rateTextRatings=new Set(['B']);
   await vm.runInContext('startGroupTexting()',context);
-  assert.deepEqual(batches[1][0].map(d=>d.id),['6']);
+  assert.deepEqual(Array.from(batches[1][0],d=>d.id),['6']);
   assert.match(batches[1][1],/^Default/);
 });
 
@@ -89,21 +89,26 @@ test('rate counts start unselected, apply eligibility, and stale async refreshes
   $('#tg-exclude-scheduled').checked=true;
   $('#tg-day').value='2026-10-05';
   const resolvers=[];
-  const context=vm.createContext({$,state:{drivers:pool},rateTextMode:true,rateTextRate:'400',rateTextRefresh:0,rateTextRatings:new Set(),rateTextEligible:[],
+  const context=vm.createContext({$,state:{drivers:pool},rateTextMode:true,rateTextRates:new Set(['400']),rateTextRefresh:0,rateTextRatings:new Set(),rateTextEligible:[],
     driversForLocation:()=>pool,driverClassification:classify,rateMembers,ratingGroups,selectedRateMembers,getBoardRateTiers:()=>({atlanta:tiers}),
     filterNeverTextRecipients:m=>({allowed:m.filter(d=>classify(d)!=='DNU')}),applyPhoneMode:m=>m,
     formatTextAddress:p=>p,driverIsScheduled:(d,s)=>s.has(d.id),escapeHtml:x=>x,
+    availableDriverClasses:()=>['A','B'],variantTitle:()=>'',
     scheduledDriversOn:()=>new Promise(resolve=>resolvers.push(resolve))});
-  vm.runInContext(lift('setRateRatingLabelVisible')+'\n'+lift('refreshRateTextRatings')+'\n'+lift('renderRateTextRatings'),context);
+  vm.runInContext(lift('rateRatingChoices')+'\n'+lift('setRateRatingLabelVisible')+'\n'+lift('refreshRateTextRatings')+'\n'+lift('renderRateTextRatings'),context);
   const first=vm.runInContext('refreshRateTextRatings(true)',context);
-  context.rateTextRate='450';
+  context.rateTextRates=new Set(['450']);
   const second=vm.runInContext('refreshRateTextRatings(true)',context);
   resolvers[1](new Set());await second;
   resolvers[0](new Set());await first;
   assert.match($('#tg-rate-ratings').innerHTML,/A- 1/);
-  assert.doesNotMatch($('#tg-rate-ratings').innerHTML,/B-/);
+  // Every rating now stays on screen so the panel cannot change height; a
+  // rating nobody at these rates holds reads zero and is disabled rather
+  // than disappearing.
+  assert.match($('#tg-rate-ratings').innerHTML,/B- 0/);
+  assert.match($('#tg-rate-ratings').innerHTML,/B- 0<\/button>|B- 0</);
   assert.doesNotMatch($('#tg-rate-ratings').innerHTML,/aria-pressed="true"/);
-  context.rateTextRate='400';
+  context.rateTextRates=new Set(['400']);
   const third=vm.runInContext('refreshRateTextRatings(true)',context);
   resolvers[2](new Set(['1']));await third;
   assert.match($('#tg-rate-ratings').innerHTML,/A- 1/);
@@ -167,7 +172,7 @@ test('modal tabs switch selection panels while preserving shared options, messag
   // The chosen rate is module state behind a button group now, not a <select>
   // value, so switching tabs has to leave it alone the same way.
   const context=vm.createContext({$, $all:()=>buttons, rateTextMode:false,rateTextRefresh:0,
-    rateTextRate:'400', rateTextOptions:[], escapeHtml:x=>x,
+    rateTextRates:new Set(['400']), rateTextOptions:[], escapeHtml:x=>x, availableDriverClasses:()=>['A','B'], driverClassification:()=>'A', variantTitle:()=>'',
     rateTextRatings:new Set(['B']), refreshRateTextRatings:()=>refreshes++, refreshRatingTextGroups:()=>{}});
   vm.runInContext(lift('rateTextLabel')+'\n'+lift('renderRateTextOptions')+'\n'+lift('setTextGroupMode'),context);
   vm.runInContext('setTextGroupMode("rate")',context);
@@ -183,7 +188,7 @@ test('modal tabs switch selection panels while preserving shared options, messag
   assert.equal($('#tg-day').value,'2026-10-06');
   assert.equal($('#tg-dispatch-mode').checked,true);
   assert.equal($('#tg-exclude-scheduled').checked,true);
-  assert.equal(context.rateTextRate,'400');
+  assert.deepEqual([...context.rateTextRates],['400']);
   assert.deepEqual([...context.rateTextRatings],['B']);
   assert.equal(refreshes,1);
 });

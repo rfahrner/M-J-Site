@@ -44,7 +44,8 @@ const fn = (n) => {
   return m[0].replace('export ', '');
 };
 const NAMES = ['openTextGroupModal', 'setupRateTextOptions', 'setTextGroupMode', 'refreshRatingTextGroups',
-  'renderRatingTextGroups', 'rateTextLabel', 'renderRateTextOptions', 'setRateRatingLabelVisible'];
+  'renderRatingTextGroups', 'variantTitle', 'rateRatingChoices', 'rateTextLabel', 'renderRateTextOptions',
+  'renderRateTextRatings', 'setRateRatingLabelVisible'];
 const DRIVERS = [
   { id: '1', name: 'A One', rating: 'A', phone: '5551112222' },
   { id: '2', name: 'B Two', rating: 'B', phone: '5551112223' },
@@ -69,7 +70,7 @@ function openOn(page) {
     availableDriverClasses: () => ['A', 'B', 'DNU'],
     ratingTextClass: (d) => String(d.rating || 'Unrated').toUpperCase().includes('DNU') ? 'DNU' : (d.rating || 'Unrated'),
   };
-  const decl = 'let rateTextMode=false,rateTextRefresh=0,groupTextState=null,ratingTextRatings=new Set(),ratingTextEligible=[],ratingTextRefresh=0,rateTextRatings=new Set(),rateTextEligible=[],rateTextRate="",rateTextOptions=[];\n';
+  const decl = 'let rateTextMode=false,rateTextRefresh=0,groupTextState=null,ratingTextRatings=new Set(),ratingTextEligible=[],ratingTextRefresh=0,rateTextRatings=new Set(),rateTextEligible=[],rateTextRates=new Set(),rateTextOptions=[];\n';
   const api = new Function(...Object.keys(env), `${decl}${NAMES.map(fn).join('\n')}\nreturn { openTextGroupModal };`)(...Object.values(env));
   let threw = null;
   const quiet = console.error; console.error = () => {};
