@@ -344,24 +344,32 @@ Two things it has to get right, both silent failures:
 **everywhere**, including one-to-one. Do not migrate them onto the new flag --
 that would quietly make them textable again.
 
-## Dispatch mode drops, it does not fall back
+## Dispatch mode: on for blasts, off for loads in progress, never silent
 
 "Text dispatch where applicable" addresses each member at their dispatcher's
-number. A member with **no** dispatcher number on file is now left out and
-counted, not quietly sent to their own cell. The old fallback meant the option
-that exists to keep messages off a driver's personal phone could put one there,
-and said nothing, so nobody knew whose dispatcher number was missing. They
-arrive in `skipped` with `noDispatcherPhone`, and the progress panel reports
-the two skip reasons separately -- no phone at all is a profile to fill in; no
-dispatcher number is a deliberate drop.
+number. **The Text a Group modal opens with it ON** and the board's "text
+selected loads" opens with it OFF -- the second is a message about a load
+someone is already running, not a solicitation. Each opener sets it, and the
+markup carries **no `checked` attribute**: `0f6c842` ("Default board and alert
+text actions to driver phone numbers") set it false in script while leaving
+`checked` on the input, so for three weeks the box read as on and was off.
+That is why the incident below was reported as "I'm pretty sure text dispatch
+number was checked" -- the driver had a dispatcher number on file the whole
+time. Now that the two openers disagree on purpose, a markup default could
+only ever be wrong for one of them. Do not reintroduce it.
 
-**The option defaults OFF, on purpose.** `0f6c842` ("Default board and alert
-text actions to driver phone numbers") set it false on every modal open, but
-the markup kept `checked` on the input -- so for three weeks the box read as on
-and was off. That is why the incident above was reported as "I'm pretty sure
-text dispatch number was checked": the driver had a dispatcher number on file
-the whole time. The attribute is gone. If the default is ever meant to change,
-change the script; do not put the attribute back on its own.
+**A member with no dispatcher number falls back to their own cell.** Dropping
+them instead was built and reversed the same day (owner's ruling, 2026-10-06)
+once the numbers were counted: **a third of every pool has no dispatcher
+number on file** -- 204 of 538 preferred, 999 of 3,128 Atlanta, 107 of 202
+Mondelez. Skipping them would quietly cut a third of the drivers out of every
+blast, which is worse than reaching them on the wrong channel.
+
+The fallback is flagged, not hidden. `applyPhoneMode()` sets
+`directPhoneFallback` and the progress panel names those drivers: this message
+is about to land on their personal phone, and they are exactly the list worth
+filling dispatcher numbers in for. **The silence was the bug, not the
+fallback** -- if the flag or the note is ever removed, the bug is back.
 
 ## Deleting a load vs. deleting a route
 
