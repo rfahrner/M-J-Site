@@ -87,6 +87,9 @@ jobs:
       - name: Test group Outlook session fallback
         run: node --test scripts/group-outlook-session.test.mjs
 
+      - name: Test Do Not Text keeps drivers out of blasts only
+        run: node --test scripts/do-not-text-driver.test.mjs
+
       - name: Test accounting checkbox persistence
         run: node --test scripts/accounting-save.test.mjs scripts/accounting-note-icon.test.mjs
 

@@ -160,6 +160,11 @@
           <textarea id="ad-notes"></textarea>
         </div>
         <div class="field">
+          <label><input type="checkbox" id="ad-do-not-text"> Do not text</label>
+          <div class="subtext">Leaves this driver out of the Text a Group blasts. They can still be
+            texted one at a time from a board row, an alert or the pre-shift prompt.</div>
+        </div>
+        <div class="field">
           <label>Trailer interchange agreement</label>
           <div class="radio-row">
             <label><input type="radio" name="ad-tia" value="yes"> Yes</label>
@@ -210,7 +215,7 @@
           </div>
           <div class="field">
             <div class="radio-row" style="flex-direction:column; align-items:flex-start; gap:8px;">
-              <label><input type="checkbox" id="tg-dispatch-mode" checked> Text dispatch where applicable</label>
+              <label><input type="checkbox" id="tg-dispatch-mode"> Text dispatch where applicable</label>
               <label><input type="checkbox" id="tg-exclude-scheduled" checked> Exclude already scheduled drivers</label>
             </div>
           </div>

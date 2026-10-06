@@ -367,6 +367,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       "Driver Cell": d.phone,
       "MC": d.mc === "" || d.mc == null ? null : Number(d.mc),
       "Dispatcher phone number": d.dispatcherPhone || null,
+      "do_not_text": !!d.doNotText,
       "E mail": d.email,
       "2nd email": d.email2 || null,
       "Driver Rating": d.rating || null,
@@ -391,6 +392,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       phone: row["Driver Cell"] || "",
       mc: row["MC"] != null ? String(row["MC"]) : "",
       dispatcherPhone: row["Dispatcher phone number"] || "",
+      doNotText: !!row["do_not_text"],
       email: row["E mail"] || "",
       email2: row["2nd email"] || "",
       rating: row["Driver Rating"] || null,
@@ -4893,6 +4895,50 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     return { blockedNames, blockedPhones };
   }
 
+  /*
+   * "Do not text" is a driver asking to be left out of the RECRUITING BLASTS,
+   * and nothing more. It is deliberately not DNU: a flagged driver is still
+   * dispatchable, still on the boards, and still textable one at a time from a
+   * board row, an alert or the pre-shift prompt. Only the Text a Group modal
+   * drops them -- the owner's ruling, 2026-10-06, after a blast reached a
+   * driver whose carrier has him on a do-not-text list.
+   *
+   * It blocks by PHONE NUMBER, not by profile row. The same person routinely
+   * has more than one row -- a "preferred" profile and a location profile with
+   * the same cell (there are 581 duplicate profiles outstanding) -- so flagging
+   * the row that happens to be in front of you and texting them from the other
+   * one is the obvious way for this to fail silently. Same reasoning as
+   * neverTextRules(), which has always keyed DNU on names and phones rather
+   * than ids.
+   */
+  function doNotTextPhones() {
+    const blocked = new Set();
+    (state.drivers || []).forEach((driver) => {
+      if (!driver || !driver.doNotText) return;
+      textPhoneKeys(driver.phone).forEach((phone) => blocked.add(phone));
+    });
+    return blocked;
+  }
+
+  // Returns { allowed, blocked } so callers can SAY how many were left out.
+  // A blast that silently shrinks is how a do-not-text list stops being
+  // trusted; the count note names the number every time.
+  export function splitDoNotTextRecipients(recipients) {
+    const candidates = (Array.isArray(recipients) ? recipients : []).filter(Boolean);
+    const blockedPhones = doNotTextPhones();
+    if (!blockedPhones.size) return { allowed: candidates, blocked: [] };
+
+    const allowed = [];
+    const blocked = [];
+    candidates.forEach((recipient) => {
+      // Check the recipient's own flag too: a member object built from
+      // something other than the driver pool still carries it.
+      const flagged = !!recipient.doNotText || setsIntersect(textPhoneKeys(recipient.phone), blockedPhones);
+      (flagged ? blocked : allowed).push(recipient);
+    });
+    return { allowed, blocked };
+  }
+
   function filterNeverTextRecipients(recipients, { allowDnu = false } = {}) {
     const candidates = (Array.isArray(recipients) ? recipients : []).filter(Boolean);
     // The only bypass is the dispatcher explicitly choosing the DNU group.
@@ -5422,8 +5468,9 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     note.textContent = "Checking eligible drivers…";
     try {
       const pool = driversForLocation(state.driverListTab || "atlanta");
-      const ordinary = filterNeverTextRecipients(applyPhoneMode(pool.filter(d => !isNeverTextDriver(d)))).allowed;
-      const dnu = applyPhoneMode(pool.filter(isNeverTextDriver));
+      const textable = splitDoNotTextRecipients(pool).allowed;
+      const ordinary = filterNeverTextRecipients(applyPhoneMode(textable.filter(d => !isNeverTextDriver(d)))).allowed;
+      const dnu = applyPhoneMode(textable.filter(isNeverTextDriver));
       let members = [...ordinary, ...dnu].filter(d => !!formatTextAddress(d.phone));
       if ($("#tg-exclude-scheduled").checked) {
         const day = $("#tg-day").value;
@@ -5461,6 +5508,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
           members.push(driver);
         }
       }
+      members = splitDoNotTextRecipients(members).allowed;
       members = filterNeverTextRecipients(applyPhoneMode(members)).allowed.filter(d => !!formatTextAddress(d.phone));
       if ($("#tg-exclude-scheduled").checked) {
         const day = $("#tg-day").value;
@@ -5545,19 +5593,33 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     $("#tg-rate-rating-label")?.classList.toggle("hidden", !visible);
   }
 
-  // Shared by both Text Group flows (driver-list group texting and the
-  // board's "text selected rows") — when dispatch mode is on, prefers
-  // each member's dispatcher phone if one's on file, falling back to
-  // their own cell if not. De-duplication for shared dispatcher numbers
-  // happens downstream in beginTextBatchFlow, so this only needs to
-  // pick the right number per member.
+  /*
+   * Shared by both Text Group flows (driver-list group texting and the board's
+   * "text selected rows"). With dispatch mode on, each member is addressed at
+   * their dispatcher's number.
+   *
+   * A member with NO dispatcher number on file is DROPPED, not quietly sent to
+   * their own cell. The old fallback meant "text dispatch" could still put a
+   * message on a driver's personal phone, which is the one outcome the option
+   * exists to prevent -- and it did it silently, so nobody knew which drivers
+   * were missing a dispatcher number. They come back in `skipped` instead, and
+   * the progress panel names the count.
+   *
+   * De-duplication for shared dispatcher numbers happens downstream in
+   * beginTextBatchFlow, so this only has to pick the right number per member.
+   *
+   * NOTE: dispatch mode defaults OFF. The markup used to carry `checked` while
+   * 0f6c842 ("Default board and alert text actions to driver phone numbers")
+   * turned it off in script on every open -- so the box read as on and was not.
+   * The attribute is gone; do not put it back without changing the script too.
+   */
   function applyPhoneMode(members) {
     const checkbox = $("#tg-dispatch-mode");
     const dispatchMode = checkbox ? checkbox.checked : false;
     if (!dispatchMode) return members;
     return members.map((m) => {
       const dispatchPhone = m.dispatcherPhone && String(m.dispatcherPhone).trim();
-      if (!dispatchPhone) return m;
+      if (!dispatchPhone) return { ...m, phone: "", noDispatcherPhone: true };
       return { ...m, name: `${m.name} (dispatch)`, phone: dispatchPhone };
     });
   }
@@ -5578,9 +5640,12 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     });
 
     if (withPhone.length === 0) {
+      const allMissingDispatcher = skipped.length && skipped.every((d) => d.noDispatcherPhone);
       errEl.textContent = filtered.blocked.length
         ? `No textable recipients remain in ${label}; every matching recipient is marked DNU.`
-        : `No one in ${label} has a phone number on file.`;
+        : allMissingDispatcher
+          ? `Nobody in ${label} has a dispatcher number on file. "Text dispatch where applicable" is on, so nobody was texted directly — add dispatcher numbers or untick that box.`
+          : `No one in ${label} has a phone number on file.`;
       errEl.classList.remove("hidden");
       return;
     }
@@ -5706,6 +5771,18 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       label = `${[...rateTextRates].map(rateTextLabel).join(" / ")} — ${[...rateTextRatings].join(", ")}`;
     }
 
+    // startGroupTexting rebuilds `members` from the pool rather than reusing
+    // ratingTextEligible / rateTextEligible, so filtering the COUNTS alone
+    // would show the right number and still send to everyone.
+    const doNotText = splitDoNotTextRecipients(members);
+    members = doNotText.allowed;
+    if (!members.length) {
+      errEl.textContent = `Everyone in ${label} (${doNotText.blocked.length}) is marked do not text.`;
+      errEl.classList.remove("hidden");
+      return;
+    }
+    if (doNotText.blocked.length) label = `${label} — ${doNotText.blocked.length} do not text`;
+
     const excludeScheduledCheckbox = $("#tg-exclude-scheduled");
     const excludeScheduled = !!(excludeScheduledCheckbox && excludeScheduledCheckbox.checked);
     if (excludeScheduled) {
@@ -5795,8 +5872,18 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     const s = groupTextState;
     if (!s) return;
     const isDone = s.batchIndex >= s.batches.length;
+    // Two different reasons land in `skipped`, and they need different
+    // answers: no phone at all is a profile to fill in, while no DISPATCHER
+    // number with dispatch mode on is a deliberate drop (see applyPhoneMode)
+    // and tells you exactly whose dispatcher number is missing.
+    const noDispatcher = s.skipped.filter((d) => d.noDispatcherPhone);
+    const noPhone = s.skipped.filter((d) => !d.noDispatcherPhone);
     const skipNote = s.skipped.length
-      ? `<div class="calc-note" style="margin-top:8px;">${s.skipped.length} driver(s) in this group have no phone on file and were skipped: ${escapeHtml(s.skipped.map((d) => d.name).join(", "))}</div>`
+      ? `<div class="calc-note" style="margin-top:8px;">${
+          noPhone.length ? `${noPhone.length} driver(s) in this group have no phone on file and were skipped: ${escapeHtml(noPhone.map((d) => d.name).join(", "))}` : ""
+        }${noPhone.length && noDispatcher.length ? "<br>" : ""}${
+          noDispatcher.length ? `${noDispatcher.length} driver(s) have no dispatcher number on file and were left out rather than texted directly: ${escapeHtml(noDispatcher.map((d) => d.name).join(", "))}` : ""
+        }</div>`
       : "";
     const dedupedNote = s.deduped && s.deduped.length
       ? `<div class="calc-note" style="margin-top:4px;">${s.deduped.length} driver(s) share a number with someone already in this batch, so only one text went to that number: ${escapeHtml(s.deduped.map((d) => d.name).join(", "))}</div>`
@@ -7133,6 +7220,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     if (prefillName) setVal("ad-name", prefillName);
     const mcFieldAdd = $("#ad-mc"); if (mcFieldAdd) mcFieldAdd.dataset.lastCheckedMc = "";
     $all('input[name="ad-tia"]', $("#modal-add-driver")).forEach((r) => (r.checked = r.value === "no"));
+    const doNotTextAdd = $("#ad-do-not-text"); if (doNotTextAdd) doNotTextAdd.checked = false;
     const addingFromMondelez = (state.activeLocation || state.driverListTab) === "mondelez";
     $all('input[name="ad-runs-out-of"]').forEach((c) => { c.checked = addingFromMondelez && c.value === "mondelez"; });
     ensureDelawareRateSection();
@@ -7182,6 +7270,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     setVal("ad-notes", d.notes || "");
     setVal("ad-rate", d.normalRate || "");
     $all('input[name="ad-tia"]', $("#modal-add-driver")).forEach((r) => (r.checked = r.value === (d.tia ? "yes" : "no")));
+    const doNotTextEdit = $("#ad-do-not-text"); if (doNotTextEdit) doNotTextEdit.checked = !!d.doNotText;
     setVal("ad-tii-amount", d.tiiAmount != null ? d.tiiAmount : "");
     const runsOutOf = d.runsOutOf || [];
     $all('input[name="ad-runs-out-of"]').forEach((c) => { c.checked = runsOutOf.includes(c.value); });
@@ -7344,6 +7433,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       carrier: getVal("ad-carrier").trim(),
       rateBooking: getVal("ad-rate-booking").trim(),
       tia: ($all('input[name="ad-tia"]', $("#modal-add-driver")).find((r) => r.checked) || {}).value === "yes",
+      doNotText: !!$("#ad-do-not-text")?.checked,
       tiiAmount: getVal("ad-tii-amount").trim() ? Number(getVal("ad-tii-amount")) : null,
       normalRate: getVal("ad-rate").trim() || null,
       runsOutOf: $all('input[name="ad-runs-out-of"]').filter((c) => c.checked).map((c) => c.value),
