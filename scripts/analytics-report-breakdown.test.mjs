@@ -72,6 +72,34 @@ api.setReportData({ shifts: [], trips: [], accountingRows: [] });
 assert.equal(api.state.reportRows.filter((r) => r.rowType === 'day').length, 5, 'includes quiet days');
 assert.ok(!api.buildReportText().includes('09/27/2026'), 'changing range replaces previous breakdown');
 assert.ok(api.state.reportRows.every((r) => r.drivers === 0 && r.turn === 0));
-assert.deepEqual(api.state.reportRows.filter((r) => r.rowType === 'weekRecap').map((r) => [r.rangeStart, r.rangeEnd]), [['2026-09-30', '2026-09-30'], ['2026-10-01', '2026-10-03'], ['2026-10-04', '2026-10-04']]);
+assert.deepEqual(api.state.reportRows.filter((r) => r.rowType === 'weekRecap').map((r) => [r.rangeStart, r.rangeEnd]), [['2026-09-30', '2026-10-03'], ['2026-10-04', '2026-10-04']]);
+
+// The reported week must remain whole across September/Q3 and October/Q4.
+const example = [
+  ['2026-09-27', 16, 2860.8, 31, 61],
+  ['2026-09-28', 0, 0, 0, 0],
+  ['2026-09-29', 26, 5923.2, 42, 92],
+  ['2026-09-30', 14, 2608.3, 20, 41],
+  ['2026-10-01', 1, 154.9, 2, 3],
+  ['2026-10-02', 1, 626, 1, 3],
+  ['2026-10-03', 13, 4129.5, 31, 61],
+];
+const fullWeek = { shifts: [], trips: [], accountingRows: [] };
+for (const [date, drivers, mileage, routes, stops] of example) {
+  for (let driver = 0; driver < drivers; driver++) fullWeek.shifts.push({ id: `${date}:${driver}`, shift_date: date, driver_id: driver });
+  for (let route = 0; route < routes; route++) fullWeek.trips.push({ shift_id: `${date}:0`, route_id: `${date}:${route}`, route_miles: route ? 0 : mileage, stop_count: route ? 0 : stops });
+}
+api.state.reportRange = { start: '2026-09-27', end: '2026-10-03' };
+api.setReportData(fullWeek);
+const fullRecaps = api.state.reportRows.filter((r) => r.rowType === 'weekRecap');
+assert.equal(fullRecaps.length, 1);
+assert.deepEqual([fullRecaps[0].rangeStart, fullRecaps[0].rangeEnd], ['2026-09-27', '2026-10-03']);
+assert.equal(api.state.reportRows.at(-1), fullRecaps[0], 'recap appears after Saturday');
+assert.equal(fullRecaps[0].drivers, 71);
+assert.ok(Math.abs(fullRecaps[0].mileage - 16302.7) < 0.0001);
+assert.equal(fullRecaps[0].routes, 127);
+assert.equal(fullRecaps[0].stops, 261);
+assert.equal(fullRecaps[0].turn, 127 / 71);
+assert.match(api.buildReportText(), /Weekly Recap \(2026-09-27 to 2026-10-03\)\t\t71\t16,302.7\t127\t261\t1.79/);
 assert.equal((source.match(/setReportData\(rangeData\);/g) || []).length, 3, 'weekly, custom and main Generate Report paths refresh the breakdown');
 console.log('Report summary, daily rows without revenue, TONUs, partial weeks, range changes and email body passed.');

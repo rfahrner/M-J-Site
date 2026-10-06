@@ -302,7 +302,7 @@ function computeAggregate(rangeData) {
 // actually spans more than one quarter (Past 5 Quarters / All Time /
 // a wide Custom range) — a single-quarter Period view ends with just
 // the final Weekly Recap, since there's only one period to summarize.
-function buildDisplayRows(rangeData, startDate, endDate) {
+function buildDisplayRows(rangeData, startDate, endDate, { splitAtQuarter = true } = {}) {
   const rows = [];
   let weekDays = [];
   let periodDays = [];
@@ -328,7 +328,7 @@ function buildDisplayRows(rangeData, startDate, endDate) {
     const dayKey = dateKey(cursor);
     const qLabel = quarterLabel(cursor.getFullYear(), quarterIndex(cursor));
 
-    if (currentQLabel !== null && qLabel !== currentQLabel) {
+    if (splitAtQuarter && currentQLabel !== null && qLabel !== currentQLabel) {
       flushWeek();
       flushPeriod();
     }
@@ -630,7 +630,8 @@ function buildRecapText() {
 // Reuse its day/week calculations so daily figures and recaps cannot drift.
 function setReportData(rangeData) {
   laState.reportRecap = computeAggregate(rangeData);
-  laState.reportRows = buildDisplayRows(rangeData, laState.reportRange.start, laState.reportRange.end)
+  // Reports group Sunday–Saturday even when a week crosses a quarter boundary.
+  laState.reportRows = buildDisplayRows(rangeData, laState.reportRange.start, laState.reportRange.end, { splitAtQuarter: false })
     .filter((row) => row.rowType === 'day' || row.rowType === 'weekRecap');
 }
 
