@@ -749,36 +749,22 @@ quiet week look identical on these pages. That is also why
 `fetchAllRows()` reports the failure in a banner rather than letting it draw as
 zero — do not let anything here swallow an error and render a number.
 
-## The emailed report is pasted, not put in the mailto:
+## Formatted analytics reports
 
-A `mailto:` body carries plain text and nothing else. That is the format, not
-a limitation to code around -- there is no `mailto:` that can hand Outlook a
-table. Sent that way, the daily breakdown arrived as tab-separated lines that
-wrap into one another and read as a wall of numbers, while the preview beside
-it showed a proper table.
+The main Generate Report button resets to Weekly and the previous completed
+Sunday–Saturday week on every open. Explicit row report buttons still report
+that row's selected range. Changing the timeframe updates the subject too.
 
-So "Open in Email" puts the report on the clipboard as **text/html** (plus a
-text/plain flavour for anything that cannot take HTML) and opens the draft with
-the recipients and subject filled in and the body EMPTY. The dispatcher pastes
-once. `buildReportEmailHtml()` is the preview's two pieces in the preview's
-order, so the two cannot drift.
+The preview, rich clipboard and email draft share `buildReportEmailHtml()`.
+Keep inline table styles, borders and alternating colors. Copy writes both
+text/html and text/plain; a blocked rich clipboard shows an actionable error.
 
-Two things to keep true:
-
-- **The fallback must still work.** The clipboard needs a secure context, a
-  real user gesture and `ClipboardItem`. When any of that is missing,
-  `copyReportToClipboard()` returns false and the old plain-text body goes into
-  the mailto after all -- never worse than before the formatting existed. The
-  status line says which of the two happened.
-- **Inline styles only.** Mail clients discard `<style>` blocks, which is why
-  the table has been built with inline styles from the start. The summary
-  block above it carries its own `font-family` for the same reason: the preview
-  can say `inherit` because it sits in our page, an email has nothing to
-  inherit from.
-
-If a one-click send is ever wanted instead, that needs the Microsoft Graph work
-that is currently shelved -- see the archive section. Do not reach for it
-without being asked.
+Generate email downloads an unsent `.eml` MIME draft with the complete preview
+already in the HTML body. Open the downloaded file in desktop Outlook to edit
+and send it. Browsers cannot directly populate a formatted mailto draft.
+`X-Unsent: 1` marks the file as a draft; multipart/alternative includes a plain
+text counterpart. MIME bodies and the UTF-8 subject are base64 encoded, and
+header inputs are stripped of newlines. Do not revert to an empty mailto draft.
 
 ## Analytics recaps and driver counts
 
