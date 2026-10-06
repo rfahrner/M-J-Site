@@ -185,3 +185,85 @@ export function describePayload(payload) {
   const rate = payload.rates.carrierRate ?? payload.rates.customerRate;
   return `Aljex ${payload.orderNo || "(no order #)"} — ${refs}${rate !== null && rate !== undefined ? ` @ $${rate}` : ""}`;
 }
+
+/* ---------------- a load with no board shift ---------------- */
+
+// `loads_accounting_routes` and `loads_trips` name the same four things
+// differently. Adapt rather than fork `buildRefList` -- one dedupe rule,
+// one slot numbering, one place to change them.
+export function accountingRoutesAsTrips(routes) {
+  return (routes || []).map((r) => ({
+    trip_number: r.route_number,
+    route_id: r.route_id,
+    trip_id: r.trip_id,
+    trailer_out: r.trailer,
+  }));
+}
+
+/**
+ * Houston and Mondelez loads never reach `loads_shifts`; their accounting
+ * rows carry `source_houston_id` / `source_mondelez_id` instead. A release
+ * from one of those boards has to assemble from the accounting row itself.
+ *
+ * That is not a downgrade. A release is `authority: "accounting"` by
+ * definition, and under that authority every field the shift contributes to
+ * the rates is overwritten by these same accounting figures anyway. What is
+ * genuinely only on the board -- TONU, called off, shift complete -- comes
+ * from `board`, so pass the source row when there is one.
+ *
+ * @param {object}   args
+ * @param {object}   args.accounting   loads_accounting row
+ * @param {object}  [args.board]       mondelez_loads / loads_houston row
+ * @param {object[]}[args.routes]      loads_accounting_routes rows
+ * @param {string}  [args.boardTable]  which table `board` came from
+ */
+export function buildAccountingOnlyPayload({ accounting, board = null, routes = [], boardTable = null }) {
+  if (!accounting) throw new Error("buildAccountingOnlyPayload: accounting is required");
+
+  const contractRate = money(accounting.contract_rate);
+  const totalCarrierPay = money(accounting.total_carrier_pay);
+
+  return {
+    version: ALJEX_PAYLOAD_VERSION,
+    authority: "accounting",
+    orderNo: resolveAljexOrderNo(accounting),
+    location: text(accounting.location),
+    shiftDate: text(accounting.shift_date),
+    refs: buildRefList(accountingRoutesAsTrips(routes)),
+    rates: {
+      // Accounting's figures ARE the customer and carrier rates here --
+      // the same collapse `buildOrderPayload` performs for authority
+      // "accounting", done up front because there is no shift to collapse.
+      customerRate:    contractRate,
+      carrierRate:     totalCarrierPay,
+      contractRate,
+      totalCarrierPay,
+      fscRate:         money(accounting.fsc_rate_snapshot),
+      fscPayment:      money(accounting.fsc_payment),
+      totalCost:       money(accounting.total_cost),
+      totalRevenue:    money(accounting.total_revenue),
+    },
+    driver: {
+      name:  text(accounting.driver_name_text) || text(board?.driver_name),
+      mc:    text(accounting.mc_dot) || text(board?.mc),
+      cell:  text(accounting.driver_cell) || text(board?.driver_phone),
+      email: text(accounting.carrier_email),
+    },
+    totals: {
+      miles: quantity(accounting.total_miles),
+      stops: quantity(accounting.total_stops),
+    },
+    flags: {
+      tonu: !!board?.tonu,
+      calledOff: !!board?.called_off,
+      shiftComplete: !!board?.shift_complete,
+      released: accounting.status === "released",
+    },
+    source: {
+      shiftId: null,
+      accountingId: accounting.id ?? null,
+      boardTable: boardTable || null,
+      boardId: board?.id ?? null,
+    },
+  };
+}

@@ -20,7 +20,7 @@ import { saveAccountingFields } from './accounting-save.js';
    ================================================================ */
 
 import { supabaseClient, currentUserName } from './loadboard.js';
-import { buildOrderPayload, payloadHash, isSendable, describePayload, resolveAljexOrderNo } from './aljex-payload.js';
+import { buildOrderPayload, buildAccountingOnlyPayload, payloadHash, isSendable, describePayload, resolveAljexOrderNo } from './aljex-payload.js';
 import { createAljexClient, getAljexMode } from './aljex-client.js';
 import './stop-times-highlight-fix.js';
 import './image-gallery-scroll-fix.js';
@@ -29,6 +29,15 @@ export const OUTBOX_TABLE = "aljex_outbox";
 const SHIFTS_TABLE = "loads_shifts";
 const TRIPS_TABLE = "loads_trips";
 const ACCOUNTING_TABLE = "loads_accounting";
+const ACCOUNTING_ROUTES_TABLE = "loads_accounting_routes";
+
+// An accounting row points back at exactly one board, and only Atlanta,
+// Delaware and Building C point at `loads_shifts`. Houston and Mondelez run
+// their own tables, which is why a release from either used to throw.
+const BOARD_SOURCE_LINKS = [
+  { column: "source_houston_id", table: "loads_houston" },
+  { column: "source_mondelez_id", table: "mondelez_loads" },
+];
 
 const DEBOUNCE_MS = 1500; // a beat longer than a fast typist's gap between characters
 
@@ -78,8 +87,25 @@ export async function enqueueLoadUpdate(shiftId, { kind = "live_update", authori
     return { queued: false, reason: "unchanged since last queued/sent", payload, hash };
   }
 
-  // A release is authoritative; supersede anything still pending for
-  // this order so the board's in-flight guesses can't land after it.
+  const id = await insertOutboxRow({
+    kind,
+    sourceTable: kind === "release" ? ACCOUNTING_TABLE : SHIFTS_TABLE,
+    shiftId: shift.id,
+    accountingId: accounting?.id ?? null,
+    location: shift.location,
+    payload,
+    hash,
+  });
+
+  return { queued: true, id, payload, hash };
+}
+
+// The one write into the outbox. Both release paths and the board's live
+// updates go through it, so the supersede rule can't be true on one and
+// forgotten on the other.
+async function insertOutboxRow({ kind, sourceTable, shiftId, accountingId, location, payload, hash }) {
+  // Whatever is queued is authoritative; supersede anything still pending
+  // for this order so the board's in-flight guesses can't land after it.
   const { error: supErr } = await supabaseClient
     .from(OUTBOX_TABLE)
     .update({ status: "superseded" })
@@ -89,10 +115,10 @@ export async function enqueueLoadUpdate(shiftId, { kind = "live_update", authori
 
   const { data: inserted, error: iErr } = await supabaseClient.from(OUTBOX_TABLE).insert({
     kind,
-    source_table: kind === "release" ? ACCOUNTING_TABLE : SHIFTS_TABLE,
-    shift_id: shift.id,
-    accounting_id: accounting?.id ?? null,
-    location: shift.location,
+    source_table: sourceTable,
+    shift_id: shiftId ?? null,
+    accounting_id: accountingId ?? null,
+    location: location ?? null,
     aljex_order_no: payload.orderNo,
     payload,
     payload_hash: hash,
@@ -100,8 +126,60 @@ export async function enqueueLoadUpdate(shiftId, { kind = "live_update", authori
     created_by_label: currentUserName(),
   }).select("id").maybeSingle();
   if (iErr) throw new Error(`${OUTBOX_TABLE}: ${iErr.message}`);
+  return inserted?.id ?? null;
+}
 
-  return { queued: true, id: inserted?.id ?? null, payload, hash };
+/* ---------------- releasing a load that has no board shift ---------------- */
+
+// Same contract as enqueueLoadUpdate: { queued, reason?, payload, hash }.
+export async function enqueueAccountingRelease(acct) {
+  if (!supabaseClient) return { queued: false, reason: "no Supabase client" };
+
+  const link = BOARD_SOURCE_LINKS.find((s) => acct[s.column] != null) || null;
+
+  const [routesRes, board] = await Promise.all([
+    supabaseClient.from(ACCOUNTING_ROUTES_TABLE).select("*").eq("accounting_id", acct.id),
+    // The board row contributes TONU / called off / shift complete and
+    // nothing that is billed, so losing it is a worse payload, not a wrong
+    // one. A release must not fail because that one read did.
+    link
+      ? supabaseClient.from(link.table).select("*").eq("id", acct[link.column]).maybeSingle()
+          .then(({ data, error }) => {
+            if (error) { console.error(`${link.table}: couldn't read the source row for the release:`, error); return null; }
+            return data || null;
+          })
+      : Promise.resolve(null),
+  ]);
+  if (routesRes.error) throw new Error(`${ACCOUNTING_ROUTES_TABLE}: ${routesRes.error.message}`);
+
+  const payload = buildAccountingOnlyPayload({
+    accounting: acct,
+    board,
+    routes: routesRes.data || [],
+    boardTable: link?.table ?? null,
+  });
+  const hash = payloadHash(payload);
+
+  if (!isSendable(payload)) {
+    return {
+      queued: false,
+      reason: payload.orderNo ? "nothing to send yet" : "no Aljex/PRO number on this load",
+      payload,
+      hash,
+    };
+  }
+
+  const id = await insertOutboxRow({
+    kind: "release",
+    sourceTable: ACCOUNTING_TABLE,
+    shiftId: null,
+    accountingId: acct.id,
+    location: acct.location,
+    payload,
+    hash,
+  });
+
+  return { queued: true, id, payload, hash };
 }
 
 /* ---------------- debounced board hook ---------------- */
@@ -196,10 +274,18 @@ export async function releaseToAljex(accountingId) {
     .from(ACCOUNTING_TABLE).select("*").eq("id", accountingId).maybeSingle();
   if (error) throw new Error(`${ACCOUNTING_TABLE}: ${error.message}`);
   if (!acct) throw new Error(`No accounting record ${accountingId}`);
-  if (!acct.source_shift_id) throw new Error("This accounting row isn't linked to a board shift, so there's nothing to assemble.");
   if (!resolveAljexOrderNo(acct)) throw new Error("No Aljex/PRO number on this load — set one before releasing.");
 
-  const queued = await enqueueLoadUpdate(acct.source_shift_id, { kind: "release", authority: "accounting" });
+  // Atlanta, Delaware and Building C assemble from the board shift and its
+  // routes. Houston and Mondelez have no `loads_shifts` row at all, so they
+  // assemble from the accounting row -- which is what "accounting is the
+  // authority" means anyway. This used to throw for every one of them: the
+  // checkbox unchecked itself, the reason went to a status line at the top
+  // of a table the operator had scrolled past, and not one Houston or
+  // Mondelez load had ever been released.
+  const queued = acct.source_shift_id
+    ? await enqueueLoadUpdate(acct.source_shift_id, { kind: "release", authority: "accounting" })
+    : await enqueueAccountingRelease(acct);
   if (!queued.queued) throw new Error(`Not released: ${queued.reason}`);
 
   const drained = await drainOutbox({ limit: 5 });
