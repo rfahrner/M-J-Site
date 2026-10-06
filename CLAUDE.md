@@ -53,6 +53,27 @@ changes apply as soon as the local edit is confirmed, so multi-dispatcher sync i
 unaffected. Anything added here should reduce this machinery, not layer onto it --
 and cursor position is not the right signal for which copy of a value is newer.
 
+### Driver autocomplete: the picker holds still
+
+**It decides which side to open on once, and holds it.** `driverAcOpenAbove`
+is computed on the first positioning of a focus session and reused until the
+picker closes. It used to be recomputed on every keystroke: the list shrinks
+as a name is typed, so a box that opened below could decide it now fitted
+above and jump up over the field, covering the text being typed. Re-measuring
+also raced the DOM -- `box.scrollHeight` is read before the browser has laid
+out the new contents, so the "above" position came from the previous list's
+height and landed on the input.
+
+**The highlight survives a re-render.** `renderDriverAcOptions()` used to reset
+it to -1, so arrowing down and pausing lost the selection the moment a board
+redraw refocused the cell, and Enter then did nothing or took the wrong
+person. It follows the same DRIVER by id now, and only while the query is
+still being EXTENDED (`startsWith`): a redraw renders the identical query,
+typing on narrows towards the same person, and anything else -- deleting back,
+or entering the cell fresh -- starts clear, so Enter can never pick a name
+nobody arrowed to during this edit.
+`scripts/driver-autocomplete-stability.test.mjs` pins both.
+
 ### Driver autocomplete
 
 The floating driver picker is `#driver-ac-floating`. Do not set permanent
@@ -239,16 +260,42 @@ to say who you are texting. Pressed state is a filled button, not just the
 
 - **Text by Rating**: `#tg-rating-buttons`, multi-select, plus an All Drivers
   button. Counts are after DNU, no-phone and already-scheduled are removed.
-- **Text by Rate**: `#tg-rate-buttons` then `#tg-rate-ratings`, in that order,
-  and the second does not exist until the first is answered -- the rating
-  groups and their counts are of THAT rate's drivers. The "Then pick the
-  ratings" heading is hidden until there is something under it.
+- **Text by Rate**: `#tg-rate-buttons` then `#tg-rate-ratings`, in that order.
+  The rating counts are of the chosen rates' drivers, so they read zero until
+  a rate is picked.
 
-Rates are **single**-select: a driver sits on one rate card. Picking another
-replaces the chosen one, and picking the chosen one again clears it, because
-otherwise there is no way back to "nothing selected". Switching rates clears
-the rating choices with it. The chosen rate lives in `rateTextRate`, not in a
-DOM value -- nothing should read `#tg-rate-select`, which no longer exists.
+Both groups are **multi**-select: several pay ranges are routinely worth
+asking at once, and the ratings beneath are the union across whatever is
+chosen, de-duplicated by driver id. Chosen rates live in `rateTextRates` (a
+Set), never in a DOM value -- nothing should read `#tg-rate-select`, which no
+longer exists.
+
+**Every rating button stays on screen, always.** The ones with nobody at the
+chosen rates read zero, carry `.is-unavailable` and are `disabled`. Rendering
+only the applicable ones made the modal grow and shrink on every click, and
+the dialog is centred, so the whole thing jumped under the pointer -- "we
+dont want it to spazz out on us". Keep the full set; change only the counts
+and the dimming. Rating choices also survive a rate change: narrowing from two
+rates to one must not silently discard what was already picked, and anything
+that no longer applies falls to zero and goes dim.
+
+Ratings bucket on the FIRST LETTER (`driverClassification()`), so A1, A2, A3,
+A+ and A- are all the A button, and each button carries the real ratings
+behind it as a `title` -- the Preferred pool holds no plain "A" at all, so
+"A- 10" beside a rating nobody appears to have read as though the variants had
+been dropped. "DNU" anywhere wins over the first letter, so "Hard DNU" is DNU.
+
+Free text written in the rating box is mapped explicitly in
+`RATING_PHRASE_CLASSES`, because the first-letter rule put every one of those
+somewhere wrong and silently: "core 1"/"core 2" on C beside the real C1/C2,
+"preferred"/"per" on P, "refused load" on R beside the real R, "Last resort"
+on L. Two invented a group out of nothing; the other two padded a real one, so
+texting C was also texting Core. The owner's mapping (2026-10-05): core -> A,
+core 1 -> A, core 2 -> B, preferred/pref/per -> B, refused/refused load -> D,
+last resort -> D, li -> D. Keyed on the whole normalized value, not a
+substring, so "hardcore" is not "core" and "lift" is not "li". Add to that
+table rather than widening the first-letter rule; anything not in it still
+falls to its own first letter.
 
 No counts on the rate buttons, deliberately: the rating counts below are
 post-filter, a rate count could only be the raw pool, and two
@@ -260,8 +307,9 @@ that page alone, while the modal SHELL is copied into the four board pages.
 `openTextGroupModal()` therefore wraps its build and reports a failure in
 `#tg-error` rather than leaving a modal that renders empty and reads as
 "that feature is missing", which is exactly how this was first reported.
-`scripts/text-group-rate-buttons.test.mjs` and
-`scripts/text-group-modal-opens.test.mjs` drive the real functions.
+`scripts/text-group-rate-buttons.test.mjs`,
+`scripts/text-group-modal-opens.test.mjs` and
+`scripts/rating-variant-buckets.test.mjs` drive the real functions.
 
 ## Deleting a load vs. deleting a route
 

@@ -1983,6 +1983,16 @@ fieldset.rate-tier-box.is-overridden {
 .rate-rating-toggle[aria-pressed="true"] { background: var(--focus); color: #fff; border-color: var(--focus); }
 .rate-rating-toggle[aria-pressed="false"] { background: #fff; color: var(--navy-950); border-color: var(--slate-500); }
 .rate-rating-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+/* A rating nobody at the chosen rates holds. Kept on screen so the panel does
+   not change height as rates are picked -- see renderRateTextRatings(). */
+.rate-rating-toggle.is-unavailable,
+.rate-rating-toggle.is-unavailable[aria-pressed="false"] {
+  opacity: 0.35;
+  cursor: default;
+  background: #fff;
+  color: var(--slate-500);
+  border-color: var(--line);
+}
 .rating-selection-mark { display: inline-block; width: 1em; font-weight: 900; }
 
 .group-text-mode-tabs { margin-bottom: 16px; padding-left: 0; padding-right: 0; }

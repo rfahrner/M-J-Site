@@ -3342,6 +3342,11 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   let driverAcInput = null;
   let driverAcQuery = ""; // current typed text — needed so the Add Driver option can pre-fill it
   let driverAcShowAddOption = false; // true when no matches exist and there's something typed to offer adding
+  // Which side this picker opened on, held for the life of one focus session
+  // so a shrinking list cannot flip it over the field. null = not decided yet.
+  let driverAcOpenAbove = null;
+  // The query the current highlight was chosen against; see renderDriverAcOptions.
+  let driverAcHighlightQuery = null;
 
   function ensureDriverAcBox() {
     if (driverAcBox) return driverAcBox;
@@ -3449,7 +3454,22 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     const boxHeight = Math.min(box.scrollHeight || configuredMaxHeight, configuredMaxHeight);
     const spaceAbove = Math.max(0, rect.top - viewportPadding);
     const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - viewportPadding);
-    const openAbove = availableField || (spaceBelow < boxHeight + gap && spaceAbove > spaceBelow);
+    /*
+     * Which side to open on is decided ONCE, when the picker opens for this
+     * field, and held for as long as it stays open.
+     *
+     * It used to be recomputed on every keystroke. The list shrinks as the
+     * name is typed, so a box that opened below could decide it now fits
+     * above -- and jump up over the field, covering the very text being
+     * typed. Re-measuring also raced the DOM: box.scrollHeight is read before
+     * the browser has laid out the new contents, so the "above" position was
+     * computed from the previous list's height and landed on top of the
+     * input. Deciding once removes both.
+     */
+    if (driverAcOpenAbove === null) {
+      driverAcOpenAbove = availableField || (spaceBelow < boxHeight + gap && spaceAbove > spaceBelow);
+    }
+    const openAbove = driverAcOpenAbove;
 
     box.style.position = "fixed";
     box.style.left = rect.left + "px";
@@ -3469,8 +3489,34 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     const q = normalizedDriverName(query);
     driverAcQuery = (query || "").trim();
     const pool = driversForLocation(locationKey || "atlanta");
+    /*
+     * The highlight belongs to the text it was chosen against, and survives
+     * only while that text is still being EXTENDED.
+     *
+     * A board redraw re-renders the identical query, so arrowing down and
+     * pausing keeps the row -- the reported bug. Typing further ("Sam" ->
+     * "Samuel") keeps it too, because the person highlighted is still the
+     * person being narrowed towards. Anything else -- deleting back, or
+     * coming into the cell fresh, which renders against an empty box first --
+     * starts with nothing highlighted, so Enter can never pick a name the
+     * dispatcher did not arrow to during THIS edit.
+     */
+    const prevQuery = driverAcHighlightQuery == null ? null : normalizedDriverName(driverAcHighlightQuery);
+    const stillTyping = prevQuery !== null && normalizedDriverName(query).startsWith(prevQuery);
+    const previouslyHighlighted = stillTyping ? (driverAcMatches[driverAcHighlight]?.id ?? null) : null;
+    if (!stillTyping) driverAcHighlightQuery = null;
     driverAcMatches = (q ? pool.filter((d) => normalizedDriverName(d.name).includes(q)) : pool).slice(0, 8);
-    driverAcHighlight = -1;
+    /*
+     * Arrow down, pause, and the list would quietly re-render with nothing
+     * highlighted -- a board redraw refocuses the cell, which reopens the
+     * picker, which used to reset this to -1. Enter then did nothing, or
+     * picked the wrong person. Keep the highlight on the SAME DRIVER if they
+     * are still in the list, wherever they have moved to.
+     */
+    const stillThere = previouslyHighlighted == null
+      ? -1
+      : driverAcMatches.findIndex((d) => String(d.id) === String(previouslyHighlighted));
+    driverAcHighlight = stillThere;
     driverAcShowAddOption = driverAcMatches.length === 0 && !!driverAcQuery;
     if (driverAcMatches.length) {
       box.innerHTML = driverAcMatches.map((d, i) => `
@@ -3487,6 +3533,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   function setDriverAcHighlight(index) {
     if (!driverAcBox) return;
     driverAcHighlight = index;
+    driverAcHighlightQuery = driverAcQuery;
     $all(".autocomplete-item[data-ac-index]", driverAcBox).forEach((el) => {
       const isHit = Number(el.dataset.acIndex) === index;
       el.classList.toggle("is-highlighted", isHit);
@@ -3544,6 +3591,9 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   // Mondelez board, "houston" on Houston, etc; falls back to state.activeLocation).
   export function openDriverAutocomplete(inputEl, locationKey, onPick) {
     driverAcOnPick = onPick;
+    // A different field is a new decision; the same field reopening mid-edit
+    // (a board redraw refocusing the cell) must keep the side it had.
+    if (driverAcInput !== inputEl) driverAcOpenAbove = null;
     renderDriverAcOptions(inputEl.value, locationKey || state.activeLocation);
     const box = ensureDriverAcBox();
     box.classList.remove("hidden");
@@ -3575,6 +3625,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     // updateDriverAutocomplete's self-heal-by-reopening path work correctly
     // if this field gets typed in again without a fresh focus event.
     if (driverAcInput) { driverAcInput.removeEventListener("keydown", handleDriverAcKeydown); driverAcInput = null; }
+    driverAcOpenAbove = null;
   }
   // Reposition on scroll rather than closing outright — closing here used to
   // fire immediately after opening, because focusing a field near the edge
@@ -5143,10 +5194,41 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   // a plain "D" rating (both start with the same letter) and the two need
   // to stay separate: DNU means specifically not to use that driver.
   const KNOWN_DRIVER_CLASSES = ["A", "B", "C", "D", "DNU", "R"];
+
+  /*
+   * Words people have typed into the rating box that are not letter ratings.
+   *
+   * Bucketing on the first letter put every one of these somewhere wrong and
+   * silently: "core 1" and "core 2" landed on C beside the real C1/C2,
+   * "preferred" and "per" on P, "refused load" on R beside the real R, "Last
+   * resort" on L. Two of those invented a group out of nothing; the other two
+   * quietly padded a real one, so texting C was also texting Core.
+   *
+   * The owner's mapping, 2026-10-05/06. Keyed on the whole normalized value,
+   * not a substring, so "core 1" cannot also catch something that merely
+   * contains it. Add to this rather than widening the first-letter rule.
+   */
+  const RATING_PHRASE_CLASSES = {
+    "core": "A",
+    "core 1": "A",
+    "core 2": "B",
+    "preferred": "B",
+    "pref": "B",
+    "per": "B",
+    "refused load": "D",
+    "refused": "D",
+    "last resort": "D",
+    "li": "D",
+  };
+
   function driverClassification(drv) {
-    const rating = (drv.rating || "").trim().toUpperCase();
-    if (!rating) return null;
+    const raw = (drv.rating || "").trim();
+    if (!raw) return null;
+    const rating = raw.toUpperCase();
+    // DNU first, wherever it appears: "Hard DNU" is a DNU, not an H.
     if (rating.includes("DNU")) return "DNU";
+    const phrase = RATING_PHRASE_CLASSES[raw.toLowerCase().replace(/\s+/g, " ")];
+    if (phrase) return phrase;
     const m = /^[A-Z]/.exec(rating);
     return m ? m[0] : null;
   }
@@ -5171,7 +5253,9 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   // Both were read straight off a <select>; it is a button group now, so the
   // choice lives here. "" means nothing picked, which is what keeps the
   // ratings section underneath empty.
-  let rateTextRate = "";
+  // Which rates are chosen on the Text by Rate tab, and the rates on offer.
+  // A Set, because several pay ranges are routinely worth asking at once.
+  let rateTextRates = new Set();
   let rateTextOptions = [];
   let rateTextRefresh = 0;
   let rateTextEligible = [];
@@ -5239,7 +5323,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     const rateNote = $("#tg-rate-count-note");
     if (!rateButtons || !rateRatings || !rateNote) return;
     rateTextOptions = rateOptions(driversForLocation("preferred"), getBoardRateTiers()?.atlanta, state.drivers);
-    rateTextRate = "";
+    rateTextRates = new Set();
     rateTextRatings = new Set();
     renderRateTextOptions();
     rateRatings.innerHTML = "";
@@ -5286,6 +5370,31 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     renderRatingTextGroups();
   }
 
+  /*
+   * What each button actually covers, as a tooltip.
+   *
+   * driverClassification() buckets on the first letter, so A1, A2, A3, A+ and
+   * A- all land on the A button -- correctly, but invisibly. The Preferred
+   * pool holds no plain "A" at all, so "A- 10" beside a rating nobody appears
+   * to have reads as though the variants had been dropped. That is exactly
+   * how it was reported. Listing the real ratings behind each button answers
+   * the question without anyone having to take it on trust.
+   */
+  function variantTitle(members, classOf, bucket) {
+    // Unrated is the absence of a rating, so there are no variants to list.
+    if (bucket === "Unrated") return "Drivers with no rating recorded";
+    const seen = new Set();
+    for (const driver of members) {
+      if (classOf(driver) !== bucket) continue;
+      const raw = String(driver.rating || "").trim();
+      if (raw) seen.add(raw);
+    }
+    const list = [...seen].sort((a, b) => a.localeCompare(b));
+    if (!list.length) return `No drivers with a ${bucket} rating right now`;
+    if (list.length === 1 && list[0].toUpperCase() === String(bucket).toUpperCase()) return `Rated ${list[0]}`;
+    return `Includes: ${list.join(", ")}`;
+  }
+
   function renderRatingTextGroups() {
     const choices = [...availableDriverClasses().filter(c => c !== "DNU"), "Unrated", "DNU"];
     const counts = new Map();
@@ -5295,8 +5404,11 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     }
     const allSelected = choices.filter(c => c !== "DNU").every(c => ratingTextRatings.has(c));
     const ordinaryCount = ratingTextEligible.filter(d => ratingTextClass(d) !== "DNU").length;
-    const button = (rating, label, count, selected) => `<button type="button" class="btn btn-ghost rate-rating-toggle" data-text-rating="${escapeHtml(rating)}" aria-pressed="${selected}"><span class="rating-selection-mark" aria-hidden="true">${selected ? "✓" : "○"}</span> ${escapeHtml(label)}- ${count}</button>`;
-    $("#tg-rating-buttons").innerHTML = button("ALL", "All Drivers", ordinaryCount, allSelected) + choices.map(rating => button(rating, rating, counts.get(rating) || 0, ratingTextRatings.has(rating))).join("");
+    const button = (rating, label, count, selected, title) => `<button type="button" class="btn btn-ghost rate-rating-toggle" data-text-rating="${escapeHtml(rating)}" aria-pressed="${selected}" title="${escapeHtml(title)}"><span class="rating-selection-mark" aria-hidden="true">${selected ? "✓" : "○"}</span> ${escapeHtml(label)}- ${count}</button>`;
+    $("#tg-rating-buttons").innerHTML =
+      button("ALL", "All Drivers", ordinaryCount, allSelected, "Every rating except DNU")
+      + choices.map(rating => button(rating, rating, counts.get(rating) || 0, ratingTextRatings.has(rating),
+          variantTitle(ratingTextEligible, ratingTextClass, rating))).join("");
     const selected = ratingTextEligible.filter(d => ratingTextRatings.has(ratingTextClass(d))).length;
     $("#tg-rating-count-note").textContent = ratingTextRatings.size
       ? `${selected} eligible drivers selected. ${ratingTextRatings.has("DNU") ? "DNU-only group." : "DNU drivers are excluded."} Shared phone numbers receive one text.`
@@ -5330,17 +5442,25 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   async function refreshRateTextRatings(resetSelection = false) {
     if (!rateTextMode) return;
     const generation = ++rateTextRefresh;
-    const rate = rateTextRate;
-    const wrap = $("#tg-rate-ratings");
     const note = $("#tg-rate-count-note");
-    wrap.innerHTML = "";
-    setRateRatingLabelVisible(false);
     if (resetSelection) rateTextRatings = new Set();
     rateTextEligible = [];
-    if (rate === "") { note.textContent = "Choose a rate to see the rating groups."; return; }
+    // The rating buttons stay on screen even with no rate chosen -- all of
+    // them dimmed at zero -- so the panel never changes height.
+    if (!rateTextRates.size) { renderRateTextRatings(); return; }
     note.textContent = "Checking eligible drivers…";
     try {
-      let members = rateMembers(driversForLocation("preferred"), rate, getBoardRateTiers()?.atlanta, state.drivers);
+      // Union across every chosen rate, de-duplicated: one driver sits on one
+      // rate card, but a shared phone can appear under two.
+      const seen = new Set();
+      let members = [];
+      for (const rate of rateTextRates) {
+        for (const driver of rateMembers(driversForLocation("preferred"), rate, getBoardRateTiers()?.atlanta, state.drivers)) {
+          if (seen.has(driver.id)) continue;
+          seen.add(driver.id);
+          members.push(driver);
+        }
+      }
       members = filterNeverTextRecipients(applyPhoneMode(members)).allowed.filter(d => !!formatTextAddress(d.phone));
       if ($("#tg-exclude-scheduled").checked) {
         const day = $("#tg-day").value;
@@ -5377,24 +5497,48 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     const wrap = $("#tg-rate-buttons");
     if (!wrap) return;
     wrap.innerHTML = rateTextOptions.map((rate) => {
-      const selected = String(rate) === String(rateTextRate);
+      const selected = rateTextRates.has(String(rate));
       return `<button type="button" class="btn btn-ghost rate-rating-toggle" data-text-rate="${escapeHtml(String(rate))}" aria-pressed="${selected}"><span class="rating-selection-mark" aria-hidden="true">${selected ? "✓" : "○"}</span> ${escapeHtml(rateTextLabel(rate))}</button>`;
     }).join("");
   }
 
+  /*
+   * Every rating is always on screen, whether or not the chosen rates have
+   * anyone in it.
+   *
+   * Rendering only the ratings that currently apply made the modal grow and
+   * shrink on every click -- the dialog is centred, so the whole thing jumps
+   * under the pointer. The full set is drawn once and the ones with nobody in
+   * them are dimmed and disabled instead, so the panel is the same height
+   * from the moment it opens and only the counts and the dimming move.
+   *
+   * It is also the honest shape: "E- 0" says there is nobody at these rates
+   * rated E, where a missing button says nothing at all.
+   */
+  function rateRatingChoices() {
+    return [...availableDriverClasses().filter(c => c !== "DNU"), "Unrated", "DNU"];
+  }
+
   function renderRateTextRatings() {
-    const groups = ratingGroups(rateTextEligible, driverClassification);
-    $("#tg-rate-ratings").innerHTML = groups.map(([rating, count]) => `<button type="button" class="btn btn-ghost rate-rating-toggle" data-rate-rating="${escapeHtml(rating)}" aria-pressed="${rateTextRatings.has(rating)}"><span class="rating-selection-mark" aria-hidden="true">${rateTextRatings.has(rating) ? "✓" : "○"}</span> ${escapeHtml(rating)}- ${count}</button>`).join("");
-    // The step-two heading only belongs on screen once there is a step two.
-    setRateRatingLabelVisible(groups.length > 0);
+    const counts = new Map(ratingGroups(rateTextEligible, driverClassification));
+    const choices = rateRatingChoices();
+    $("#tg-rate-ratings").innerHTML = choices.map((rating) => {
+      const count = counts.get(rating) || 0;
+      const selected = count > 0 && rateTextRatings.has(rating);
+      // A rating nobody at these rates holds is still drawn, dimmed and
+      // unclickable, so the panel keeps its height.
+      return `<button type="button" class="btn btn-ghost rate-rating-toggle${count ? "" : " is-unavailable"}" data-rate-rating="${escapeHtml(rating)}" aria-pressed="${selected}"${count ? "" : " disabled aria-disabled=\"true\""} title="${escapeHtml(count ? variantTitle(rateTextEligible, driverClassification, rating) : `Nobody at the chosen ${rateTextRates.size === 1 ? "rate" : "rates"} is rated ${rating}`)}"><span class="rating-selection-mark" aria-hidden="true">${selected ? "✓" : "○"}</span> ${escapeHtml(rating)}- ${count}</button>`;
+    }).join("");
+    setRateRatingLabelVisible(true);
     const count = selectedRateMembers(rateTextEligible, rateTextRatings, driverClassification).length;
-    // Same wording as the rating tab when nothing is picked yet: "0 selected"
-    // reads like a result, and this is a prompt.
-    $("#tg-rate-count-note").textContent = !groups.length
-      ? "No eligible drivers at this rate with these options."
-      : rateTextRatings.size
-        ? `${count} eligible drivers selected. DNU drivers are excluded; shared phone numbers receive one text.`
-        : "No ratings selected. Choose the buttons for the drivers you want to text.";
+    const anyone = [...counts.values()].some(n => n > 0);
+    $("#tg-rate-count-note").textContent = !rateTextRates.size
+      ? "Choose one or more rates to see the rating groups."
+      : !anyone
+        ? "No eligible drivers at these rates with these options."
+        : rateTextRatings.size
+          ? `${count} eligible drivers selected. DNU drivers are excluded; shared phone numbers receive one text.`
+          : "No ratings selected. Choose the buttons for the drivers you want to text.";
   }
 
   function setRateRatingLabelVisible(visible) {
@@ -5547,11 +5691,19 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     let label = rateTextMode ? "" : (groupKey === "DNU" ? "DNU" : `Ratings ${[...ratingTextRatings].join(", ")}`);
 
     if (rateTextMode) {
-      const rate = rateTextRate;
-      if (rate === "") { errEl.textContent = "Choose a rate first."; errEl.classList.remove("hidden"); return; }
-      members = selectedRateMembers(rateMembers(driversForLocation("preferred"), rate, getBoardRateTiers()?.atlanta, state.drivers), rateTextRatings, driverClassification);
+      if (!rateTextRates.size) { errEl.textContent = "Choose at least one rate first."; errEl.classList.remove("hidden"); return; }
+      const seen = new Set();
+      const atRates = [];
+      for (const rate of rateTextRates) {
+        for (const driver of rateMembers(driversForLocation("preferred"), rate, getBoardRateTiers()?.atlanta, state.drivers)) {
+          if (seen.has(driver.id)) continue;
+          seen.add(driver.id);
+          atRates.push(driver);
+        }
+      }
+      members = selectedRateMembers(atRates, rateTextRatings, driverClassification);
       if (!members.length) { errEl.textContent = "Select at least one rating with eligible drivers."; errEl.classList.remove("hidden"); return; }
-      label = `${rateTextLabel(rate)} — ${[...rateTextRatings].join(", ")}`;
+      label = `${[...rateTextRates].map(rateTextLabel).join(" / ")} — ${[...rateTextRatings].join(", ")}`;
     }
 
     const excludeScheduledCheckbox = $("#tg-exclude-scheduled");
@@ -8885,10 +9037,14 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     on("tg-rate-buttons", "click", e => {
       const button = e.target.closest("[data-text-rate]");
       if (!button) return;
-      const rate = button.dataset.textRate;
-      rateTextRate = String(rateTextRate) === String(rate) ? "" : rate;
+      const rate = String(button.dataset.textRate);
+      if (rateTextRates.has(rate)) rateTextRates.delete(rate); else rateTextRates.add(rate);
       renderRateTextOptions();
-      refreshRateTextRatings(true);
+      // Ratings survive a rate change now: narrowing from two rates to one
+      // should not silently throw away the ratings already chosen. Any that
+      // no longer apply fall to zero and go dim, and selectedRateMembers only
+      // ever counts drivers actually in the pool.
+      refreshRateTextRatings();
     });
     on("tg-rate-ratings", "click", e => {
       const button = e.target.closest("[data-rate-rating]");
