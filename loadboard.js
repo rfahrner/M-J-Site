@@ -2789,6 +2789,9 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   // or once the driver list arrives and driver-linked cells need refreshing).
   function renderBoardTable() {
     if (!$("#board-table")) return; // this page (e.g. Accounting) has no board grid — nothing to redraw
+    const scroller = $('#board-table').closest('.grid-scroll');
+    const scrollTop = scroller?.scrollTop;
+    const scrollLeft = scroller?.scrollLeft;
     const rows = getVisibleBoardRows();
     const sortKey = state.boardSort.key;
     // Terminal loads sink, ordered by how much attention they still deserve:
@@ -2843,6 +2846,8 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     </td></tr>`;
     const tbody = `<tbody>${displayRows.map(rowsToHtml).join("")}${addRowHtml}</tbody>`;
 
+    // Replacing all rows removes the browser's scroll anchor. Keep the grid's
+    // viewport fixed through the redraw, including layout reads in helpers.
     $("#board-table").innerHTML = thead + tbody;
     const emptyState = $("#board-empty-state");
     if (emptyState) emptyState.classList.toggle("hidden", rows.length > 0);
@@ -2854,6 +2859,10 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       if (!arrow) return;
       arrow.textContent = state.boardSort.key === th.dataset.boardSort ? (state.boardSort.dir === "asc" ? " ▲" : " ▼") : "";
     });
+    if (scroller) {
+      scroller.scrollTop = scrollTop;
+      scroller.scrollLeft = scrollLeft;
+    }
   }
 
   // Async — the actual "switch to this day" entry point. Fetches from

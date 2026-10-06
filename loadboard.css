@@ -361,6 +361,9 @@ button {
   overflow: auto;
   border-top: 1px solid var(--line);
 }
+/* Full live redraws replace anchor nodes; the board renderer preserves the
+   viewport explicitly instead of letting the browser pick a new anchor. */
+#board-view .grid-scroll { overflow-anchor: none; }
 .board-empty {
   padding: 40px 20px;
   text-align: center;
