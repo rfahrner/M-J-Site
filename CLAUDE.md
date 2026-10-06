@@ -225,7 +225,20 @@ The alert widget has a Text button that should open the existing `Send Text` mod
 An alert clears itself once its text goes out. `openSendTextModal()` takes an
 optional `{ onSent }`, fired by `finishSendTextModalAsSent()` on BOTH exits --
 the gateway accepting the message, and the dispatcher choosing "Open in email
-instead". `alerts.js` keeps a dismissed-key set (localStorage, scoped to today)
+instead".
+
+**Dismiss first, record second.** Both exits used to `await
+markPreShiftTextSent()` and finish afterwards, so the dismissal hung off a
+database write. Three silent ways that lost it, all reported as "I sent a text
+from the alerts pop up and it didn't make the alert go away": the write
+rejecting (`markPreShiftTextSent` swallows its own query error, but
+`logChange`/`labelForRow` after that try are uncovered); `sendTextModalState`
+being read a SECOND time after an await that gives the modal a chance to close;
+and nothing awaiting or catching the handler, so the rejection went nowhere.
+Once the message has left, the alert goes -- bookkeeping cannot resurrect it,
+and a failed write says so in the status bar instead of being swallowed.
+`scripts/alert-clears-on-outlook-draft.test.mjs` drives the real fallback with
+a dead gateway and a throwing write. `alerts.js` keeps a dismissed-key set (localStorage, scoped to today)
 and filters it out of every scan. Repeating rules roll a tier into their key, so
 the next reminder is a new key and still arrives; dismissing never switches a
 rule off.
