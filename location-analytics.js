@@ -634,7 +634,7 @@ function setReportData(rangeData) {
     .filter((row) => row.rowType === 'day' || row.rowType === 'weekRecap');
 }
 
-const REPORT_DAILY_FIELDS = ['drivers', 'mileage', 'routes', 'stops', 'turn', 'revenue']
+const REPORT_DAILY_FIELDS = ['drivers', 'mileage', 'routes', 'stops', 'turn']
   .map((key) => FIELD_DEFS.find((def) => def.key === key));
 
 function reportDailyLabels(row) {
