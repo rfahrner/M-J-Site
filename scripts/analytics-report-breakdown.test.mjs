@@ -6,9 +6,31 @@ const executable = source.replace(/import\s*\{[\s\S]*?\}\s*from\s*'[^']+';/g, ''
 const dateKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const addDays = (d, n) => { const out = new Date(d); out.setDate(out.getDate() + n); return out; };
 const escapeHtml = (text) => String(text).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-const elements = { '#sr-preview': { innerHTML: '' }, '#sr-to': { value: 'recipient@example.com' }, '#sr-subject': { value: 'Atlanta report' } };
-const window = { location: { href: '' } };
-const api = new Function('dateKey', 'addDays', '$', 'escapeHtml', 'window', `${executable}; return { state: laState, setReportData, buildRecapText, buildReportText, renderRecapPreview, openReportInEmail };`)(dateKey, addDays, (selector) => elements[selector] || null, escapeHtml, window);
+const elements = {
+  '#sr-preview': { innerHTML: '' },
+  '#sr-to': { value: 'recipient@example.com' },
+  '#sr-subject': { value: 'Atlanta report' },
+  '#sr-status': { textContent: '' },
+};
+// A stand-in for the browser clipboard. `written` captures what the report
+// actually puts on it; `refuse` plays the browsers and contexts that say no.
+const clipboard = { written: null, refuse: false };
+class ClipboardItem {
+  constructor(parts) { this.parts = parts; }
+}
+const window = {
+  location: { href: '' },
+  ClipboardItem,
+};
+const navigator = {
+  clipboard: {
+    write: async (items) => {
+      if (clipboard.refuse) throw new Error('clipboard blocked');
+      clipboard.written = items[0].parts;
+    },
+  },
+};
+const api = new Function('dateKey', 'addDays', '$', 'escapeHtml', 'window', 'navigator', 'Blob', `${executable}; return { state: laState, setReportData, buildRecapText, buildReportText, renderRecapPreview, openReportInEmail, buildReportEmailHtml };`)(dateKey, addDays, (selector) => elements[selector] || null, escapeHtml, window, navigator, Blob);
 const shifts = [
   { id: 1, shift_date: '2026-09-26', driver_id: 1 },
   { id: 2, shift_date: '2026-09-27', driver_id: 1 },
@@ -75,9 +97,43 @@ for (const internal of ['Cost', 'Margin', 'GM%']) {
 assert.equal((html.match(/scope="row"/g) || []).length, 2);
 assert.ok(html.indexOf('<table') > html.indexOf('Backhauls: 1'));
 assert.match(html, /border-bottom:3px solid #000/);
-api.openReportInEmail();
-const url = new URL(window.location.href);
-assert.equal(url.searchParams.get('body'), text, 'email includes the same daily figures and recaps');
+/*
+ * The emailed report must LOOK like the preview. A mailto: body is plain text
+ * and nothing else, so the formatted version goes on the clipboard as
+ * text/html and the dispatcher pastes it into the draft.
+ */
+await api.openReportInEmail();
+const parts = clipboard.written;
+assert.ok(parts, 'the report was copied to the clipboard');
+const copiedHtml = await parts['text/html'].text();
+assert.ok(copiedHtml.includes('<table'), 'as a real table, not tab-separated text');
+assert.ok(copiedHtml.includes('Spend') && copiedHtml.includes('$1,250.00'));
+assert.ok(copiedHtml.includes('Drivers: 5'), 'with the recap summary above it');
+assert.equal(await parts['text/plain'].text(), text, 'and a plain-text flavour for anything that cannot take HTML');
+let url = new URL(window.location.href);
+assert.equal(decodeURIComponent(url.pathname), 'recipient@example.com', 'addressed to the recipient');
+assert.equal(url.searchParams.get('subject'), 'Atlanta report');
+assert.equal(url.searchParams.get('body'), null, 'the body is left empty for the paste');
+assert.match(elements['#sr-status'].textContent, /Ctrl\+V/, 'and the dispatcher is told to paste');
+
+// If the browser refuses the clipboard -- insecure context, no permission, no
+// ClipboardItem -- the old plain-text body still goes in. Never worse than it
+// was before the formatting existed.
+clipboard.written = null;
+clipboard.refuse = true;
+window.location.href = '';
+// The refusal is logged by design -- a clipboard that silently does nothing is
+// how this would go unnoticed. Muted here so the expected error does not read
+// as a failing test.
+const realError = console.error;
+console.error = () => {};
+await api.openReportInEmail();
+console.error = realError;
+assert.equal(clipboard.written, null);
+url = new URL(window.location.href);
+assert.equal(url.searchParams.get('body'), text, 'falls back to the plain-text body');
+assert.match(elements['#sr-status'].textContent, /plain-text/);
+clipboard.refuse = false;
 api.state.reportRange = { start: '2026-09-30', end: '2026-10-04' };
 api.setReportData({ shifts: [], trips: [], accountingRows: [] });
 assert.equal(api.state.reportRows.filter((r) => r.rowType === 'day').length, 5, 'includes quiet days');

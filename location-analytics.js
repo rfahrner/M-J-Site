@@ -756,11 +756,69 @@ async function applyReportTimeframe(mode) {
   renderRecapPreview();
 }
 
-function openReportInEmail() {
+/*
+ * The email body, as the preview draws it. Same two pieces in the same order:
+ * the recap summary, then the daily table.
+ *
+ * The preview can say font-family:inherit because it is sitting inside our own
+ * page. An email is pasted into Outlook, where there is nothing to inherit
+ * from, so the summary carries its own font. Everything else is already
+ * inline-styled -- mail clients discard <style> blocks, so the table was built
+ * that way from the start.
+ */
+function buildReportEmailHtml() {
+  const summary = escapeHtml(buildRecapText());
+  return `<div style="font-family:Aptos,Calibri,Arial,sans-serif; font-size:12px; white-space:pre-wrap; margin:0 0 4px 0;">${summary}</div>${buildDailyBreakdownHtml()}`;
+}
+
+/*
+ * Put the report on the clipboard as RICH text so it can be pasted into
+ * Outlook with the table intact.
+ *
+ * A mailto: link carries plain text and nothing else -- that is the format,
+ * not a bug -- so the emailed report arrived as tab-separated lines that wrap
+ * into each other and read as a wall of numbers. There is no mailto: that can
+ * hand Outlook a table.
+ *
+ * Both flavours go on the clipboard together: text/html for Outlook and
+ * anything else that understands it, text/plain for whatever does not.
+ * Returns false if the browser refuses -- the clipboard needs a secure
+ * context, a real user gesture, and a browser with ClipboardItem -- so the
+ * caller can fall back to the old plain-text body rather than opening an
+ * empty draft.
+ */
+async function copyReportToClipboard(html, text) {
+  try {
+    if (!navigator.clipboard || typeof window.ClipboardItem !== 'function') return false;
+    await navigator.clipboard.write([new window.ClipboardItem({
+      'text/html': new Blob([html], { type: 'text/html' }),
+      'text/plain': new Blob([text], { type: 'text/plain' }),
+    })]);
+    return true;
+  } catch (e) {
+    console.error('Could not copy the report to the clipboard:', e);
+    return false;
+  }
+}
+
+function setReportStatus(message) {
+  const el = $('#sr-status');
+  if (el) el.textContent = message || '';
+}
+
+async function openReportInEmail() {
   const to = ($('#sr-to').value || '').trim();
   const subject = ($('#sr-subject').value || '').trim();
-  const body = buildReportText();
-  const mailto = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  const text = buildReportText();
+  const copied = await copyReportToClipboard(buildReportEmailHtml(), text);
+  setReportStatus(copied
+    ? 'Report copied — press Ctrl+V in the draft to paste it in.'
+    : 'Couldn\u2019t copy the formatted report, so the draft has the plain-text version.');
+  // When the copy worked the body is left empty and the dispatcher pastes the
+  // formatted version. When it did not, the old plain-text body still goes in,
+  // so this is never worse than it was.
+  const mailto = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}`
+    + (copied ? '' : `&body=${encodeURIComponent(text)}`);
   window.location.href = mailto;
 }
 
