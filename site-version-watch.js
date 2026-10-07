@@ -19,7 +19,7 @@
  *      the dispatcher does by hand still saves -- someone mid-shift must not
  *      lose what they typed because a deploy landed.
  *   2. It says so, with a Reload button.
- *   3. If nobody is using it, it reloads itself. Idle and hidden tabs are
+ *   3. If it is hidden, it reloads itself. Background tabs are
  *      exactly the ones left running overnight, and reloading one costs
  *      nothing.
  *
@@ -37,9 +37,6 @@ import { longTaskRunning } from './long-task-guard.js';
 
 const WATCHED = 'loadboard.js';
 const POLL_MS = 5 * 60 * 1000;
-// Comfortably longer than the 700ms save debounce and than anyone's pause
-// between keystrokes, so an idle tab really is idle.
-const IDLE_MS = 2 * 60 * 1000;
 // After hours of work the tab is holding a result somebody has to see -- the
 // archive export leaves the purge confirmation on screen. Reloading it away
 // 30 seconds after the run ends would be its own kind of losing the work.
@@ -97,12 +94,10 @@ function safeToReloadUnattended() {
   if (longTaskRunning()) return false;
   if (Date.now() - lastLongTaskEndedAt < RECENT_WORK_MS) return false;
   if (document.visibilityState === 'hidden') return true;
-  if (Date.now() - lastActivityAt < IDLE_MS) return false;
-  const active = document.activeElement;
-  if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return false;
-  if (active && active.isContentEditable) return false;
-  if (document.querySelector('.overlay:not(.hidden)')) return false;
-  return true;
+  // A visible board belongs to the dispatcher, even during a pause between
+  // actions. Only an unattended background tab may reload automatically.
+  // Explicit reloads still start on today's date.
+  return false;
 }
 
 function goStale() {

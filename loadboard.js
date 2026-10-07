@@ -2122,7 +2122,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   }
 
   const scheduledCellSaves = new Map();
-  async function runScheduledCellSave(key, save) {
+  export async function runScheduledCellSave(key, save) {
     const prior = scheduledCellSaves.get(key) || Promise.resolve();
     const task = prior.then(save);
     scheduledCellSaves.set(key, task);
@@ -2161,7 +2161,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   const dirtyShiftFields = new Map(); // row.id  -> Set(row state key)
   const dirtyTripFields = new Map();  // trip.id -> Set(trip state key)
 
-  function markFieldDirty(store, key, field) {
+  export function markFieldDirty(store, key, field) {
     if (!key || !field) return;
     let fields = store.get(key);
     if (!fields) { fields = new Set(); store.set(key, fields); }
@@ -2171,13 +2171,13 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   // The values about to be sent, so the acknowledgement can be checked
   // against them rather than against whatever is on screen by the time it
   // comes back.
-  function snapshotDirtyFields(store, key, obj) {
+  export function snapshotDirtyFields(store, key, obj) {
     const fields = store.get(key);
     if (!fields || !fields.size) return null;
     return [...fields].map((field) => [field, obj[field]]);
   }
 
-  function confirmDirtyFieldsSaved(store, key, sent, obj) {
+  export function confirmDirtyFieldsSaved(store, key, sent, obj) {
     const fields = store.get(key);
     if (!fields || !sent) return;
     for (const [field, sentValue] of sent) {
@@ -2191,7 +2191,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   // Object.assign cannot walk over local work. alsoKeep covers the cell under
   // the cursor this instant, which may have been changed too recently to have
   // reached the registry.
-  function dbFieldsSafeToApply(fresh, store, key, alsoKeep) {
+  export function dbFieldsSafeToApply(fresh, store, key, alsoKeep) {
     const keep = new Set(store.get(key) || []);
     if (alsoKeep) keep.add(alsoKeep);
     if (!keep.size) return fresh;
