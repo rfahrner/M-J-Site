@@ -1,4 +1,4 @@
-import { markFieldDirty, snapshotDirtyFields, confirmDirtyFieldsSaved, dbFieldsSafeToApply, runScheduledCellSave } from './loadboard.js';
+import { dirtyFieldsToDbPatch, markFieldDirty, snapshotDirtyFields, confirmDirtyFieldsSaved, dbFieldsSafeToApply, runScheduledCellSave } from './loadboard.js';
 import { acknowledgeDnuAssignment } from './dnu-assignment.js';
 /* ================================================================
    Mondelez board — flat table like Houston (one row per route, no
@@ -197,6 +197,7 @@ function recomputeMondelezRevenue(row) {
   const next = total ? String(total) : "";
   if (row.revenueTotal === next) return;
   row.revenueTotal = next;
+  markFieldDirty(dirtyMondelezFields, row.id, "revenueTotal");
   scheduleMondelezRowSave(row);
   const el = document.querySelector(`input[data-mdz-row="${row.id}"][data-mdz-field="revenueTotal"]`);
   if (el && document.activeElement !== el) el.value = next;
@@ -253,6 +254,9 @@ export async function loadMondelezDatesWithData() {
   mondelezState.datesWithData = dates;
 }
 async function saveMondelezRowNow(row) {
+  return runScheduledCellSave(`mondelez:${row.id}`, () => persistMondelezRow(row));
+}
+async function persistMondelezRow(row) {
   if (!supabaseClient) return null;
   try {
     // The row's OWN date, not whatever day is on screen when this fires.
@@ -263,7 +267,9 @@ async function saveMondelezRowNow(row) {
     const payload = mondelezRowToDbRow(row, row.shiftDate || state.activeDate);
     const sent = snapshotDirtyFields(dirtyMondelezFields, row.id, row);
     if (row.dbId) {
-      const { error } = await supabaseClient.from(MONDELEZ_TABLE).update(payload).eq("id", row.dbId);
+      const updatePayload = dirtyFieldsToDbPatch(payload, sent, { routeImagePaths: "route_image_path" });
+      if (!Object.keys(updatePayload).length) return null;
+      const { error } = await supabaseClient.from(MONDELEZ_TABLE).update(updatePayload).eq("id", row.dbId);
       if (error) { console.error("Failed to save Mondelez row:", error); setDriverSyncStatus(`Couldn't save this load (${error.message}).`, "error"); return null; }
       confirmDirtyFieldsSaved(dirtyMondelezFields, row.id, sent, row);
       return row.dbId;
@@ -275,13 +281,14 @@ async function saveMondelezRowNow(row) {
     return row.dbId;
   } catch (e) {
     console.error("saveMondelezRowNow threw:", e);
+    setDriverSyncStatus(`Couldn't save this load (${e.message || e}).`, "error");
     return null;
   }
 }
 const mondelezSaveTimers = new Map();
 function scheduleMondelezRowSave(row) {
   clearTimeout(mondelezSaveTimers.get(row.id));
-  mondelezSaveTimers.set(row.id, setTimeout(() => runScheduledCellSave(`mondelez:${row.id}`, () => saveMondelezRowNow(row)), SAVE_DEBOUNCE_MS));
+  mondelezSaveTimers.set(row.id, setTimeout(() => saveMondelezRowNow(row), SAVE_DEBOUNCE_MS));
 }
 /* ---------------- rendering ---------------- */
 function mondelezLocationLabel(key) {
@@ -322,6 +329,7 @@ function moveMondelezRowToLocation(rowId, newLocationKey) {
   const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
   if (!row) return;
   row.location = newLocationKey;
+  markFieldDirty(dirtyMondelezFields, row.id, "location");
   saveMondelezRowNow(row);
   renderMondelezTable(); // the row now belongs to a different tab, so it drops out of the current view
 }
@@ -329,6 +337,7 @@ function toggleMondelezTonu(rowId) {
   const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
   if (!row) return;
   row.tonu = !row.tonu;
+  markFieldDirty(dirtyMondelezFields, row.id, "tonu");
   const tr = document.getElementById(rowId);
   if (tr) tr.classList.toggle("is-tonu", row.tonu);
   saveMondelezRowNow(row);
@@ -337,6 +346,7 @@ function toggleMondelezHighlight(rowId) {
   const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
   if (!row) return;
   row.highlighted = !row.highlighted;
+  markFieldDirty(dirtyMondelezFields, row.id, "highlighted");
   const tr = document.getElementById(rowId);
   if (tr) tr.classList.toggle("is-row-pinned", row.highlighted);
   saveMondelezRowNow(row);
@@ -345,6 +355,7 @@ function toggleMondelezShiftComplete(rowId) {
   const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
   if (!row) return;
   row.shiftComplete = !row.shiftComplete;
+  markFieldDirty(dirtyMondelezFields, row.id, "shiftComplete");
   saveMondelezRowNow(row);
   renderMondelezTable(); // completed rows sort to the bottom and collapse to a pill
 }
@@ -519,6 +530,8 @@ async function uploadRouteImage(rowId, files) {
       row.routeImagePaths.push(path); row.routeImageUrls.push(signed.signedUrl);
     }
     row.routeImagePath = row.routeImagePaths[0] || ""; row.routeImageUrl = row.routeImageUrls[0] || "";
+    markFieldDirty(dirtyMondelezFields, row.id, "routeImagePaths");
+    markFieldDirty(dirtyMondelezFields, row.id, "routeImagePath");
     await saveMondelezRowNow(row); renderMondelezTable();
   } catch (e) { console.error("uploadRouteImage failed:", e); setDriverSyncStatus(`Couldn't upload that image (${e.message || e}).`, "error"); }
 }
@@ -570,6 +583,8 @@ async function deleteRouteImage(rowId, imageIndex = 0) {
   const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId); if (!row) return;
   const paths = row.routeImagePaths || parseMondelezImagePaths(row.routeImagePath); const oldPath = paths[Number(imageIndex)]; if (!oldPath) return;
   paths.splice(Number(imageIndex), 1); row.routeImagePaths = paths; row.routeImagePath = paths[0] || ""; row.routeImageUrls = (row.routeImageUrls || []).filter((_, i) => i !== Number(imageIndex)); row.routeImageUrl = row.routeImageUrls[0] || ""; renderMondelezTable();
+  markFieldDirty(dirtyMondelezFields, row.id, "routeImagePaths");
+  markFieldDirty(dirtyMondelezFields, row.id, "routeImagePath");
   try { if (supabaseClient) { const { error } = await supabaseClient.storage.from(MONDELEZ_IMAGE_BUCKET).remove([oldPath]); if (error) throw error; } await saveMondelezRowNow(row); } catch (e) { console.error("deleteRouteImage failed:", e); setDriverSyncStatus(`Image removed here, but couldn't delete it from storage (${e.message || e}).`, "error"); }
 }
 /* ---------------- row actions ---------------- */
@@ -744,6 +759,7 @@ function saveMondelezLoadDetailsModal() {
   if (!mdzLoadDetailsRowId) return;
   const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === mdzLoadDetailsRowId);
   if (!row) { closeMondelezLoadDetailsModal(); return; }
+  const before = { ...row };
   const getVal = (id) => { const el = $("#" + id); return el ? el.value : ""; };
   const newLocation = getVal("mdz-ld-location") || row.location;
   const locationChanged = newLocation !== row.location;
@@ -772,6 +788,9 @@ function saveMondelezLoadDetailsModal() {
   row.revenueTotal = getVal("mdz-ld-revenue").trim();
   row.revenueManual = row.revenueTotal !== "";
   row.notes = getVal("mdz-ld-notes").trim();
+  for (const [field, value] of Object.entries(row)) {
+    if (!Object.is(before[field], value)) markFieldDirty(dirtyMondelezFields, row.id, field);
+  }
   saveMondelezRowNow(row);
   closeMondelezLoadDetailsModal();
   renderMondelezTable(); // if location changed, this drops the row out of the current tab's view
@@ -1129,6 +1148,8 @@ export async function initMondelezPage() {
       const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
       if (row) {
         acknowledgeDnuAssignment(drv, row.driverId);
+        markFieldDirty(dirtyMondelezFields, row.id, "driverName");
+        markFieldDirty(dirtyMondelezFields, row.id, "driverId");
         row.driverName = drv.name;
         row.driverId = drv.id;
         updateMondelezMcCell(row);
