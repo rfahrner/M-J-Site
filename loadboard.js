@@ -1,4 +1,3 @@
-import { restoreBoardDate, installBoardDatePersistence } from './board-date-session.js';
 import { driverProfilePatch, mergeSavedDriverProfiles } from './driver-profile-sync.js';
 import { rateOptions, rateMembers, ratingGroups, selectedRateMembers, preferredTierRate, resolveAtlantaRateProfile } from './preferred-rate-groups.js';
 import { acknowledgeDnuAssignment } from './dnu-assignment.js';
@@ -704,7 +703,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
 
   export const state = {
     activeLocation: null,   // set by initBoardPage() on board pages only
-    activeDate: restoreBoardDate(dateKey(todayDate()), dateKey(addDays(todayDate(), -HISTORY_DAYS)), dateKey(addDays(todayDate(), FUTURE_DAYS))),
+    activeDate: dateKey(todayDate()),
     drivers: [],
     sheets: {},              // `${locationKey}__${dateKey}` -> Row[]
     availableSheets: {},     // `${locationKey}__${dateKey}` -> AvailableRow[]
@@ -735,7 +734,6 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     ]),
     editingDriverId: null,
   };
-  installBoardDatePersistence(() => state.activeDate);
 
   const DRIVER_INFO_COLS = [
     { key: "carrierRate", label: "Carrier Rate", location: "atlanta" },

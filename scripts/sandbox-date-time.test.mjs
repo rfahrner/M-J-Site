@@ -21,24 +21,26 @@ const server=http.createServer((req,res)=>{
   if(req.url.endsWith('loadboard.js')){res.setHeader('etag',version);res.end();return;}
   const fixed=req.url.includes('/fixed/');
   const expression=read('loadboard.js',fixed).match(/activeDate: ([^\n]+),/)[1];
-  const dateScript=fixed?strip(read('board-date-session.js')):'';
-  const watcher=strip(read('site-version-watch.js'));
+  const dateScript='';
+  const watcher=strip(read('site-version-watch.js',fixed));
   const pageName=req.url.split('/').pop();
   const navSource=pageName==='mondelez.html'?'mondelez.js':pageName==='houston.html'?'houston.js':'loadboard.js';
   const navName=pageName==='mondelez.html'?'setMondelezActiveDate':pageName==='houston.html'?'setHoustonActiveDate':'setActiveDate';
   const navigation=lift(read(navSource,fixed),navName);
   res.setHeader('Content-Type','text/html');
   res.end(`<body tabindex="-1"><button id="older">Older day</button><p id="date"></p><script>
-  const todayDate=()=>new Date('2026-10-07T12:00:00');
+  let fixtureToday='2026-10-07T12:00:00';const todayDate=()=>new Date(fixtureToday);
   const dateKey=d=>d.toISOString().slice(0,10);const addDays=(d,n)=>{const o=new Date(d);o.setDate(o.getDate()+n);return o;};
   const HISTORY_DAYS=730,FUTURE_DAYS=14;
   ${dateScript}
-  const state={activeDate:${expression},minDate:'2024-10-01',maxDate:'2026-10-21'};window.boardState=state;
-  ${fixed?'installBoardDatePersistence(() => state.activeDate);':''}
+  const state={todayKey:'2026-10-07',activeDate:${expression},minDate:'2024-10-01',maxDate:'2026-10-21'};window.boardState=state;
+
   document.querySelector('#date').textContent=state.activeDate;
   const loadAndRenderBoard=()=>{document.querySelector('#date').textContent=state.activeDate;};
   const loadAndRenderHoustonBoard=loadAndRenderBoard,loadAndRenderMondelez=loadAndRenderBoard;
   ${navigation}
+  const nightShiftActive=()=>false;${lift(read('loadboard.js',fixed),'checkMidnightRollover')}
+  window.rollMidnight=()=>{fixtureToday='2026-10-08T12:00:00';checkMidnightRollover();};
   document.querySelector('#older').onclick=()=>${navName}('2026-09-29');
   const setAutomaticWritesBlocked=()=>{};const longTaskRunning=()=>false;
   ${watcher}
@@ -58,27 +60,36 @@ try {
     await page.goto(`${base}/${fixed?'fixed':'baseline'}/${board}.html`);
     await page.waitForFunction(()=>window.watcherState?.().deployedVersion==='one');
     await page.click('#older');version='two';
-    const reload=page.waitForNavigation();
-    await page.clock.fastForward(5*60*1000+1000);await reload;
+    const reload=fixed?null:page.waitForNavigation();
+    await page.clock.fastForward(5*60*1000+1000);if(reload)await reload;
+    if(fixed)await page.waitForFunction(()=>window.watcherState().stale);
     const date=await page.evaluate(()=>boardState.activeDate);
     assert.equal(date,fixed?'2026-09-29':'2026-10-07');
-    results.push(`${fixed?'PASS':'REPRODUCED'} ${board}: deploy reload ${fixed?'retains older day':'resets older day to today'}`);
+    results.push(`${fixed?'PASS':'REPRODUCED'} ${board}: deploy detection ${fixed?'leaves visible older day in place':'reloads and resets older day to today'}`);
+    if(fixed){
+      for(let minute=0;minute<10;minute++){await page.evaluate(()=>document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight'})));await page.clock.fastForward(60*1000);assert.equal(await page.evaluate(()=>boardState.activeDate),'2026-09-29');}
+      await page.evaluate(()=>rollMidnight());assert.equal(await page.evaluate(()=>boardState.activeDate),'2026-09-29');
+      results.push(`PASS ${board}: activity, repeated deploy checks, and midnight keep historical day`);
+      await page.reload();assert.equal(await page.evaluate(()=>boardState.activeDate),'2026-10-07');results.push(`PASS ${board}: manual refresh opens today`);}
     await context.close();
   }
-  for(const fixed of [false,true])for(const board of ['mondelez','houston'])for(const navigation of ['tab','click']){
+  for(const fixed of [false,true])for(const board of ['mondelez','houston'])for(const navigation of ['tab','click'])for(const testField of (fixed ? (board==='mondelez' ? ['driverName','startTime','notes','aljexNumber','deliveryGroup','driverAppId','trailerNumber','returnTrailerNumber','stopCount','miles','carrierRpm','carrierPayPerStop','carrierPay','fsc','additionalCharges','revenueTotal'] : ['driverName','time','comments','aljexNumber','ttc','ttt','rating','driverPhone','timeOutRemarks','dispatcherPhone','carrier','mc','normalRate']) : [board==='mondelez'?'startTime':'time',board==='mondelez'?'notes':'comments'])){
     const context=await browser.newContext();const page=await context.newPage();page.on('pageerror',error=>browserErrors.push(error.message));
     const isM=board==='mondelez';const cap=isM?'Mondelez':'Houston';const src=read(`${board}.js`,fixed);const shared=read('loadboard.js',fixed);
-    const rowField=isM?'startTime':'time';const dbField=isM?'start_time':'time';
+    const rowField=testField;const dbField=testField.replace(/[A-Z]/g,c=>'_'+c.toLowerCase());
+    const numeric=['stopCount','miles','carrierRpm','carrierPayPerStop','carrierPay','fsc','additionalCharges','revenueTotal','normalRate'].includes(rowField);
+    const value=numeric?'123':rowField==='driverAppId'?'123456789':['startTime','time'].includes(rowField)?'16:45':'Keep this entry';
     const functions=[`${board}RowToDbRow`,`${board}RowFromDbRow`,`save${cap}RowNow`,`schedule${cap}RowSave`,`handleRealtime${cap}Change`].map(n=>lift(src,n)).join('\n');
     const guards=['markFieldDirty','snapshotDirtyFields','confirmDirtyFieldsSaved','dbFieldsSafeToApply','runScheduledCellSave'].map(n=>lift(shared,n)).join('\n');
-    const inputBlock=isM?src.match(/  table.addEventListener\("input", \(e\) => \{[^]*?\n  \}\);/)[0]:src.match(/    boardTable.addEventListener\("input", \(e\) => \{[^]*?\n    \}\);/)[0];
+    let inputBlock=isM?src.match(/  table.addEventListener\("input", \(e\) => \{[^]*?\n  \}\);/)[0]:src.match(/    boardTable.addEventListener\("input", \(e\) => \{[^]*?\n    \}\);/)[0];
+    if(!isM) inputBlock+='\n'+src.match(/    boardTable.addEventListener\("input", \(e\) => \{\n      const t = e.target;\n      if \(t.dataset.field !== "driverName"\)[^]*?\n    \}\);/)[0];
     await page.setContent('<table id="fixture"><tbody></tbody></table><button id="outside">Outside</button>');
     await page.evaluate(({functions,guards,inputBlock,board,cap,rowField,dbField,isM,fixed,parse})=>{
       let seq=0;window.uid=()=>`generated-${++seq}`;
       window.state={activeDate:'2026-09-29',minDate:'2024-10-01',maxDate:'2026-10-21'};
       const row={id:'r1',dbId:1,shiftDate:state.activeDate,location:'addison',[rowField]:'',notes:'',selected:false};
       const table=document.querySelector('#fixture');
-      const render=()=>{table.querySelector('tbody').innerHTML=`<tr id="r1"><td><input id="time" ${isM?'data-mdz-row="r1" data-mdz-field':'data-row="r1" data-field'}="${rowField}" value="${row[rowField]}"></td><td><input id="next" ${isM?'data-mdz-row="r1" data-mdz-field':'data-row="r1" data-field'}="notes" value="${row.notes}"></td></tr>`;};
+      const render=()=>{table.querySelector('tbody').innerHTML=`<tr id="r1"><td><input id="time" ${isM?'data-mdz-row="r1" data-mdz-field':'data-row="r1" data-field'}="${rowField}" value="${row[rowField]}"></td><td><input id="next" ${isM?'data-mdz-row="r1" data-mdz-field':'data-row="r1" data-field'}="fixtureNext" value="${row.notes}"></td></tr>`;};
       window.renderMondelezTable=render;window.renderHoustonBoardTable=render;
       window.houstonRowToHtml=()=>{render();return document.getElementById('r1').outerHTML;};
       window.captureFocusForRerender=()=>{const id=document.activeElement.id;return()=>document.getElementById(id)?.focus({preventScroll:true});};
@@ -86,7 +97,7 @@ try {
       window.houstonState={datesWithData:new Set(),sheets:{[state.activeDate]:[row]}};
       window.mondelezNightShiftActive=window.houstonNightShiftActive=()=>false;
       window.getMondelezRowsForDate=()=>[row];window.findHoustonRowAnywhere=()=>({row});
-      window.setDriverSyncStatus=()=>{};window.saved=[];window.failSave=false;window.latency=0;
+      window.driversForLocation=()=>[];window.acknowledgeDnuAssignment=()=>{};window.updateMondelezMcCell=()=>{};window.pick=(a,b)=>a||b||'';window.recomputeMondelezRevenue=()=>{};window.setDriverSyncStatus=()=>{};window.saved=[];window.failSave=false;window.latency=0;
       window.supabaseClient={from:()=>({update:payload=>({eq:async()=>{
         await new Promise(r=>setTimeout(r,window.latency));
         if(window.failSave)return {error:{message:'simulated network error'}};
@@ -98,20 +109,20 @@ try {
         ${guards}\n${parse}\n${functions}
         const boardTable=document.querySelector('#fixture'),table=boardTable;
         ${inputBlock}
-        window.sendEcho=(value)=>handleRealtime${cap}Change({eventType:'UPDATE',new:{id:1,shift_date:state.activeDate,location:'addison',${dbField}:value,notes:'remote-note'}});
+        window.sendEcho=(value)=>handleRealtime${cap}Change({eventType:'UPDATE',new:{id:1,shift_date:state.activeDate,location:'addison',notes:'remote-note',${dbField}:value}});
         window.saveNow=()=>save${cap}RowNow(window.fixtureRow);
         window.reschedule=()=>schedule${cap}RowSave(window.fixtureRow);
       `);
       window.fixtureRow=row;render();
     },{functions,guards,inputBlock,board,cap,rowField,dbField,isM,fixed,parse:isM?lift(src,'parseMondelezImagePaths'):''});
-    await page.fill('#time','16:45');
+    await page.fill('#time',value);
     if(navigation==='tab')await page.press('#time','Tab');else await page.click('#outside');
     await page.evaluate(()=>sendEcho(''));
-    assert.equal(await page.inputValue('#time'),fixed?'16:45':'');
+    assert.equal(await page.inputValue('#time'),fixed?value:'');
     await page.waitForFunction(()=>saved.length>0);
-    assert.equal(await page.evaluate(field=>saved.at(-1)[field],dbField),fixed?'16:45':null);
-    results.push(`${fixed?'PASS':'REPRODUCED'} ${board}: ${navigation} + stale echo ${fixed?'retains and saves time':'erases and saves blank time'}`);
-    if(fixed){
+    assert.equal(await page.evaluate(field=>saved.at(-1)[field],dbField),fixed?(numeric?Number(value):value):null);
+    results.push(`${fixed?'PASS':'REPRODUCED'} ${board}: ${rowField}: ${navigation} + stale echo ${fixed?'retains and saves entry':'erases and saves blank entry'}`);
+    if(fixed && ['startTime','time'].includes(rowField)){
       await page.click('#outside');await page.evaluate(()=>sendEcho('17:20'));
       assert.equal(await page.inputValue('#time'),'17:20','confirmed edits allow later legitimate remote updates');
       await page.evaluate(()=>{failSave=true;});await page.fill('#time','18:10');await page.click('#outside');
