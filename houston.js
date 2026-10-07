@@ -1,3 +1,4 @@
+import { markFieldDirty, snapshotDirtyFields, confirmDirtyFieldsSaved, dbFieldsSafeToApply, runScheduledCellSave } from './loadboard.js';
 import { acknowledgeDnuAssignment } from './dnu-assignment.js';
 /* ================================================================
      Houston board — separate implementation, not shared with the other
@@ -120,11 +121,13 @@ export const HOUSTON_TABLE = "loads_houston";
     houstonState.datesWithData = dates;
   }
 
+  const dirtyHoustonFields = new Map();
   export async function saveHoustonRowNow(row) {
     if (!supabaseClient) return null;
     // The row's own date -- see the note in mondelez.js. A debounced save
     // must not inherit a date the user navigated to after typing.
     const payload = houstonRowToDbRow(row, row.shiftDate || state.activeDate);
+    const sent = snapshotDirtyFields(dirtyHoustonFields, row.id, row);
     try {
       if (row.dbId) {
         const { error } = await supabaseClient.from(HOUSTON_TABLE).update(payload).eq("id", row.dbId);
@@ -135,6 +138,7 @@ export const HOUSTON_TABLE = "loads_houston";
         row.dbId = data[0].id;
         row.createdAt = data[0].created_at;
       }
+      confirmDirtyFieldsSaved(dirtyHoustonFields, row.id, sent, row);
     } catch (e) {
       console.error("saveHoustonRowNow threw:", e);
       setDriverSyncStatus(`Couldn't save this load (${e.message || e}).`, "error");
@@ -144,7 +148,7 @@ export const HOUSTON_TABLE = "loads_houston";
   let houstonSaveTimers = {};
   export function scheduleHoustonRowSave(row) {
     clearTimeout(houstonSaveTimers[row.id]);
-    houstonSaveTimers[row.id] = setTimeout(() => saveHoustonRowNow(row), SAVE_DEBOUNCE_MS);
+    houstonSaveTimers[row.id] = setTimeout(() => runScheduledCellSave(`houston:${row.id}`, () => saveHoustonRowNow(row)), SAVE_DEBOUNCE_MS);
   }
 
   export function houstonRowToHtml(row) {
@@ -577,7 +581,7 @@ export const HOUSTON_TABLE = "loads_houston";
     const domField = (tr && tr.contains(activeEl)) ? activeEl.dataset.field : null;
     const preserved = domField ? existing[domField] : undefined;
     const fresh = houstonRowFromDbRow(dbRow);
-    Object.assign(existing, fresh, { id: existing.id, addedAt: existing.addedAt, selected: existing.selected });
+    Object.assign(existing, dbFieldsSafeToApply(fresh, dirtyHoustonFields, existing.id, domField), { id: existing.id, addedAt: existing.addedAt, selected: existing.selected });
     if (domField) existing[domField] = preserved;
     const restoreFocus = captureFocusForRerender();
     if (wasComplete !== existing.shiftComplete) renderHoustonBoardTable();
@@ -827,6 +831,7 @@ export const HOUSTON_TABLE = "loads_houston";
       if (!found) return;
       const field = t.dataset.field;
       if (!field || field === "driverName") return; // driverName handled separately below for the autocomplete match
+      markFieldDirty(dirtyHoustonFields, found.row.id, field);
       found.row[field] = t.value;
       scheduleHoustonRowSave(found.row);
     });
@@ -837,6 +842,8 @@ export const HOUSTON_TABLE = "loads_houston";
       if (!found) return;
       const match = driversForLocation("houston").find((d) => d.name.toLowerCase() === t.value.trim().toLowerCase());
       acknowledgeDnuAssignment(match, found.row.driverId);
+      markFieldDirty(dirtyHoustonFields, found.row.id, "driverName");
+      markFieldDirty(dirtyHoustonFields, found.row.id, "driverId");
       found.row.driverName = t.value;
       found.row.driverId = null;
       if (match) found.row.driverId = match.id;

@@ -1,3 +1,4 @@
+import { markFieldDirty, snapshotDirtyFields, confirmDirtyFieldsSaved, dbFieldsSafeToApply, runScheduledCellSave } from './loadboard.js';
 import { acknowledgeDnuAssignment } from './dnu-assignment.js';
 /* ================================================================
    Mondelez board — flat table like Houston (one row per route, no
@@ -260,14 +261,17 @@ async function saveMondelezRowNow(row) {
     // shift_date on the row just edited -- the load vanished from the day it
     // belonged to and reappeared on the next one. Kroger already does this.
     const payload = mondelezRowToDbRow(row, row.shiftDate || state.activeDate);
+    const sent = snapshotDirtyFields(dirtyMondelezFields, row.id, row);
     if (row.dbId) {
       const { error } = await supabaseClient.from(MONDELEZ_TABLE).update(payload).eq("id", row.dbId);
       if (error) { console.error("Failed to save Mondelez row:", error); setDriverSyncStatus(`Couldn't save this load (${error.message}).`, "error"); return null; }
+      confirmDirtyFieldsSaved(dirtyMondelezFields, row.id, sent, row);
       return row.dbId;
     }
     const { data, error } = await supabaseClient.from(MONDELEZ_TABLE).insert(payload).select();
     if (error) { console.error("Failed to create Mondelez row:", error); setDriverSyncStatus(`Couldn't save this load (${error.message}).`, "error"); return null; }
     row.dbId = data[0].id;
+    confirmDirtyFieldsSaved(dirtyMondelezFields, row.id, sent, row);
     return row.dbId;
   } catch (e) {
     console.error("saveMondelezRowNow threw:", e);
@@ -277,7 +281,7 @@ async function saveMondelezRowNow(row) {
 const mondelezSaveTimers = new Map();
 function scheduleMondelezRowSave(row) {
   clearTimeout(mondelezSaveTimers.get(row.id));
-  mondelezSaveTimers.set(row.id, setTimeout(() => saveMondelezRowNow(row), SAVE_DEBOUNCE_MS));
+  mondelezSaveTimers.set(row.id, setTimeout(() => runScheduledCellSave(`mondelez:${row.id}`, () => saveMondelezRowNow(row)), SAVE_DEBOUNCE_MS));
 }
 /* ---------------- rendering ---------------- */
 function mondelezLocationLabel(key) {
@@ -869,6 +873,7 @@ export function setMondelezActiveDate(newKey) {
   state.activeDate = newKey;
   loadAndRenderMondelez();
 }
+const dirtyMondelezFields = new Map();
 /* ---------------- realtime ---------------- */
 function handleRealtimeMondelezChange(payload) {
   if (payload.eventType === "DELETE") return;
@@ -903,7 +908,7 @@ function handleRealtimeMondelezChange(payload) {
     incoming.routeImageUrls = previousImageUrls;
     incoming.routeImageUrl = previousImageUrls[0] || "";
   }
-  Object.assign(existing, incoming, { id: existing.id, selected: existing.selected });
+  Object.assign(existing, dbFieldsSafeToApply(incoming, dirtyMondelezFields, existing.id, domField), { id: existing.id, selected: existing.selected });
   if (domField) existing[domField] = preserved;
   const restoreFocus = captureFocusForRerender();
   renderMondelezTable();
@@ -1141,6 +1146,9 @@ export async function initMondelezPage() {
     if (!rowId || !field) return;
     const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
     if (!row) return;
+    markFieldDirty(dirtyMondelezFields, row.id, field);
+    if (field === 'driverName') markFieldDirty(dirtyMondelezFields, row.id, 'driverId');
+    if (field === 'revenueTotal') markFieldDirty(dirtyMondelezFields, row.id, 'revenueManual');
     if (field === "driverAppId") {
       const digitsOnly = t.value.replace(/\D/g, "").slice(0, 9);
       if (digitsOnly !== t.value) t.value = digitsOnly;
