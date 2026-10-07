@@ -79,8 +79,8 @@ try {
     const rowField=testField;const dbField=testField.replace(/[A-Z]/g,c=>'_'+c.toLowerCase());
     const numeric=['stopCount','miles','carrierRpm','carrierPayPerStop','carrierPay','fsc','additionalCharges','revenueTotal','normalRate'].includes(rowField);
     const value=numeric?'123':rowField==='driverAppId'?'123456789':['startTime','time'].includes(rowField)?'16:45':'Keep this entry';
-    const functions=[`${board}RowToDbRow`,`${board}RowFromDbRow`,`save${cap}RowNow`,`schedule${cap}RowSave`,`handleRealtime${cap}Change`].map(n=>lift(src,n)).join('\n');
-    const guards=['markFieldDirty','snapshotDirtyFields','confirmDirtyFieldsSaved','dbFieldsSafeToApply','runScheduledCellSave'].map(n=>lift(shared,n)).join('\n');
+    const functions=[`${board}RowToDbRow`,`${board}RowFromDbRow`,`save${cap}RowNow`,...(fixed?[`persist${cap}Row`]:[]),`schedule${cap}RowSave`,`handleRealtime${cap}Change`].map(n=>lift(src,n)).join('\n');
+    const guards=[...(fixed?['dirtyFieldsToDbPatch']:[]),'markFieldDirty','snapshotDirtyFields','confirmDirtyFieldsSaved','dbFieldsSafeToApply','runScheduledCellSave'].map(n=>lift(shared,n)).join('\n');
     let inputBlock=isM?src.match(/  table.addEventListener\("input", \(e\) => \{[^]*?\n  \}\);/)[0]:src.match(/    boardTable.addEventListener\("input", \(e\) => \{[^]*?\n    \}\);/)[0];
     if(!isM) inputBlock+='\n'+src.match(/    boardTable.addEventListener\("input", \(e\) => \{\n      const t = e.target;\n      if \(t.dataset.field !== "driverName"\)[^]*?\n    \}\);/)[0];
     await page.setContent('<table id="fixture"><tbody></tbody></table><button id="outside">Outside</button>');
@@ -115,10 +115,12 @@ try {
       `);
       window.fixtureRow=row;render();
     },{functions,guards,inputBlock,board,cap,rowField,dbField,isM,fixed,parse:isM?lift(src,'parseMondelezImagePaths'):''});
+    await page.clock.install();await page.clock.pauseAt(new Date());
     await page.fill('#time',value);
     if(navigation==='tab')await page.press('#time','Tab');else await page.click('#outside');
     await page.evaluate(()=>sendEcho(''));
     assert.equal(await page.inputValue('#time'),fixed?value:'');
+    await page.clock.resume();
     await page.waitForFunction(()=>saved.length>0);
     assert.equal(await page.evaluate(field=>saved.at(-1)[field],dbField),fixed?(numeric?Number(value):value):null);
     results.push(`${fixed?'PASS':'REPRODUCED'} ${board}: ${rowField}: ${navigation} + stale echo ${fixed?'retains and saves entry':'erases and saves blank entry'}`);
@@ -146,7 +148,7 @@ try {
     const page=await browser.newPage();page.on('pageerror',e=>browserErrors.push(e.message));
     await page.setContent('<table id="board-table"><tbody></tbody></table><button id="outside">Outside</button>');
     const src=read('loadboard.js');
-    const functions=['markFieldDirty','snapshotDirtyFields','confirmDirtyFieldsSaved','dbFieldsSafeToApply','runScheduledCellSave','currentlyEditedField','tripToDbRow','tripFromDbRow','saveTripNow','scheduleTripSave','handleRealtimeTripChange','isUnusedAutoRoutePlaceholder'].map(n=>lift(src,n)).join('\n');
+    const functions=['dirtyFieldsToDbPatch','markFieldDirty','snapshotDirtyFields','confirmDirtyFieldsSaved','dbFieldsSafeToApply','runScheduledCellSave','currentlyEditedField','tripToDbRow','tripFromDbRow','saveTripNow','scheduleTripSave','handleRealtimeTripChange','isUnusedAutoRoutePlaceholder'].map(n=>lift(src,n)).join('\n');
     const inputBlock=src.match(/    boardTable.addEventListener\("input", \(e\) => \{[^]*?\n    \}\);/)[0];
     await page.evaluate(({functions,inputBlock,location})=>{
       const trip={id:'t1',dbId:2,dispatchTime:'',trailerOut:'',routeImagePaths:[]};
@@ -168,11 +170,13 @@ try {
         window.echo=()=>handleRealtimeTripChange({eventType:'UPDATE',new:{id:2,shift_id:1,dispatch_time:''}});
       `);renderBoardTable();
     },{functions,inputBlock,location});
+    await page.clock.install();await page.clock.pauseAt(new Date());
     await page.fill('#time','16:45');
     if(navigation==='tab')await page.press('#time','Tab');else await page.click('#outside');
     await page.evaluate(()=>echo());assert.equal(await page.inputValue('#time'),'16:45');
-    await page.waitForFunction(()=>saved.length>0);
+    await page.clock.resume();await page.waitForFunction(()=>saved.length>0);
     assert.equal(await page.evaluate(()=>saved.at(-1).dispatch_time),'16:45');
+    assert.deepEqual(await page.evaluate(()=>Object.keys(saved.at(-1))),['dispatch_time']);
     results.push(`PASS ${location}: ${navigation} + stale echo retains and saves dispatch time`);
     await page.close();
   }

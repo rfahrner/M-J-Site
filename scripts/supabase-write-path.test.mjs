@@ -78,7 +78,7 @@ console.log('\n2. trip_number is an identity, not an array position');
 
 const SAVE = extractFunction(BOARD, 'saveTripNow');
 checkTrue('an existing route never has its trip_number rewritten',
-  /delete payload\.trip_number;[\s\S]{0,400}\.update\(payload\)\.eq\("id", trip\.dbId\)/.test(SAVE));
+  /delete payload\.trip_number;[\s\S]{0,650}\.update\((?:payload|updatePayload)\)\.eq\("id", trip\.dbId\)/.test(SAVE));
 checkTrue('a new route asks for a free number instead of using its position',
   /payload\.trip_number = await nextFreeTripNumber\(shiftDbId, tripNumber\);/.test(SAVE));
 

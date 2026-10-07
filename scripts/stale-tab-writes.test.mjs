@@ -145,13 +145,13 @@ etag = '"v2"';
 await watcher3.checkForNewDeploy();
 Date.now = realNow;
 console.warn = quiet;
-check('so does one left sitting untouched', reloads3 > 0, true);
+check('a visible board stays put even when untouched', reloads3 > 0, false);
 
 console.log('\n6. the source says what it will not do');
 const WATCH = read('site-version-watch.js');
 check('a hidden tab counts as unattended', /visibilityState === 'hidden'\) return true/.test(WATCH), true);
-check('an open modal blocks a reload', /\.overlay:not\(\.hidden\)/.test(WATCH), true);
-check('a focused field blocks a reload', /INPUT\|TEXTAREA\|SELECT/.test(WATCH), true);
+check('a visible tab is never unattended', watcher3.__safeToReloadUnattended(), false);
+check('the visible stale tab still offers an explicit reload', !!dom3.window.document.querySelector('#site-version-stale-banner button'), true);
 check('it keeps checking on its own', /setInterval\(checkForNewDeploy, POLL_MS\)/.test(WATCH), true);
 // It loads through the toolbar chain while loadboard.js is still evaluating.
 check('it does not import loadboard.js', /from '\.\/loadboard\.js'/.test(WATCH), false);

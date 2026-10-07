@@ -1597,14 +1597,16 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     catch (e) { console.error("[Aljex] queueing failed:", e); }
   }
 
-  async function saveShiftNow(row) {
+  async function saveShiftNow(row, editedFieldsOnly = false) {
     if (!supabaseClient) return null;
     try {
       const payload = shiftToDbRow(row, row.location || state.activeLocation, row.shiftDate || state.activeDate);
       // Captured before the round trip: what the acknowledgement will mean.
       const sent = snapshotDirtyFields(dirtyShiftFields, row.id, row);
       if (row.dbId) {
-        const { error } = await supabaseClient.from(SHIFTS_TABLE).update(payload).eq("id", row.dbId);
+        const updatePayload = editedFieldsOnly ? dirtyFieldsToDbPatch(payload, sent, { rate: "carrier_rate" }) : payload;
+        if (!Object.keys(updatePayload).length) return null;
+        const { error } = await supabaseClient.from(SHIFTS_TABLE).update(updatePayload).eq("id", row.dbId);
         if (error) { console.error("Failed to save row:", error); setDriverSyncStatus(`Couldn't save changes to this row (${error.message}).`, "error"); return null; }
         confirmDirtyFieldsSaved(dirtyShiftFields, row.id, sent, row);
         queueAljexSync(row.dbId, row.location);
@@ -1675,7 +1677,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     }
   }
 
-  async function saveTripNow(row, trip, tripNumber) {
+  async function saveTripNow(row, trip, tripNumber, editedFieldsOnly = false) {
     if (!supabaseClient) return null;
     try {
       const shiftDbId = row.dbId || (await saveShiftNow(row)); // a trip can't exist without its parent shift
@@ -1707,7 +1709,9 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
         // already holds the right number for a row that exists; only an INSERT
         // needs to choose one.
         delete payload.trip_number;
-        const { error } = await supabaseClient.from(TRIPS_TABLE).update(payload).eq("id", trip.dbId);
+        const updatePayload = editedFieldsOnly ? dirtyFieldsToDbPatch(payload, sent, { routeImagePaths: "route_image_path" }) : payload;
+        if (!Object.keys(updatePayload).length) return null;
+        const { error } = await supabaseClient.from(TRIPS_TABLE).update(updatePayload).eq("id", trip.dbId);
         if (error) { console.error("Failed to save load:", error); setDriverSyncStatus(`Couldn't save this load (${error.message}).`, "error"); return null; }
         confirmDirtyFieldsSaved(dirtyTripFields, trip.id, sent, trip);
         queueAljexSync(shiftDbId, row.location); // route_id lives here — this is the Ref# feed
@@ -2124,18 +2128,18 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   const scheduledCellSaves = new Map();
   export async function runScheduledCellSave(key, save) {
     const prior = scheduledCellSaves.get(key) || Promise.resolve();
-    const task = prior.then(save);
+    const task = prior.catch(() => {}).then(save);
     scheduledCellSaves.set(key, task);
     try { return await task; }
     finally { if (scheduledCellSaves.get(key) === task) scheduledCellSaves.delete(key); }
   }
   function scheduleShiftSave(row) {
     clearTimeout(shiftSaveTimers.get(row.id));
-    shiftSaveTimers.set(row.id, setTimeout(() => runScheduledCellSave(`${row.id}:`, () => saveShiftNow(row)), SAVE_DEBOUNCE_MS));
+    shiftSaveTimers.set(row.id, setTimeout(() => runScheduledCellSave(`${row.id}:`, () => saveShiftNow(row, true)), SAVE_DEBOUNCE_MS));
   }
   function scheduleTripSave(row, trip, tripNumber) {
     clearTimeout(tripSaveTimers.get(trip.id));
-    tripSaveTimers.set(trip.id, setTimeout(() => runScheduledCellSave(`${row.id}:${trip.id}`, () => saveTripNow(row, trip, tripNumber)), SAVE_DEBOUNCE_MS));
+    tripSaveTimers.set(trip.id, setTimeout(() => runScheduledCellSave(`${row.id}:${trip.id}`, () => saveTripNow(row, trip, tripNumber, true)), SAVE_DEBOUNCE_MS));
   }
 
   /* ---- fields changed locally that the database has not confirmed yet ----
@@ -2171,6 +2175,20 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   // The values about to be sent, so the acknowledgement can be checked
   // against them rather than against whatever is on screen by the time it
   // comes back.
+  // Typing owns the edited columns, not an old copy of the entire load.
+  // Sending untouched columns could erase another dispatcher's newer entry.
+  export function dirtyFieldsToDbPatch(payload, sent, aliases = {}) {
+    if (!Array.isArray(sent) || !sent.length) return payload;
+    const patch = {};
+    for (const [field] of sent) {
+      const column = aliases[field] || field
+        .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+        .replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+      if (Object.hasOwn(payload, column)) patch[column] = payload[column];
+    }
+    return patch;
+  }
+
   export function snapshotDirtyFields(store, key, obj) {
     const fields = store.get(key);
     if (!fields || !fields.size) return null;
