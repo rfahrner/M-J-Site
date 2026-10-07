@@ -1,4 +1,4 @@
-import { dirtyFieldsToDbPatch, markFieldDirty, snapshotDirtyFields, confirmDirtyFieldsSaved, dbFieldsSafeToApply, runScheduledCellSave } from './loadboard.js';
+import { markFieldDirty, snapshotDirtyFields, confirmDirtyFieldsSaved, dbFieldsSafeToApply, runScheduledCellSave } from './loadboard.js';
 import { acknowledgeDnuAssignment } from './dnu-assignment.js';
 /* ================================================================
      Houston board — separate implementation, not shared with the other
@@ -123,9 +123,6 @@ export const HOUSTON_TABLE = "loads_houston";
 
   const dirtyHoustonFields = new Map();
   export async function saveHoustonRowNow(row) {
-    return runScheduledCellSave(`houston:${row.id}`, () => persistHoustonRow(row));
-  }
-  async function persistHoustonRow(row) {
     if (!supabaseClient) return null;
     // The row's own date -- see the note in mondelez.js. A debounced save
     // must not inherit a date the user navigated to after typing.
@@ -133,9 +130,7 @@ export const HOUSTON_TABLE = "loads_houston";
     const sent = snapshotDirtyFields(dirtyHoustonFields, row.id, row);
     try {
       if (row.dbId) {
-        const updatePayload = dirtyFieldsToDbPatch(payload, sent, { routeImagePaths: "route_image_path" });
-        if (!Object.keys(updatePayload).length) return null;
-        const { error } = await supabaseClient.from(HOUSTON_TABLE).update(updatePayload).eq("id", row.dbId);
+        const { error } = await supabaseClient.from(HOUSTON_TABLE).update(payload).eq("id", row.dbId);
         if (error) throw error;
       } else {
         const { data, error } = await supabaseClient.from(HOUSTON_TABLE).insert(payload).select();
@@ -147,14 +142,13 @@ export const HOUSTON_TABLE = "loads_houston";
     } catch (e) {
       console.error("saveHoustonRowNow threw:", e);
       setDriverSyncStatus(`Couldn't save this load (${e.message || e}).`, "error");
-      return null;
     }
     return row.dbId;
   }
   let houstonSaveTimers = {};
   export function scheduleHoustonRowSave(row) {
     clearTimeout(houstonSaveTimers[row.id]);
-    houstonSaveTimers[row.id] = setTimeout(() => saveHoustonRowNow(row), SAVE_DEBOUNCE_MS);
+    houstonSaveTimers[row.id] = setTimeout(() => runScheduledCellSave(`houston:${row.id}`, () => saveHoustonRowNow(row)), SAVE_DEBOUNCE_MS);
   }
 
   export function houstonRowToHtml(row) {
@@ -246,7 +240,6 @@ export const HOUSTON_TABLE = "loads_houston";
     const found = findHoustonRowAnywhere(rowId);
     if (!found) return;
     found.row.tonu = !found.row.tonu;
-    markFieldDirty(dirtyHoustonFields, found.row.id, "tonu");
     const tr = document.getElementById(rowId);
     if (tr) {
       tr.classList.toggle("is-tonu", found.row.tonu);
@@ -259,7 +252,6 @@ export const HOUSTON_TABLE = "loads_houston";
     const found = findHoustonRowAnywhere(rowId);
     if (!found) return;
     found.row.highlighted = !found.row.highlighted;
-    markFieldDirty(dirtyHoustonFields, found.row.id, "highlighted");
     const tr = document.getElementById(rowId);
     if (tr) tr.classList.toggle("is-row-pinned", found.row.highlighted);
     saveHoustonRowNow(found.row);
@@ -290,7 +282,7 @@ export const HOUSTON_TABLE = "loads_houston";
   export function completeSelectedHoustonRows() {
     const rows = visibleHoustonRows().filter((r) => r.selected && !r.shiftComplete);
     if (!rows.length) { setDriverSyncStatus("No selected loads need completing — either nothing's checked, or they're already complete.", "error"); return; }
-    rows.forEach((row) => { row.shiftComplete = true; markFieldDirty(dirtyHoustonFields, row.id, "shiftComplete"); saveHoustonRowNow(row); });
+    rows.forEach((row) => { row.shiftComplete = true; saveHoustonRowNow(row); });
     renderHoustonBoardTable();
   }
 
@@ -382,7 +374,6 @@ export const HOUSTON_TABLE = "loads_houston";
     const found = findHoustonRowAnywhere(rowId);
     if (!found) return;
     found.row.shiftComplete = !found.row.shiftComplete;
-    markFieldDirty(dirtyHoustonFields, found.row.id, "shiftComplete");
     saveHoustonRowNow(found.row);
     renderHoustonBoardTable();
   }
@@ -461,7 +452,6 @@ export const HOUSTON_TABLE = "loads_houston";
     const found = findHoustonRowAnywhere(houstonLdRowId);
     if (!found) { closeHoustonLoadDetailsModal(); return; }
     const row = found.row;
-    const before = { ...row };
     const getVal = (id) => { const el = $("#" + id); return el ? el.value : ""; };
 
     const driverField = $("#hou-ld-driver");
@@ -488,9 +478,6 @@ export const HOUSTON_TABLE = "loads_houston";
     row.comments = getVal("hou-ld-comments").trim();
     row.timeOutRemarks = getVal("hou-ld-timeout").trim();
 
-    for (const [field, value] of Object.entries(row)) {
-      if (!Object.is(before[field], value)) markFieldDirty(dirtyHoustonFields, row.id, field);
-    }
     saveHoustonRowNow(row);
     closeHoustonLoadDetailsModal();
     renderHoustonBoardTable();
@@ -745,7 +732,7 @@ export const HOUSTON_TABLE = "loads_houston";
     wireRowImageDropzone(
       boardTable,
       (id) => { const found = findHoustonRowAnywhere(id); return found ? found.row : null; },
-      (row) => { markFieldDirty(dirtyHoustonFields, row.id, "routeImagePath"); return saveHoustonRowNow(row); },
+      saveHoustonRowNow,
       renderHoustonBoardTable,
       (row) => row.aljexNumber || row.driverName || ""
     );
@@ -887,8 +874,6 @@ export const HOUSTON_TABLE = "loads_houston";
         const found = findHoustonRowAnywhere(rowId);
         if (found) {
           acknowledgeDnuAssignment(drv, found.row.driverId);
-          markFieldDirty(dirtyHoustonFields, found.row.id, "driverName");
-          markFieldDirty(dirtyHoustonFields, found.row.id, "driverId");
           found.row.driverName = drv.name;
           found.row.driverId = drv.id;
           const tr = document.getElementById(found.row.id);

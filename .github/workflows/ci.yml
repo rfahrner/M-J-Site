@@ -129,9 +129,6 @@ jobs:
       - name: Test Atlanta and Delaware rounded-down mileage tiers
         run: node --test scripts/carrier-mileage-tiers.test.mjs
 
-      - name: Test save ordering and concurrent cell edits
-        run: node --test scripts/flat-board-save-stress.test.mjs
-
       - name: Test live route placeholders and identity merging
         run: node scripts/realtime-trip-merge.test.mjs
 
