@@ -129,6 +129,9 @@ jobs:
       - name: Test Atlanta and Delaware rounded-down mileage tiers
         run: node --test scripts/carrier-mileage-tiers.test.mjs
 
+      - name: Test live route placeholders and identity merging
+        run: node scripts/realtime-trip-merge.test.mjs
+
       - name: Test board row height stability
         run: node scripts/board-row-height-stability.test.mjs
 

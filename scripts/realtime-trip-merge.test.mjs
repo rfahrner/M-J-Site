@@ -58,18 +58,19 @@ function extractFunction(src, name) {
 // The real merge, with everything it reaches for outside itself stubbed. The
 // three functions below come from loadboard.js verbatim so the shape of a
 // merged route is the shipped shape, not a copy that can drift.
-const SOURCES = ['handleRealtimeTripChange', 'tripFromDbRow', 'blankTrip', 'dbFieldsSafeToApply']
+const SOURCES = ['shiftFromDbRow', 'handleRealtimeShiftChange', 'openTripsFor', 'isUnusedAutoRoutePlaceholder', 'handleRealtimeTripChange', 'tripFromDbRow', 'blankTrip', 'dbFieldsSafeToApply']
   .map((name) => extractFunction(BOARD, name)).join('\n\n');
 
 const CAP = /const MAX_TRIPS_PER_LOAD = (\d+);/.exec(BOARD);
 check('the route cap is declared once, as a constant', !!CAP, true);
 
 let renders = 0;
-const state = { sheets: {} };
+const state = { sheets: {},activeLocation:'atlanta',activeDate:'2026-10-07',minDate:'2024-10-01',maxDate:'2026-10-21',datesWithData:new Set() };
 const harness = new Function('state', 'countRender', `
   ${SOURCES}
   const MAX_TRIPS_PER_LOAD = ${CAP ? CAP[1] : 5};
-  const dirtyTripFields = new Map();
+  const dirtyTripFields = new Map(),dirtyShiftFields=new Map(),SHIFT_FIELD_TO_STATE_KEY={};
+  const sheetKey=(l,d)=>l+"__"+d;
   const BOARD_IMAGE_BUCKET = 'mondelez-routes';
   let seq = 0;
   const uid = (p) => \`\${p}-\${++seq}\`;
@@ -78,7 +79,7 @@ const harness = new Function('state', 'countRender', `
   const captureFocusForRerender = () => () => {};
   const renderBoardTable = () => countRender();
   const batchSignImageUrls = async () => {};
-  return { handleRealtimeTripChange, tripFromDbRow };
+  return { handleRealtimeTripChange, tripFromDbRow,handleRealtimeShiftChange,openTripsFor,blankTrip,isUnusedAutoRoutePlaceholder,dirtyTripFields };
 `)(state, () => { renders += 1; });
 
 const dbRow = (id, number, over = {}) => ({
@@ -167,6 +168,34 @@ const MERGE_CODE = extractFunction(BOARD, 'handleRealtimeTripChange')
 check('no trips[trip_number - 1] indexing', /trip_number\s*-\s*1/.test(MERGE_CODE), false);
 check('no blankTrip() padding in the merge', /blankTrip\(\)/.test(MERGE_CODE), false);
 check('the board still repaints for other users', renders > 0, true);
+
+console.log('\n7. new-shift live delivery replaces its unused editor');
+for(const location of ['atlanta','delaware','buildingc']) {
+ state.activeLocation=location;state.sheets={ [location+'__2026-10-07']:[] };
+ harness.handleRealtimeShiftChange({eventType:'INSERT',new:{id:16141,location,shift_date:'2026-10-07'}});
+ const live=state.sheets[location+'__2026-10-07'][0];
+ check(location+' starts with one editor',live.trips.length,1);
+ send(dbRow(41274,1,{minimized:false,complete:false}));
+ check(location+' shows only the incoming route',live.trips.length,1);
+ for(let i=0;i<20;i++)send(dbRow(41274,1,{minimized:false,complete:false}));
+ check(location+' repeated echoes stay at one',live.trips.length,1);
+ live.trips[0].minimized=true;harness.openTripsFor(live);
+ send(dbRow(41274,1,{minimized:false,complete:false}));
+ check(location+' restored route replaces automatic editor',live.trips.length,1);
+ const manual=harness.blankTrip();live.trips.push(manual);
+ send(dbRow(41274,1,{minimized:false,complete:false}));
+ check(location+' explicit added route stays',live.trips.includes(manual),true);
+}
+console.log('\n8. no draft content is mistaken for an unused placeholder');
+for(const [field,value] of [['notes','Keep this'],['dispatchTime','09:43'],['routeMiles','0'],['stopCount',0],['trailerOut','015831'],['routeImagePaths',['image.jpg']],['checkedIn',true]]) {
+ const draft={...harness.blankTrip(),autoRoutePlaceholder:true,[field]:value};
+ check(field+' is preserved',harness.isUnusedAutoRoutePlaceholder(draft),false);
+}
+const live=state.sheets[state.activeLocation+'__2026-10-07'][0];
+const dirty={...harness.blankTrip(),autoRoutePlaceholder:true};live.trips.push(dirty);
+harness.dirtyTripFields.set(dirty.id,new Set(['notes']));
+send(dbRow(41274,1,{minimized:false,complete:false}));
+check('an intentionally cleared unsaved field stays',live.trips.includes(dirty),true);
 
 console.log(failures ? `\n  ${failures} check(s) FAILED\n` : '\n  All checks passed.\n');
 process.exit(failures ? 1 : 0);
