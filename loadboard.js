@@ -539,7 +539,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       emailSnapshot: dbRow.email_snapshot || "",
       dispatcherPhoneSnapshot: dbRow.dispatcher_phone_snapshot || "",
       ratingSnapshot: dbRow.driver_rating_snapshot || "",
-      trips: [blankTrip()],
+      trips: [Object.assign(blankTrip(), { autoRoutePlaceholder: true })],
     };
   }
 
@@ -3059,6 +3059,16 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     restoreFocus();
   }
 
+  // Only automatic, untouched editor slots may disappear when a real route
+  // arrives. A manually added route or any notes/time/number/image is work.
+  function isUnusedAutoRoutePlaceholder(trip) {
+    if (!trip.autoRoutePlaceholder || trip.dbId != null) return false;
+    const localKeys = new Set(["id", "dbId", "autoRoutePlaceholder", "minimized"]);
+    return Object.entries(trip).every(([key, value]) => localKeys.has(key)
+      || value == null || value === "" || value === false
+      || (Array.isArray(value) && value.length === 0));
+  }
+
   function handleRealtimeTripChange(payload) {
     if (payload.eventType === "DELETE") return;
     const dbTrip = payload.new;
@@ -3154,6 +3164,15 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     // Trip fields have the same requirement as shift fields: route IDs,
     // trailers, statuses, checkboxes, pills, and images must all repaint for
     // other connected users, not just the calculated cells.
+    // A new shift first renders one temporary editor. Its route arrives as
+    // a separate realtime event; keeping both created the extra blank line.
+    // The same cleanup applies when a minimized route becomes editable again.
+    if (!localTrip.minimized) {
+      parentRow.trips = parentRow.trips.filter((trip) => trip === localTrip
+        || !isUnusedAutoRoutePlaceholder(trip)
+        || dirtyTripFields.get(trip.id)?.size
+        || currentlyEditedField(parentRow.id, trip.id));
+    }
     const restoreFocus = captureFocusForRerender();
     renderBoardTable();
     restoreFocus();

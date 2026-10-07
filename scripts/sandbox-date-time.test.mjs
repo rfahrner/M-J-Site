@@ -146,7 +146,7 @@ try {
     const page=await browser.newPage();page.on('pageerror',e=>browserErrors.push(e.message));
     await page.setContent('<table id="board-table"><tbody></tbody></table><button id="outside">Outside</button>');
     const src=read('loadboard.js');
-    const functions=['markFieldDirty','snapshotDirtyFields','confirmDirtyFieldsSaved','dbFieldsSafeToApply','runScheduledCellSave','currentlyEditedField','tripToDbRow','tripFromDbRow','saveTripNow','scheduleTripSave','handleRealtimeTripChange'].map(n=>lift(src,n)).join('\n');
+    const functions=['markFieldDirty','snapshotDirtyFields','confirmDirtyFieldsSaved','dbFieldsSafeToApply','runScheduledCellSave','currentlyEditedField','tripToDbRow','tripFromDbRow','saveTripNow','scheduleTripSave','handleRealtimeTripChange','isUnusedAutoRoutePlaceholder'].map(n=>lift(src,n)).join('\n');
     const inputBlock=src.match(/    boardTable.addEventListener\("input", \(e\) => \{[^]*?\n    \}\);/)[0];
     await page.evaluate(({functions,inputBlock,location})=>{
       const trip={id:'t1',dbId:2,dispatchTime:'',trailerOut:'',routeImagePaths:[]};
