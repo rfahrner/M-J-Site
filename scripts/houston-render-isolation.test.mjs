@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-import {execFileSync} from 'node:child_process';
 const fixed=fs.readFileSync('loadboard.js','utf8'),houston=fs.readFileSync('houston.js','utf8');
-const baseline=execFileSync('git',['show','041d51a:loadboard.js'],{encoding:'utf8',maxBuffer:2000000});
+// Pinned original code is bundled so shallow CI checkouts need no Git history.
+const fixture=JSON.parse(fs.readFileSync('scripts/fixtures/houston-pre-isolation.json','utf8'));
+const baseline=fixture.submit+'\n'+fixture.bindings;
 function lift(source,name){const m=new RegExp('^([ \\t]*)(?:export )?(?:async )?function '+name+'\\(','m').exec(source);assert.ok(m,name);return source.slice(m.index,source.indexOf('\n'+m[1]+'}',m.index)+m[1].length+2).replace('export ','');}
 function binding(source){const start=source.indexOf('    if ($("#modal-add-time-slots")');return source.slice(start,source.indexOf('\n    }',start)+6);}
 async function slots(source){
