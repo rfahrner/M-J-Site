@@ -24,7 +24,7 @@ import { nextShiftDate, nightShiftRows, shortShiftDate, morningShift } from './n
 import { cancellationNotePayload, sortDriverNotes, driverNoteRowHtml } from './driver-profile-notes.js';
 import { sendShiftToAccounting } from './accountingcalc.js';
 import { markAccountingSentForShift } from './accounting-save.js';
-import { initHoustonBoardPage } from './houston.js';
+import { initHoustonBoardPage, renderHoustonBoardTable } from './houston.js';
 import { initMondelezPage } from './mondelez.js';
 import { initDriverAnalyticsPage } from './analytics-drivers.js';
 import { initVolumePage } from './analytics-volume.js';
@@ -2806,6 +2806,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   // any time data already loaded needs a full redraw (e.g. after Add Load,
   // or once the driver list arrives and driver-linked cells need refreshing).
   function renderBoardTable() {
+    if (state.activeLocation === "houston") return renderHoustonBoardTable();
     if (!$("#board-table")) return; // this page (e.g. Accounting) has no board grid — nothing to redraw
     const scroller = $('#board-table').closest('.grid-scroll');
     const scrollTop = scroller?.scrollTop;
@@ -8068,6 +8069,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   }
 
   async function submitAddTimeSlots() {
+    if (state.activeLocation === "houston") return; // Houston owns its flat-table slots.
     const slotRows = $all(".ats-slot-row", $("#ats-rows"));
     const newRows = [];
     slotRows.forEach((div) => {
@@ -8554,7 +8556,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       const msgInput = $("#send-text-message");
       if (msgInput) msgInput.addEventListener("input", updateSendTextCounter);
     }
-    if ($("#modal-add-time-slots")) {
+    if ($("#modal-add-time-slots") && currentFile() !== "houston.html") {
       on("ats-close", "click", closeAddTimeSlotsModal);
       on("ats-cancel", "click", closeAddTimeSlotsModal);
       on("ats-submit", "click", submitAddTimeSlots);
