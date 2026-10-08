@@ -4786,13 +4786,31 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   }
 
   function formatTextAddress(rawPhone) {
-    // Driver-cell values can arrive from imported sheets as numbers rather
-    // than strings. Normalize before stripping punctuation so the modal
-    // cannot fail while opening an alert recipient list.
-    const digits = String(rawPhone == null ? "" : rawPhone).replace(/\D/g, "");
-    if (!digits) return null;
+    // A gateway address must contain ONE North American phone number.
+    // Never strip separators from multiple numbers into one invalid address.
+    const raw = String(rawPhone == null ? "" : rawPhone).trim();
+    if (!/^[+\d\s().-]+$/.test(raw)) return null;
+    const digits = raw.replace(/\D/g, "");
+    if (digits.length !== 10 && !(digits.length === 11 && digits.startsWith("1"))) return null;
     const withCountryCode = digits.length === 10 ? "1" + digits : digits;
     return `${withCountryCode}@textbetter.com`;
+  }
+
+  function formatTextAddresses(rawPhone) {
+    const parts = String(rawPhone == null ? "" : rawPhone).split(/[\\/,;|]+/);
+    const addresses = parts.map(formatTextAddress);
+    // Reject the entire entry if any listed number is malformed.
+    return addresses.length && addresses.every(Boolean) ? [...new Set(addresses)] : [];
+  }
+
+  function expandTextRecipients(recipients) {
+    return recipients.flatMap((recipient) => {
+      const addresses = formatTextAddresses(recipient.phone);
+      // Keep invalid entries available for the modal's skipped-recipient note.
+      return addresses.length ? addresses.map((address) => ({
+        ...recipient, phone: address.split("@")[0],
+      })) : [recipient];
+    });
   }
 
   // A mailto: hands the draft to whatever Windows has registered as the
@@ -5035,7 +5053,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   // alert that opened the modal; nothing else may assume it exists.
   export function openSendTextModal(recipients, prefilledMessage, markShiftIdsOnSent, options = {}) {
     const allowDnu = options.allowDnu === true;
-    const filtered = filterNeverTextRecipients(recipients, { allowDnu });
+    const filtered = filterNeverTextRecipients(expandTextRecipients(recipients), { allowDnu });
     const safeRecipients = filtered.allowed;
     const withPhone = safeRecipients.filter((r) => formatTextAddress(r.phone));
     // De-dupe by normalized phone — several drivers can share the same
@@ -5053,7 +5071,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       setDriverSyncStatus(
         filtered.blocked.length
           ? "That recipient is marked DNU and cannot be texted."
-          : "No phone number on file for this driver.",
+          : "No valid single phone number on file for this driver.",
         "error",
       );
       return;
@@ -5073,8 +5091,12 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       : "";
     const detailsEl = $("#send-text-details");
     if (detailsEl) {
-      detailsEl.innerHTML = blockedNote
-        ? `<details class="text-modal-details"><summary>Details</summary>${blockedNote}</details>`
+      const invalid = safeRecipients.filter((r) => !formatTextAddress(r.phone));
+      const invalidNote = invalid.length
+        ? `<div class="calc-note">Missing or invalid phone numbers were skipped: ${escapeHtml(invalid.map((r) => r.name || r.phone).join(", "))}</div>`
+        : "";
+      detailsEl.innerHTML = blockedNote || invalidNote
+        ? `<details class="text-modal-details"><summary>Details</summary>${blockedNote}${invalidNote}</details>`
         : "";
     }
     $("#send-text-status").textContent = "";
@@ -5556,7 +5578,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       const textable = splitDoNotTextRecipients(pool).allowed;
       const ordinary = filterNeverTextRecipients(applyPhoneMode(textable.filter(d => !isNeverTextDriver(d)))).allowed;
       const dnu = applyPhoneMode(textable.filter(isNeverTextDriver));
-      let members = [...ordinary, ...dnu].filter(d => !!formatTextAddress(d.phone));
+      let members = [...ordinary, ...dnu].filter(d => formatTextAddresses(d.phone).length > 0);
       if ($("#tg-exclude-scheduled").checked) {
         const day = $("#tg-day").value;
         if (!day) throw Error("Choose the day you're trying to fill.");
@@ -5594,7 +5616,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
         }
       }
       members = splitDoNotTextRecipients(members).allowed;
-      members = filterNeverTextRecipients(applyPhoneMode(members)).allowed.filter(d => !!formatTextAddress(d.phone));
+      members = filterNeverTextRecipients(applyPhoneMode(members)).allowed.filter(d => formatTextAddresses(d.phone).length > 0);
       if ($("#tg-exclude-scheduled").checked) {
         const day = $("#tg-day").value;
         if (!day) throw Error("Choose the day you're trying to fill.");
@@ -5717,7 +5739,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
 
   export function beginTextBatchFlow(members, label, message, { allowDnu = false } = {}) {
     const errEl = $("#tg-error");
-    const filtered = filterNeverTextRecipients(members, { allowDnu });
+    const filtered = filterNeverTextRecipients(expandTextRecipients(members), { allowDnu });
     const withPhone = [];
     const skipped = [];
     const deduped = [];
@@ -5733,7 +5755,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     if (withPhone.length === 0) {
       errEl.textContent = filtered.blocked.length
         ? `No textable recipients remain in ${label}; every matching recipient is marked DNU.`
-        : `No one in ${label} has a phone number on file.`;
+        : `No one in ${label} has a valid single phone number on file.`;
       errEl.classList.remove("hidden");
       return;
     }
@@ -5970,7 +5992,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       ? `<div class="calc-note" style="margin-top:8px;">${direct.length} driver(s) have no dispatcher number on file and will be texted directly: ${escapeHtml(direct.map((d) => d.name).join(", "))}</div>`
       : "";
     const skipNote = s.skipped.length
-      ? `<div class="calc-note" style="margin-top:8px;">${s.skipped.length} driver(s) in this group have no phone on file and were skipped: ${escapeHtml(s.skipped.map((d) => d.name).join(", "))}</div>`
+      ? `<div class="calc-note" style="margin-top:8px;">${s.skipped.length} driver(s) in this group have a missing or invalid phone number and were skipped: ${escapeHtml(s.skipped.map((d) => d.name).join(", "))}</div>`
       : "";
     const dedupedNote = s.deduped && s.deduped.length
       ? `<div class="calc-note" style="margin-top:4px;">${s.deduped.length} driver(s) share a number with someone already in this batch, so only one text went to that number: ${escapeHtml(s.deduped.map((d) => d.name).join(", "))}</div>`

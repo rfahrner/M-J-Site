@@ -65,7 +65,7 @@ function setup(poolOverride) {
     driversForLocation: () => pool,
     isNeverTextDriver: (d) => String(d.rating || '').toUpperCase().includes('DNU'),
     filterNeverTextRecipients: (members) => ({ allowed: members.filter((d) => !String(d.rating || '').toUpperCase().includes('DNU')), blocked: [] }),
-    formatTextAddress: (p) => (String(p || '').replace(/\D/g, '').length >= 10 ? String(p) : ''),
+    formatTextAddresses: p => p ? [String(p)] : [], formatTextAddress: (p) => (String(p || '').replace(/\D/g, '').length >= 10 ? String(p) : ''),
     escapeHtml: (s) => String(s),
     getBoardRateTiers: () => ({ atlanta: [{ id: 'target', min: 61, max: 140 }] }),
     dateKey: () => '2026-10-06',
