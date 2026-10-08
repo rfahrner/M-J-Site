@@ -129,6 +129,9 @@ jobs:
       - name: Test Atlanta and Delaware rounded-down mileage tiers
         run: node --test scripts/carrier-mileage-tiers.test.mjs
 
+      - name: Test Houston rendering and time-slot handler isolation
+        run: node --test scripts/houston-render-isolation.test.mjs
+
       - name: Test text recipient phone validation
         run: node --test scripts/text-phone-validation.test.mjs
 

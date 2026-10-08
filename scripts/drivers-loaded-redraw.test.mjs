@@ -93,9 +93,9 @@ check('switching Mondelez tabs does not change activeLocation',
 console.log('\n6. loadboard stays ignorant of what each board renders');
 // It already imports each board's init(), so this is not about the import
 // edge. It is that adding a board must not mean editing this file again.
-check('it does not reach for Houston\'s renderer', /renderHoustonBoardTable/.test(LB), false);
+check('shared redraws delegate to Houston on its page', /if \(state\.activeLocation === "houston"\) return renderHoustonBoardTable\(\)/.test(LB), true);
 check('nor Mondelez\'s', /renderMondelezTable/.test(LB), false);
-check('it imports only each board\'s init', /import \{ initHoustonBoardPage \} from '\.\/houston\.js';/.test(LB), true);
+check('it imports Houston init and renderer', /import \{ initHoustonBoardPage, renderHoustonBoardTable \} from '\.\/houston\.js';/.test(LB), true);
 check('the boards still import from loadboard', /from ['"]\.\/loadboard\.js['"]/.test(HOU), true);
 
 console.log('\n7. the listener is registered where the page is set up');
