@@ -2025,3 +2025,5 @@ td[data-driver-cell-selected]:focus {
   outline: 2px solid var(--focus);
   outline-offset: -2px;
 }
+
+.houston-sort-btn { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
