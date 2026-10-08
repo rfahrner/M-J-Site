@@ -10,7 +10,7 @@ import { state, parseHHMM, supabaseClient, uid, findDriver, driversForLocation, 
 import { getBoardRateSettings } from './boardrates.js';
 import { nextShiftDate, nightShiftRows, shortShiftDate, morningShift } from './night-shift.js';
 export const HOUSTON_TABLE = "loads_houston";
-  export const houstonState = { sheets: {}, datesWithData: new Set() };
+  export const houstonState = { sheets: {}, datesWithData: new Set(), sort: { key: "time", dir: "asc" } };
 
   /*
    * Night Shift, same rule as every other board: keep the day on screen and add
@@ -192,21 +192,50 @@ export const HOUSTON_TABLE = "loads_houston";
     </tr>`;
   }
 
+  export function sortedHoustonRows(rows) {
+    const { key, dir } = houstonState.sort;
+    const direction = dir === "desc" ? -1 : 1;
+    return [...rows].sort((a, b) => {
+      const completed = Number(!!a.shiftComplete) - Number(!!b.shiftComplete);
+      if (completed) return completed;
+      if (key === "driverName") {
+        const name = (row) => String((row.driverId && findDriver(row.driverId)?.name) || row.driverName || "").trim();
+        const av = name(a), bv = name(b);
+        if (!av || !bv) return Number(!av) - Number(!bv);
+        return direction * av.localeCompare(bv, undefined, { sensitivity: "base", numeric: true });
+      }
+      const av = parseHHMM(a.time), bv = parseHHMM(b.time);
+      if (av == null || bv == null) return Number(av == null) - Number(bv == null);
+      const dateOrder = houstonNightShiftActive()
+        ? String(a.shiftDate || state.activeDate).localeCompare(String(b.shiftDate || state.activeDate)) : 0;
+      return direction * (dateOrder || av - bv);
+    });
+  }
+
+  export function toggleHoustonSort(key) {
+    if (!["driverName", "time"].includes(key)) return;
+    const previous = houstonState.sort;
+    houstonState.sort = { key, dir: previous.key === key && previous.dir === "asc" ? "desc" : "asc" };
+    renderHoustonBoardTable();
+  }
+
   export function renderHoustonBoardTable() {
     const rows = visibleHoustonRows();
-    const displayRows = [...rows].sort((a, b) => (a.shiftComplete ? 1 : 0) - (b.shiftComplete ? 1 : 0));
+    const displayRows = sortedHoustonRows(rows);
+    const sortArrow = (key) => houstonState.sort.key === key ? (houstonState.sort.dir === "asc" ? " ▲" : " ▼") : "";
+    const ariaSort = (key) => houstonState.sort.key === key ? (houstonState.sort.dir === "asc" ? "ascending" : "descending") : "none";
     const thead = `<thead><tr>
       <th class="pin pin-select"><div id="houston-select-count" class="board-select-count"></div><input type="checkbox" class="chk" id="select-all-rows" title="Select all"></th>
       <th class="pin pin-text"></th>
       <th class="pin pin-rate">Rate</th>
       <th class="pin pin-pro">Aljex #</th>
-      <th class="pin pin-driver">Driver</th>
+      <th class="pin pin-driver board-sortable" data-houston-sort="driverName" aria-sort="${ariaSort("driverName")}"><button type="button" class="houston-sort-btn">Driver<span class="sort-arrow">${sortArrow("driverName")}</span></button></th>
       <th class="col-cell">Phone</th>
       <th class="col-dispatcherPhone">Dispatcher Phone</th>
       <th class="col-hou-carrier">Carrier</th>
       <th class="col-mc">MC #</th>
       <th class="col-rating">Rating</th>
-      <th class="col-shiftStart">Time</th>
+      <th class="col-shiftStart board-sortable" data-houston-sort="time" aria-sort="${ariaSort("time")}"><button type="button" class="houston-sort-btn">Time<span class="sort-arrow">${sortArrow("time")}</span></button></th>
       <th class="col-hou-ttc">TTC</th>
       <th class="col-hou-ttt">TTT</th>
       <th class="col-hou-comments">Comments</th>
@@ -750,6 +779,8 @@ export const HOUSTON_TABLE = "loads_houston";
       (row) => row.aljexNumber || row.driverName || ""
     );
     boardTable.addEventListener("click", (e) => {
+      const sortHeader = e.target.closest("th[data-houston-sort]");
+      if (sortHeader) { toggleHoustonSort(sortHeader.dataset.houstonSort); return; }
       const textBtn = e.target.closest('[data-action="text-driver"]');
       if (textBtn) textHoustonDriverForRow(textBtn.dataset.row);
       const openBtn = e.target.closest("[data-open-hou-load]");
