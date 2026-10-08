@@ -5475,13 +5475,13 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     const rateRatings = $("#tg-rate-ratings");
     const rateNote = $("#tg-rate-count-note");
     if (!rateButtons || !rateRatings || !rateNote) return;
-    rateTextOptions = rateOptions(driversForLocation("preferred"), getBoardRateTiers()?.atlanta, state.drivers);
+    rateTextOptions = rateOptions(driversForLocation(state.driverListTab || "atlanta"), getBoardRateTiers()?.atlanta, state.drivers);
     rateTextRates = new Set();
     rateTextRatings = new Set();
     renderRateTextOptions();
     rateRatings.innerHTML = "";
     setRateRatingLabelVisible(false);
-    rateNote.textContent = rateTextOptions.length ? "Choose a rate to see the rating groups." : "No preferred drivers on file.";
+    rateNote.textContent = rateTextOptions.length ? "Choose a rate to see the rating groups." : "No drivers on file for this tab.";
     // Both selection tabs share the existing Send Now/batch controls.
     const sendNow = $("#tg-send-now");
     if (sendNow) { sendNow.classList.remove("hidden"); sendNow.disabled = false; }
@@ -5609,7 +5609,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       const seen = new Set();
       let members = [];
       for (const rate of rateTextRates) {
-        for (const driver of rateMembers(driversForLocation("preferred"), rate, getBoardRateTiers()?.atlanta, state.drivers)) {
+        for (const driver of rateMembers(driversForLocation(state.driverListTab || "atlanta"), rate, getBoardRateTiers()?.atlanta, state.drivers)) {
           if (seen.has(driver.id)) continue;
           seen.add(driver.id);
           members.push(driver);
@@ -5870,7 +5870,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       const seen = new Set();
       const atRates = [];
       for (const rate of rateTextRates) {
-        for (const driver of rateMembers(driversForLocation("preferred"), rate, getBoardRateTiers()?.atlanta, state.drivers)) {
+        for (const driver of rateMembers(driversForLocation(state.driverListTab || "atlanta"), rate, getBoardRateTiers()?.atlanta, state.drivers)) {
           if (seen.has(driver.id)) continue;
           seen.add(driver.id);
           atRates.push(driver);
