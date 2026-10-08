@@ -22,7 +22,7 @@ function setup() {
   Object.assign(window,helpers,{
     $, $all:(selector,root)=>[...(root||window.document).querySelectorAll(selector)], state:{driverListTab:'preferred',drivers:pool},
     driversForLocation:()=>pool, isNeverTextDriver:d=>d.rating==='DNU',
-    filterNeverTextRecipients:members=>({allowed:members.filter(d=>d.rating!=='DNU')}), formatTextAddress:p=>p,
+    filterNeverTextRecipients:members=>({allowed:members.filter(d=>d.rating!=='DNU')}), formatTextAddresses: p => p ? [String(p)] : [], formatTextAddress:p=>p,
     splitDoNotTextRecipients:m=>({allowed:m,blocked:[]}),
     escapeHtml:s=>String(s), getBoardRateTiers:()=>({atlanta:[{id:'target',min:61,max:140}]}),
     dateKey:()=> '2026-10-05', todayDate:()=>new Date(),

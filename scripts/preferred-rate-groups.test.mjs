@@ -92,7 +92,7 @@ test('rate counts start unselected, apply eligibility, and stale async refreshes
   const context=vm.createContext({$,state:{drivers:pool},rateTextMode:true,rateTextRates:new Set(['400']),rateTextRefresh:0,rateTextRatings:new Set(),rateTextEligible:[],
     driversForLocation:()=>pool,driverClassification:classify,rateMembers,ratingGroups,selectedRateMembers,getBoardRateTiers:()=>({atlanta:tiers}),
     splitDoNotTextRecipients:m=>({allowed:m,blocked:[]}),filterNeverTextRecipients:m=>({allowed:m.filter(d=>classify(d)!=='DNU')}),applyPhoneMode:m=>m,
-    formatTextAddress:p=>p,driverIsScheduled:(d,s)=>s.has(d.id),escapeHtml:x=>x,
+    formatTextAddresses: p => p ? [String(p)] : [], formatTextAddress:p=>p,driverIsScheduled:(d,s)=>s.has(d.id),escapeHtml:x=>x,
     availableDriverClasses:()=>['A','B'],variantTitle:()=>'',
     scheduledDriversOn:()=>new Promise(resolve=>resolvers.push(resolve))});
   vm.runInContext(lift('rateRatingChoices')+'\n'+lift('setRateRatingLabelVisible')+'\n'+lift('refreshRateTextRatings')+'\n'+lift('renderRateTextRatings'),context);
