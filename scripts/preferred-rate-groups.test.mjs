@@ -271,3 +271,31 @@ test('Preferred profile displays the linked card and allows editing it directly'
   assert.equal(context.driverProfileState.driverId, 'a');
   assert.doesNotMatch($('#ad-atlanta-rate-boxes').innerHTML, /shared-driver-rate-source/);
 });
+
+test('rate options, eligibility and send recipients follow every active driver tab', async () => {
+  const profiles=['atlanta','preferred','houston','delaware','mondelez'].map((location,i)=>({
+    id:location,name:location,location,runsOutOf:location==='mondelez'?['mondelez']:[],rating:'A',phone:'770555010'+i,
+    atlantaRateOverrides:{tiers:{target:400+i*10}}
+  }));
+  // A driver assigned elsewhere but checked for Houston belongs in Houston too.
+  profiles.push({id:'shared-houston',location:'delaware',runsOutOf:['houston'],rating:'A',phone:'7705550199',atlantaRateOverrides:{tiers:{target:420}}});
+  const $=elements();$('#tg-message').value='Sandbox fixture';const batches=[];
+  const ctx=vm.createContext({$,state:{driverListTab:'houston',drivers:profiles},rateTextMode:true,rateTextRefresh:0,rateTextEligible:[],
+    rateTextOptions:[],rateTextRates:new Set(),rateTextRatings:new Set(),rateOptions,rateMembers,selectedRateMembers,
+    getBoardRateTiers:()=>({atlanta:tiers}),renderRateTextOptions(){},setRateRatingLabelVisible(){},renderRateTextRatings(){},
+    driverClassification:classify,splitDoNotTextRecipients:allowed=>({allowed,blocked:[]}),filterNeverTextRecipients:allowed=>({allowed,blocked:[]}),
+    applyPhoneMode:m=>m,formatTextAddresses:p=>[p],beginTextBatchFlow:members=>batches.push(Array.from(members,d=>d.id))});
+  const drivers=board.match(/  export function driversForLocation\([^]*?\n  \}/)[0].replace('export ','');
+  vm.runInContext(lift('locationGroupFor')+drivers+['setupRateTextOptions','refreshRateTextRatings','rateTextLabel','startGroupTexting'].map(lift).join('\n'),ctx);
+  for(const location of ['houston','atlanta','preferred','delaware','mondelez']) {
+    ctx.state.driverListTab=location;
+    vm.runInContext('setupRateTextOptions()',ctx);
+    const expected=profiles.filter(d=>location==='mondelez'?d.runsOutOf.includes('mondelez'):location==='houston'?d.location==='houston'||d.runsOutOf.includes('houston'):d.location===location);
+    assert.deepEqual(Array.from(ctx.rateTextOptions),rateOptions(expected,tiers,profiles));
+    ctx.rateTextRates=new Set(ctx.rateTextOptions.map(String));ctx.rateTextRatings=new Set(['A']);
+    await vm.runInContext('refreshRateTextRatings()',ctx);
+    assert.deepEqual(Array.from(ctx.rateTextEligible,d=>d.id).sort(),expected.map(d=>d.id).sort());
+    await vm.runInContext('startGroupTexting()',ctx);
+    assert.deepEqual(batches.at(-1).sort(),expected.map(d=>d.id).sort());
+  }
+});
