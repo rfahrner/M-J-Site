@@ -3769,9 +3769,17 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     // no more rows either way — let the browser do its normal thing (tab out of the table)
   }
 
+  function mondelezDriverLocationOptions() {
+    // These two historical origins exist in load history but have no active
+    // board tab. Keep them available on driver profiles without adding tabs.
+    return [...MONDELEZ_LOCATIONS,
+      { key: "brooklynpark", label: "Brooklyn Park" },
+      { key: "clarksville", label: "Clarksville" }];
+  }
+
   function driverMondelezLocationLabel(driver) {
     const selected = new Set(driver.mondelezLocations || []);
-    return MONDELEZ_LOCATIONS.filter(location => selected.has(location.key))
+    return mondelezDriverLocationOptions().filter(location => selected.has(location.key))
       .map(location => location.label).join(", ");
   }
 
@@ -7280,7 +7288,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     const container = $("#ad-mondelez-location-options");
     if (!container) return;
     const selected = new Set(values || []);
-    container.innerHTML = MONDELEZ_LOCATIONS.map(location =>
+    container.innerHTML = mondelezDriverLocationOptions().map(location =>
       `<label><input type="checkbox" name="ad-mondelez-location" value="${escapeHtml(location.key)}"${selected.has(location.key) ? " checked" : ""}> ${escapeHtml(location.label)}</label>`
     ).join("");
   }
