@@ -257,7 +257,7 @@ test('Preferred profile displays the linked card and allows editing it directly'
   const context = vm.createContext({ $, state: { drivers: [preferred, atlanta] }, driverProfileState: null,
     findDriver: id => [preferred, atlanta].find(d => d.id === id), resolveAtlantaRateProfile, driverToDbRow: d => ({ 'Driver Name': d.name }),
     $all: selector => selector === 'input' ? [input] : [], setVal: () => {}, setText: () => {},
-    ensureDelawareRateSection: () => {}, updateDriverRateSectionVisibility: () => {},
+    ensureDelawareRateSection: () => {}, updateDriverRateSectionVisibility: () => {}, populateDriverMondelezLocations: () => {},
     driverAtlantaRateBoxesHtml: card => JSON.stringify(card), driverDelawareRateBoxesHtml: () => ''
   });
   const fn = board.match(/  export function openEditDriverModal\([^]*?\n  \}/)[0].replace('export ', '');

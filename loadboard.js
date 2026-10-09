@@ -25,7 +25,7 @@ import { cancellationNotePayload, sortDriverNotes, driverNoteRowHtml } from './d
 import { sendShiftToAccounting } from './accountingcalc.js';
 import { markAccountingSentForShift } from './accounting-save.js';
 import { initHoustonBoardPage, renderHoustonBoardTable } from './houston.js';
-import { initMondelezPage } from './mondelez.js';
+import { initMondelezPage, MONDELEZ_LOCATIONS } from './mondelez.js';
 import { initDriverAnalyticsPage } from './analytics-drivers.js';
 import { initVolumePage } from './analytics-volume.js';
 import { initLocationAnalyticsPage } from './location-analytics.js';
@@ -381,6 +381,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       "location": d.location || "atlanta",
       "normal_rate": d.normalRate !== "" && d.normalRate != null ? Number(d.normalRate) : null,
       "runs_out_of": d.runsOutOf && d.runsOutOf.length ? d.runsOutOf : null,
+      "mondelez_locations": d.mondelezLocations && d.mondelezLocations.length ? d.mondelezLocations : null,
       "atlanta_rate_overrides": d.atlantaRateOverrides && (Object.keys(d.atlantaRateOverrides.tiers || {}).length || Object.keys(d.atlantaRateOverrides.settings || {}).length) ? d.atlantaRateOverrides : null,
       "delaware_rate_overrides": d.delawareRateOverrides && (Object.keys(d.delawareRateOverrides.tiers || {}).length || Object.keys(d.delawareRateOverrides.settings || {}).length) ? d.delawareRateOverrides : null,
     };
@@ -406,6 +407,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       rateBooking: row["Rate/booking contact"] || "",
       normalRate: row["normal_rate"] != null ? String(row["normal_rate"]) : "",
       runsOutOf: row["runs_out_of"] || [],
+      mondelezLocations: row["mondelez_locations"] || [],
       atlantaRateOverrides: row["atlanta_rate_overrides"] ? { tiers: row["atlanta_rate_overrides"].tiers || {}, settings: row["atlanta_rate_overrides"].settings || {} } : { tiers: {}, settings: {} },
       delawareRateOverrides: row["delaware_rate_overrides"] ? { tiers: row["delaware_rate_overrides"].tiers || {}, settings: row["delaware_rate_overrides"].settings || {} } : { tiers: {}, settings: {} },
       location: row["location"] || "atlanta",
@@ -790,6 +792,8 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     if (key === "displayRate" || (key === "normalRate" && state.driverListTab === "preferred")) {
       av = getDriverDisplayRate(a);
       bv = getDriverDisplayRate(b);
+    } else if (key === "mondelezLocations") {
+      av = driverMondelezLocationLabel(a); bv = driverMondelezLocationLabel(b);
     } else {
       av = a[key]; bv = b[key];
     }
@@ -3765,10 +3769,19 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     // no more rows either way — let the browser do its normal thing (tab out of the table)
   }
 
+  function driverMondelezLocationLabel(driver) {
+    const selected = new Set(driver.mondelezLocations || []);
+    return MONDELEZ_LOCATIONS.filter(location => selected.has(location.key))
+      .map(location => location.label).join(", ");
+  }
+
   function renderDriverList() {
     const body = $("#driverlist-table-body");
     if (!body) return;
     const preferred = state.driverListTab === "preferred";
+    const mondelez = state.driverListTab === "mondelez";
+    const locationHeader = $("#driverlist-mondelez-location");
+    if (locationHeader) locationHeader.classList.toggle("hidden", !mondelez);
     const rateHeader = document.querySelector('.driverlist th[data-sort="normalRate"], .driverlist th[data-sort="displayRate"]');
     const ratingHeader = document.querySelector('.driverlist th[data-sort="rating"]');
     const activityHeader = $("#activity-rating-sort");
@@ -3787,6 +3800,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       <tr id="dl-${d.id}" class="${d.addedAt ? "is-new" : ""}">
         <td><button type="button" class="cell-link-btn" data-action="edit-driver" data-driver-id="${d.id}" title="Open driver profile">↗</button></td>
         <td>${escapeHtml(d.name)}</td>
+        ${mondelez ? `<td class="driver-list-location-cell">${escapeHtml(driverMondelezLocationLabel(d) || "Not set")}</td>` : ""}
         <td>${escapeHtml(d.phone || "—")}</td>
         <td>${escapeHtml(d.mc || "—")}</td>
         <td>${escapeHtml(d.dispatcherPhone || "—")}</td>
@@ -3800,7 +3814,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
         <td>${escapeHtml(d.notes || "—")}</td>
       </tr>`;
     }).join("");
-    body.innerHTML = tbody || `<tr><td colspan="14" style="text-align:center;color:var(--slate-500);padding:24px;">No drivers on file yet.</td></tr>`;
+    body.innerHTML = tbody || `<tr><td colspan="${mondelez ? 15 : 14}" style="text-align:center;color:var(--slate-500);padding:24px;">No drivers on file yet.</td></tr>`;
     refreshDriverDatalist();
     $all('th[data-sort]').forEach((th) => {
       const arrow = th.querySelector(".sort-arrow");
@@ -7262,8 +7276,20 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       </div>`);
   }
 
+  function populateDriverMondelezLocations(values) {
+    const container = $("#ad-mondelez-location-options");
+    if (!container) return;
+    const selected = new Set(values || []);
+    container.innerHTML = MONDELEZ_LOCATIONS.map(location =>
+      `<label><input type="checkbox" name="ad-mondelez-location" value="${escapeHtml(location.key)}"${selected.has(location.key) ? " checked" : ""}> ${escapeHtml(location.label)}</label>`
+    ).join("");
+  }
+
   function updateDriverRateSectionVisibility() {
     ensureDelawareRateSection();
+    const mondelezSection = $("#ad-mondelez-location-section");
+    const mondelezCheckbox = $('input[name="ad-runs-out-of"][value="mondelez"]');
+    if (mondelezSection) mondelezSection.classList.toggle("hidden", !mondelezCheckbox?.checked);
     [["atlanta", "ad-atlanta-rate-section"], ["delaware", "ad-delaware-rate-section"]].forEach(([location, sectionId]) => {
       const section = $("#" + sectionId);
       const checked = $(`input[name="ad-runs-out-of"][value="${location}"]`);
@@ -7324,6 +7350,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     $all('input[name="ad-tia"]', $("#modal-add-driver")).forEach((r) => (r.checked = r.value === "no"));
     const doNotTextAdd = $("#ad-do-not-text"); if (doNotTextAdd) doNotTextAdd.checked = false;
     const doNotTextDispatchAdd = $("#ad-do-not-text-dispatch"); if (doNotTextDispatchAdd) doNotTextDispatchAdd.checked = false;
+    populateDriverMondelezLocations([]);
     const addingFromMondelez = (state.activeLocation || state.driverListTab) === "mondelez";
     $all('input[name="ad-runs-out-of"]').forEach((c) => { c.checked = addingFromMondelez && c.value === "mondelez"; });
     ensureDelawareRateSection();
@@ -7376,6 +7403,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     const doNotTextEdit = $("#ad-do-not-text"); if (doNotTextEdit) doNotTextEdit.checked = !!d.doNotText;
     const doNotTextDispatchEdit = $("#ad-do-not-text-dispatch"); if (doNotTextDispatchEdit) doNotTextDispatchEdit.checked = !!d.doNotTextDispatch;
     setVal("ad-tii-amount", d.tiiAmount != null ? d.tiiAmount : "");
+    populateDriverMondelezLocations(d.mondelezLocations || []);
     const runsOutOf = d.runsOutOf || [];
     $all('input[name="ad-runs-out-of"]').forEach((c) => { c.checked = runsOutOf.includes(c.value); });
     ensureDelawareRateSection();
@@ -7542,6 +7570,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       tiiAmount: getVal("ad-tii-amount").trim() ? Number(getVal("ad-tii-amount")) : null,
       normalRate: getVal("ad-rate").trim() || null,
       runsOutOf: $all('input[name="ad-runs-out-of"]').filter((c) => c.checked).map((c) => c.value),
+      mondelezLocations: $all('input[name="ad-mondelez-location"]').filter((c) => c.checked).map((c) => c.value),
       atlantaRateOverrides: readAtlantaRateOverridesFromForm(),
       delawareRateOverrides: readDelawareRateOverridesFromForm(),
       location: isEdit ? state.editingDriverLocation : normalizeDriverLocationField(state.activeLocation || state.driverListTab),
@@ -9158,6 +9187,9 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
 
   function switchDriverListTab(locationKey) {
     state.driverListTab = locationKey;
+    if (locationKey !== "mondelez" && state.driverSort.key === "mondelezLocations") {
+      state.driverSort = { key: "name", dir: "asc" };
+    }
     $all(".location-tab").forEach((btn) => btn.classList.toggle("is-active", btn.dataset.location === locationKey));
     renderDriverList();
   }
