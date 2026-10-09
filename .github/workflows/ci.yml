@@ -144,6 +144,13 @@ jobs:
       - name: Test save ordering and concurrent cell edits
         run: node --test scripts/flat-board-save-stress.test.mjs
 
+      - name: Test shared board typing and navigation rules
+        run: |
+          node scripts/driver-autocomplete-stability.test.mjs
+          node scripts/driver-selection-navigation.test.mjs
+          node scripts/board-cell-editing.test.mjs
+          node scripts/board-redraw-scroll.test.mjs
+
       - name: Test live route placeholders and identity merging
         run: node scripts/realtime-trip-merge.test.mjs
 
