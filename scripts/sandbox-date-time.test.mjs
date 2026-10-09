@@ -142,15 +142,15 @@ try {
     }
     await context.close();
   }
-  // The three Kroger boards already have a dirty-field guard; verify time cells
-  // with the real input, save and realtime functions as well.
-  for (const location of ['atlanta','delaware','buildingc']) for (const navigation of ['tab','click']) {
+  // The three Kroger boards share dirty-field protection. Verify time, notes,
+  // and text cells with the real input, save and realtime functions as well.
+  for (const location of ['atlanta','delaware','buildingc']) for (const navigation of ['tab','click']) for (const field of ['dispatchTime','notes','trailerOut']) {
     const page=await browser.newPage();page.on('pageerror',e=>browserErrors.push(e.message));
     await page.setContent('<table id="board-table"><tbody></tbody></table><button id="outside">Outside</button>');
     const src=read('loadboard.js');
     const functions=['dirtyFieldsToDbPatch','markFieldDirty','snapshotDirtyFields','confirmDirtyFieldsSaved','dbFieldsSafeToApply','runScheduledCellSave','currentlyEditedField','tripToDbRow','tripFromDbRow','saveTripNow','scheduleTripSave','handleRealtimeTripChange','isUnusedAutoRoutePlaceholder'].map(n=>lift(src,n)).join('\n');
     const inputBlock=src.match(/    boardTable.addEventListener\("input", \(e\) => \{[^]*?\n    \}\);/)[0];
-    await page.evaluate(({functions,inputBlock,location})=>{
+    await page.evaluate(({functions,inputBlock,location,field})=>{
       const trip={id:'t1',dbId:2,dispatchTime:'',trailerOut:'',routeImagePaths:[]};
       const row={id:'r1',dbId:1,location,trips:[trip]};
       window.state={activeLocation:location,sheets:{fixture:[row]}};
@@ -160,24 +160,26 @@ try {
       window.setDriverSyncStatus=()=>{};window.saved=[];
       window.supabaseClient={from:()=>({update:payload=>({eq:async()=>{saved.push(payload);return {error:null};}})})};
       const table=document.querySelector('#board-table');
-      window.renderBoardTable=()=>{table.querySelector('tbody').innerHTML=`<tr id="r1"><td><input id="time" data-row="r1" data-trip="t1" data-field="dispatchTime" value="${trip.dispatchTime}"></td><td><input id="next" data-row="r1" data-trip="t1" data-field="trailerOut" value="${trip.trailerOut}"></td></tr>`;};
+      window.renderBoardTable=()=>{table.querySelector('tbody').innerHTML=`<tr id="r1"><td><input id="time" data-row="r1" data-trip="t1" data-field="${field}" value="${trip[field] || ''}"></td><td><input id="next" data-row="r1" data-trip="t1" data-field="routeId" value=""></td></tr>`;};
       window.captureFocusForRerender=()=>{const id=document.activeElement.id;return()=>document.getElementById(id)?.focus({preventScroll:true});};
       window.eval(`const SAVE_DEBOUNCE_MS=700,TRIPS_TABLE='loads_trips',MAX_TRIPS_PER_LOAD=5;
         const dirtyTripFields=new Map(),dirtyShiftFields=new Map(),scheduledCellSaves=new Map(),tripSaveTimers=new Map();
         const SHIFT_FIELD_TO_STATE_KEY={},boardCellHistory={input:()=>{}};
         ${functions}
         const boardTable=document.querySelector('#board-table');${inputBlock}
-        window.echo=()=>handleRealtimeTripChange({eventType:'UPDATE',new:{id:2,shift_id:1,dispatch_time:''}});
+        window.echo=()=>handleRealtimeTripChange({eventType:'UPDATE',new:{id:2,shift_id:1,dispatch_time:'',notes:'',trailer_out:''}});
       `);renderBoardTable();
-    },{functions,inputBlock,location});
+    },{functions,inputBlock,location,field});
+    const value=field==='dispatchTime'?'16:45':field==='notes'?'Keep my Delaware notes':'TRAILER-123';
+    const dbField=field.replace(/[A-Z]/g,c=>'_'+c.toLowerCase());
     await page.clock.install();await page.clock.pauseAt(new Date());
-    await page.fill('#time','16:45');
+    await page.fill('#time',value);
     if(navigation==='tab')await page.press('#time','Tab');else await page.click('#outside');
-    await page.evaluate(()=>echo());assert.equal(await page.inputValue('#time'),'16:45');
+    await page.evaluate(()=>echo());assert.equal(await page.inputValue('#time'),value);
     await page.clock.resume();await page.waitForFunction(()=>saved.length>0);
-    assert.equal(await page.evaluate(()=>saved.at(-1).dispatch_time),'16:45');
-    assert.deepEqual(await page.evaluate(()=>Object.keys(saved.at(-1))),['dispatch_time']);
-    results.push(`PASS ${location}: ${navigation} + stale echo retains and saves dispatch time`);
+    assert.equal(await page.evaluate(key=>saved.at(-1)[key],dbField),value);
+    assert.deepEqual(await page.evaluate(()=>Object.keys(saved.at(-1))),[dbField]);
+    results.push(`PASS ${location}: ${navigation} + stale echo retains and saves ${field}`);
     await page.close();
   }
   assert.deepEqual(browserErrors, [], 'sandbox fixtures must not hide runtime errors');

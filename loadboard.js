@@ -3386,7 +3386,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
      datalist's open/close timing and on-screen position are entirely up to
      the browser -- a page has no control over either, which is why it was
      closing on its own and not consistently appearing under the field. This
-     is one floating dropdown, positioned in JS under whichever input is
+     is one floating dropdown, positioned in JS beside whichever input is
      currently focused (so it always tracks it correctly regardless of which
      table/page it's in, or whether that table scrolls), and it only ever
      closes on a real dismissal: picking an option, clicking elsewhere, or
@@ -3501,15 +3501,11 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     const gap = 2;
     const viewportPadding = 8;
     const configuredMaxHeight = 200;
-    const availableField = !!inputEl.dataset.availRow;
 
-    // The Available table sits at the bottom of each board. Its driver
-    // picker must open upward so the choices are not clipped by the bottom
-    // edge of the page. For every other field, choose the side with enough
-    // room and keep the list inside the viewport.
+    // Use the same placement rules for board, Available, and modal fields.
     const boxHeight = Math.min(box.scrollHeight || configuredMaxHeight, configuredMaxHeight);
-    const spaceAbove = Math.max(0, rect.top - viewportPadding);
-    const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - viewportPadding);
+    const spaceAbove = Math.max(0, rect.top - viewportPadding - gap);
+    const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - viewportPadding - gap);
     /*
      * Which side to open on is decided ONCE, when the picker opens for this
      * field, and held for as long as it stays open.
@@ -3520,20 +3516,27 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
      * typed. Re-measuring also raced the DOM: box.scrollHeight is read before
      * the browser has laid out the new contents, so the "above" position was
      * computed from the previous list's height and landed on top of the
-     * input. Deciding once removes both.
+     * input. Hold the side, and anchor the outer edge with CSS below.
      */
     if (driverAcOpenAbove === null) {
-      driverAcOpenAbove = availableField || (spaceBelow < boxHeight + gap && spaceAbove > spaceBelow);
+      // Prefer above on every board; near the top use below when above
+      // cannot show even a short list. Hold that side for this edit session.
+      driverAcOpenAbove = spaceAbove >= Math.min(80, boxHeight) || spaceAbove >= spaceBelow;
     }
     const openAbove = driverAcOpenAbove;
 
     box.style.position = "fixed";
-    box.style.left = rect.left + "px";
-    box.style.width = Math.max(rect.width, 220) + "px";
-    box.style.maxHeight = Math.max(80, Math.min(configuredMaxHeight, openAbove ? spaceAbove : spaceBelow)) + "px";
-    box.style.top = openAbove
-      ? Math.max(viewportPadding, rect.top - Math.min(box.scrollHeight || boxHeight, configuredMaxHeight) - gap) + "px"
-      : rect.bottom + gap + "px";
+    const width = Math.min(Math.max(rect.width, 220), window.innerWidth - viewportPadding * 2);
+    box.style.minWidth = "0";
+    box.style.left = Math.max(viewportPadding, Math.min(rect.left, window.innerWidth - width - viewportPadding)) + "px";
+    box.style.width = width + "px";
+    box.style.boxSizing = "border-box";
+    box.style.maxHeight = Math.min(configuredMaxHeight, openAbove ? spaceAbove : spaceBelow) + "px";
+    // Anchor the actual outer edge, including borders, rather than estimating
+    // height from scrollHeight (which can describe the previous contents).
+    // CSS follows shrinking results without ever crossing the typing field.
+    box.style.transform = openAbove ? "translateY(-100%)" : "none";
+    box.style.top = (openAbove ? rect.top - gap : rect.bottom + gap) + "px";
   }
 
   function renderDriverAcOptions(query, locationKey) {
@@ -3593,7 +3596,15 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     $all(".autocomplete-item[data-ac-index]", driverAcBox).forEach((el) => {
       const isHit = Number(el.dataset.acIndex) === index;
       el.classList.toggle("is-highlighted", isHit);
-      if (isHit && typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "nearest" });
+      if (isHit) {
+        // Scroll only the suggestions; scrollIntoView can also move the page.
+        const top = el.offsetTop;
+        const bottom = top + el.offsetHeight;
+        if (top < driverAcBox.scrollTop) driverAcBox.scrollTop = top;
+        else if (bottom > driverAcBox.scrollTop + driverAcBox.clientHeight) {
+          driverAcBox.scrollTop = bottom - driverAcBox.clientHeight;
+        }
+      }
     });
   }
 

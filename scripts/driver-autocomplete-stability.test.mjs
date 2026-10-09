@@ -137,5 +137,32 @@ const render = /function renderDriverAcOptions\(query, locationKey\)[\s\S]*?\n  
 check('the renderer no longer blanks the highlight', /driverAcHighlight = -1;/.test(render), false);
 check('it looks the previous driver up by id', /previouslyHighlighted/.test(render), true);
 
+console.log('\n8. Delaware and Kroger use the same edge-safe placement');
+for (const location of ['delaware', 'atlanta', 'buildingc']) {
+  env.state.activeLocation = location;
+  for (const available of [false, true]) {
+    if (available) input.dataset.availRow = 'a1';
+    else delete input.dataset.availRow;
+    rect = { top: 400, bottom: 424, left: 20, width: 180, height: 24 };
+    api.openDriverAutocomplete(input, location, () => {});
+    check(`${location}/${available}: prefers above`, api.openAbove(), true);
+    check('the outer bottom edge is anchored above the input', api.box().style.transform, 'translateY(-100%)');
+    check('the anchor leaves a gap', topOf(), rect.top - 2);
+    // A scroll can leave less than the old minimum 80px above the field.
+    rect.top = 60; rect.bottom = 84;
+    api.updateDriverAutocomplete(input, location);
+    check('does not force an 80px list into 50px', api.box().style.maxHeight, '50px');
+    check('keeps the side when scrolling', api.openAbove(), true);
+    api.closeDriverAutocomplete();
+    rect.top = 20; rect.bottom = 44;
+    api.openDriverAutocomplete(input, location, () => {});
+    check('a field at the top opens below', api.openAbove(), false);
+    check('below starts after the input', topOf(), 46);
+    api.closeDriverAutocomplete();
+  }
+}
+check('arrow navigation never asks ancestors to scroll', /scrollIntoView\(/.test(
+  slice('  function setDriverAcHighlight(index)', '  function handleDriverAcKeydown(e)')), false);
+
 console.log(failures ? `\n${failures} failing check(s)` : '\nall checks passed');
 process.exit(failures ? 1 : 0);
