@@ -129,6 +129,9 @@ jobs:
       - name: Test Atlanta and Delaware rounded-down mileage tiers
         run: node --test scripts/carrier-mileage-tiers.test.mjs
 
+      - name: Test Mondelez driver origin locations
+        run: node --test scripts/mondelez-driver-locations.test.mjs
+
       - name: Test Houston name and time sorting
         run: node --test scripts/houston-sorting.test.mjs
 

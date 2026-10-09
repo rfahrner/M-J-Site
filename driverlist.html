@@ -58,6 +58,7 @@
           <tr>
             <th></th>
             <th class="sortable" data-sort="name">Name<span class="sort-arrow"></span></th>
+            <th class="sortable hidden" id="driverlist-mondelez-location" data-sort="mondelezLocations">Location<span class="sort-arrow"></span></th>
             <th>Phone</th>
             <th class="sortable" data-sort="mc">MC #<span class="sort-arrow"></span></th>
             <th>Dispatcher Phone</th>
@@ -154,6 +155,11 @@
             <label><input type="checkbox" name="ad-runs-out-of" value="houston"> Houston</label>
             <label><input type="checkbox" name="ad-runs-out-of" value="mondelez"> Mondelez</label>
           </div>
+        </div>
+        <div class="field hidden" id="ad-mondelez-location-section">
+          <label>Mondelez locations</label>
+          <div class="radio-row" id="ad-mondelez-location-options" style="flex-wrap:wrap;gap:12px;"></div>
+          <div class="subtext">Select every Mondelez location this driver runs out of.</div>
         </div>
         <div class="field hidden" id="ad-atlanta-rate-section" style="border-top:1px solid var(--line); padding-top:14px; margin-top:14px;">
           <label>Atlanta rate card <span class="subtext">(only applies to Atlanta loads — leave any box blank to use the normal default)</span></label>
