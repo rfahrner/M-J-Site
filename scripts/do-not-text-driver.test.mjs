@@ -1,28 +1,6 @@
-/*
- * Regression test: "Do not text" keeps a driver out of the GROUP BLASTS and
- * nowhere else.
- *
- * A blast reached a driver whose carrier has him on a do-not-text list
- * (2026-10-06). Before this there was no way to record that short of the
- * hardcoded NEVER_TEXT_DRIVER_NAMES set, which is a code deploy and which
- * blocks a driver everywhere -- too blunt. The owner's ruling: flagged drivers
- * stay dispatchable and stay textable one at a time from a board row, an
- * alert or the pre-shift prompt; only the Text a Group modal drops them.
- *
- * Two things this has to get right, both of which fail silently:
- *
- *  1. startGroupTexting() REBUILDS its member list from the driver pool
- *     instead of reusing ratingTextEligible / rateTextEligible. Filtering only
- *     the count refreshers would show the correct, smaller number on the
- *     buttons and still send to everyone.
- *  2. The block is keyed on PHONE NUMBER, not profile row. The same person
- *     routinely has two profiles with the same cell (581 duplicates
- *     outstanding), so flagging the row in front of you and sending from the
- *     other one is the obvious failure.
- *
- * Also pinned here: with "Text dispatch where applicable" ON, a driver with no
- * dispatcher number is dropped rather than quietly texted on their own cell.
- *
+/* Group opt-outs are independent for driver cells and dispatcher numbers.
+ * A blocked contact cannot leak through a duplicate profile or shared number.
+ * Operational one-to-one messages to drivers remain available.
  * Run: node --test scripts/do-not-text-driver.test.mjs
  */
 
@@ -51,7 +29,7 @@ function setup(poolOverride) {
   // Najm's real shape: the same cell on two profile rows, a "preferred" one
   // and a location one. Only the preferred row carries the flag.
   const pool = poolOverride || [
-    { id: 'najm-pref', name: 'Najm M', rating: 'A', phone: '630-770-9231', dispatcherPhone: '309-643-0963', doNotText: true,  atlantaRateOverrides: { tiers: { target: 400 } } },
+    { id: 'najm-pref', name: 'Najm M', rating: 'A', phone: '630-770-9231', dispatcherPhone: '309-643-0963', doNotText: true, doNotTextDispatch: true, atlantaRateOverrides: { tiers: { target: 400 } } },
     { id: 'najm-atl',  name: 'Najm M', rating: 'A', phone: '630-770-9231', dispatcherPhone: '309-643-0963', doNotText: false, atlantaRateOverrides: { tiers: { target: 400 } } },
     { id: 'ok',        name: 'Textable Driver', rating: 'A', phone: '770-555-0100', dispatcherPhone: '770-555-0200', atlantaRateOverrides: { tiers: { target: 400 } } },
     { id: 'b',         name: 'Driver B', rating: 'B', phone: '770-555-0101', atlantaRateOverrides: { tiers: { target: 400 } } },
@@ -84,7 +62,7 @@ function setup(poolOverride) {
     'renderRateTextOptions', 'setRateRatingLabelVisible', 'startGroupTexting',
     // Added by the multi-rate work (PR #205): the rating buttons carry the
     // real ratings behind each letter as a title.
-    'variantTitle',
+    'variantTitle', 'rateRatingChoices',
   ];
   const PHRASE_TABLE = /  const RATING_PHRASE_CLASSES = \{[\s\S]*?\n  \};/.exec(board)[0];
   window.eval(`const KNOWN_DRIVER_CLASSES=['A','B','C','D','DNU','R'];${PHRASE_TABLE}
@@ -92,6 +70,7 @@ function setup(poolOverride) {
     ${names.map(lift).join('\n')}
     window.openModal=openTextGroupModal;window.toggle=toggleRatingTextGroup;
     window.refreshRating=refreshRatingTextGroups;window.start=startGroupTexting;
+    window.pickRate=async()=>{rateTextMode=true;rateTextRates=new Set(["400"]);rateTextRatings=new Set(["A"]);await refreshRateTextRatings();};
     window.splitDoNotText=splitDoNotTextRecipients;window.applyPhoneMode=applyPhoneMode;
   `);
 
@@ -120,9 +99,7 @@ test('a flagged driver is dropped from the blast that actually SENDS', async () 
   // his DISPATCHER's number, not his cell.
   assert.ok(phones.includes('7705550200'), 'the unflagged A driver is in, via his dispatcher');
 
-  // The flagged driver is gone entirely -- neither his cell nor his
-  // dispatcher's number. Excluding the man and then texting his dispatcher
-  // about him would be the same blast by another route.
+  // Both contact flags are checked: neither number may be used.
   assert.ok(!phones.includes('6307709231'), 'the flagged cell is not in the batch');
   assert.ok(!phones.includes('3096430963'), 'and neither is his dispatcher');
 });
@@ -159,7 +136,7 @@ test('nobody is blocked when nobody is flagged -- no accidental empty blasts', a
 
 test('a blast where everyone is flagged refuses and says so, rather than sending nothing quietly', async () => {
   const { window, $, batches, settle } = setup([
-    { id: 'x', name: 'Only Driver', rating: 'A', phone: '630-770-9231', doNotText: true, atlantaRateOverrides: { tiers: { target: 400 } } },
+    { id: 'x', name: 'Only Driver', rating: 'A', phone: '630-770-9231', doNotText: true, doNotTextDispatch: true, atlantaRateOverrides: { tiers: { target: 400 } } },
   ]);
   window.openModal();
   await settle();
@@ -266,4 +243,70 @@ test('do_not_text maps both ways, or the checkbox saves nothing', () => {
   // value is how the wrong person gets flagged.
   assert.match(board, /doNotTextEdit.*checked = !!d\.doNotText/);
   assert.match(board, /doNotTextAdd.*checked = false/);
+});
+
+for (const dispatchMode of [false, true]) {
+  for (const doNotText of [false, true]) {
+    for (const doNotTextDispatch of [false, true]) {
+      test(`contact flags: dispatch mode ${dispatchMode}, driver blocked ${doNotText}, dispatch blocked ${doNotTextDispatch}`, async () => {
+        const driver = { id: 'x', name: 'Matrix Driver', phone: '770-555-0100', dispatcherPhone: '770-555-0200', rating: 'A', doNotText, doNotTextDispatch };
+        const { window, $, batches, settle } = setup([driver]);
+        window.openModal(); await settle();
+        $('#tg-dispatch-mode').checked = dispatchMode;
+        await window.refreshRating();
+        window.toggle('A'); await settle();
+        $('#tg-message').value = 'sandbox only';
+        await window.start(); await settle();
+        const expected = dispatchMode && !doNotTextDispatch ? '7705550200' : (!doNotText ? '7705550100' : null);
+        const phones = sent(batches).map(d => String(d.phone).replace(/\D/g, ''));
+        assert.deepEqual(Array.from(phones), expected ? [expected] : []);
+        assert.match($('#tg-rating-count-note').textContent, new RegExp(`${expected ? 1 : 0} eligible drivers selected`));
+      });
+    }
+  }
+}
+
+test('a shared dispatcher opt-out cannot leak through another driver profile', async () => {
+  const pool = [
+    { id:'a', name:'A', phone:'770-555-0100', dispatcherPhone:'770-555-0200', doNotTextDispatch:true },
+    { id:'b', name:'B', phone:'770-555-0101', dispatcherPhone:'1 (770) 555-0200' },
+  ];
+  const {window,$} = setup(pool);
+  $('#tg-dispatch-mode').checked = true;
+  const out = window.applyPhoneMode(pool);
+  assert.deepEqual(Array.from(out,d=>d.phone), ['770-555-0100','770-555-0101']);
+  assert.ok(out.every(d=>d.directPhoneFallback));
+});
+
+test('dispatcher flag round trips, edits populate it, and new profiles clear it', () => {
+  assert.match(board, /"do_not_text_dispatch": !!d\.doNotTextDispatch/);
+  assert.match(board, /doNotTextDispatch: !!row\["do_not_text_dispatch"\]/);
+  assert.match(board, /doNotTextDispatch: !!\$\("#ad-do-not-text-dispatch"\)\?\.checked/);
+  assert.match(board, /doNotTextDispatchEdit.*checked = !!d\.doNotTextDispatch/);
+  assert.match(board, /doNotTextDispatchAdd.*checked = false/);
+  assert.match(html, /id="ad-do-not-text-dispatch"> Do not text dispatch/);
+});
+
+test('rate counts and rate sender use the same independent contact rules', async () => {
+  const base = {rating:'A', atlantaRateOverrides:{tiers:{target:400}}};
+  const pool = [
+    {...base,id:'dispatch',name:'Dispatch only',phone:'7705550100',dispatcherPhone:'7705550200',doNotText:true},
+    {...base,id:'cell',name:'Cell only',phone:'7705550101',dispatcherPhone:'7705550201',doNotTextDispatch:true},
+    {...base,id:'neither',name:'Neither',phone:'7705550102',dispatcherPhone:'7705550202',doNotText:true,doNotTextDispatch:true},
+  ];
+  const {window,$,batches,settle}=setup(pool);
+  window.openModal(); await settle(); await window.pickRate();
+  assert.match($('#tg-rate-count-note').textContent, /2 eligible/);
+  $('#tg-message').value='sandbox rate text';
+  await window.start(); await settle();
+  assert.deepEqual(Array.from(sent(batches),d=>d.phone), ['7705550200','7705550101']);
+});
+
+test('saved flags survive the actual database mappers independently', () => {
+  const {toDb,fromDb}=new Function(`${lift('driverToDbRow')}\n${lift('driverFromDbRow')}\nreturn {toDb:driverToDbRow,fromDb:driverFromDbRow};`)();
+  for(const doNotText of [false,true]) for(const doNotTextDispatch of [false,true]) {
+    const saved=fromDb(toDb({name:'Sandbox profile',phone:'7705550100',doNotText,doNotTextDispatch}));
+    assert.equal(saved.doNotText,doNotText);
+    assert.equal(saved.doNotTextDispatch,doNotTextDispatch);
+  }
 });
