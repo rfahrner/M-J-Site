@@ -16,7 +16,7 @@ function setup(){
       {id:1,name:'Multi-site',phone:'7705550100',mondelezLocations:['morris','addison'],email:''},
       {id:2,name:'Unassigned',phone:'7705550101',email:''}
     ]});
-  w.eval(`${['driverMondelezLocationLabel','renderDriverList','populateDriverMondelezLocations','compareForSort','driverToDbRow','driverFromDbRow','switchDriverListTab'].map(lift).join('\n')}
+  w.eval(`${['mondelezDriverLocationOptions','driverMondelezLocationLabel','renderDriverList','populateDriverMondelezLocations','compareForSort','driverToDbRow','driverFromDbRow','switchDriverListTab'].map(lift).join('\n')}
   window.render=renderDriverList;window.populate=populateDriverMondelezLocations;window.compare=compareForSort;window.toDb=driverToDbRow;window.fromDb=driverFromDbRow;window.switchTab=switchDriverListTab;`);
   return {w,$:w.$};
 }
@@ -40,7 +40,7 @@ test('other tabs keep their existing columns; switching back restores the Mondel
 });
 test('profile checkboxes use all board locations, restore saved selections, and clear for the next new driver',()=>{
   const {w,$}=setup();w.populate(['morris','addison']);
-  assert.equal(w.document.querySelectorAll('[name="ad-mondelez-location"]').length,locations.length);
+  assert.equal(w.document.querySelectorAll('[name="ad-mondelez-location"]').length,locations.length+2);
   assert.deepEqual(Array.from(w.document.querySelectorAll('[name="ad-mondelez-location"]:checked'),c=>c.value),['morris','addison']);
   w.populate([]);assert.equal(w.document.querySelectorAll('[name="ad-mondelez-location"]:checked').length,0);
   assert.match(source,/populateDriverMondelezLocations\(\[\]\)/);
@@ -65,4 +65,11 @@ test('leaving Mondelez clears a hidden location sort while other sorts stay sele
   const {w}=setup();w.state.driverSort={key:'mondelezLocations',dir:'desc'};
   w.switchTab('houston');assert.equal(w.state.driverSort.key,'name');
   w.state.driverSort={key:'mc',dir:'desc'};w.switchTab('preferred');assert.equal(w.state.driverSort.key,'mc');
+});
+
+test('historical Brooklyn Park and Clarksville origins are selectable and displayed',()=>{
+  const {w,$}=setup();w.populate(['brooklynpark','clarksville']);
+  assert.deepEqual(Array.from(w.document.querySelectorAll('[name="ad-mondelez-location"]:checked'),c=>c.value),['brooklynpark','clarksville']);
+  w.getSortedDrivers=()=>[{id:1,name:'Historical driver',email:'',mondelezLocations:['brooklynpark','clarksville']}];
+  w.render();assert.equal($('#dl-1 .driver-list-location-cell').textContent,'Brooklyn Park, Clarksville');
 });
