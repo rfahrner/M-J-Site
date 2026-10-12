@@ -40,6 +40,7 @@ function currentDriver() {
 
 function humanField(field) {
   const labels = {
+    alert_text_clicked: "Alert Text clicked",
     driver: "Driver",
     aljex_number: "Aljex #",
     time: "Time",
@@ -62,6 +63,7 @@ function humanField(field) {
 }
 
 function formatHistoryEntry(entry) {
+  if (entry.field_name === "alert_text_clicked") return `<strong>Alert Text clicked</strong><div class="subtext">${esc(entry.new_value || "Driver reminder")}</div>`;
   const oldVal = entry.old_value == null || entry.old_value === "" ? "—" : entry.old_value;
   const newVal = entry.new_value == null || entry.new_value === "" ? "—" : entry.new_value;
   return `<strong>${esc(humanField(entry.field_name))}</strong><div class="subtext">${esc(oldVal)} → ${esc(newVal)}</div>`;

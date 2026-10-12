@@ -1,3 +1,4 @@
+import { writeAlertTextClick } from './alert-text-history.js';
 import { driverProfilePatch, mergeSavedDriverProfiles } from './driver-profile-sync.js';
 import { rateOptions, rateMembers, ratingGroups, selectedRateMembers, preferredTierRate, resolveAtlantaRateProfile } from './preferred-rate-groups.js';
 import { acknowledgeDnuAssignment } from './dnu-assignment.js';
@@ -1783,6 +1784,23 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     }
   }
 
+  export async function logAlertTextClick(details) {
+    const entries = await writeAlertTextClick(supabaseClient, details);
+    if (loadDetailsState) {
+      const id = findRowAnywhere(loadDetailsState.rowId)?.row.dbId;
+      const matching = entries.filter(h => h.source === "loads_shifts" && String(h.shift_id) === String(id));
+      if (matching.length) {
+        const unsavedHistoryNote = [...document.querySelectorAll('#ld-tab-content [data-hist-note-id]')].some(input => {
+          const saved = loadDetailsState.history.find(h => String(h.id) === String(input.dataset.histNoteId));
+          return input.value !== (saved?.note || "");
+        });
+        loadDetailsState.history = [...matching, ...loadDetailsState.history];
+        if (loadDetailsState.activeTab === "history" && !unsavedHistoryNote && !document.activeElement?.dataset?.histNoteId) renderLoadDetailsTabContent();
+      }
+    }
+    return entries;
+  }
+
   const ROUTE_TYPE_LABELS = { birm: "BIRM", hostler: "Hostler", na: "N/A" };
 
   // Turns a raw Change History row into one plain-language sentence —
@@ -1816,6 +1834,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     const nv = newValue == null ? "" : String(newValue);
     const ov = oldValue == null ? "" : String(oldValue);
     switch (fieldName) {
+      case "alert_text_clicked": return `Alert Text clicked — <strong>${escapeHtml(nv)}</strong>`;
       case "ppwk_received": return nv === "true" ? "Paperwork received" : "Paperwork marked not received";
       case "route_complete": return nv === "true" ? "Route marked complete" : "Route marked incomplete";
       case "tonu": return nv === "true" ? "Marked TONU" : "TONU removed";

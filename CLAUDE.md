@@ -1053,3 +1053,28 @@ custom message. The user will supply replacement wording later. Existing
 per-dispatch acknowledgement, age/timing rules and paused Carrier Docs alerts
 remain unchanged. Verified by scripts/dispatch-route-text.test.mjs, including
 actual FA and GA alert clicks and independent acknowledgements.
+
+### Alert Text click history (2026-10-12)
+
+Every accepted Text action in the alerts pop-up records `alert_text_clicked`
+in the associated load's Change History before opening the draft. This is a
+click audit, never a delivery confirmation: cancelling the draft still leaves
+the entry, and reopening it produces another entry. Store the displayed alert
+context, exact draft message, server-stamped signed-in author and timestamp.
+Grouped pre-shift/escalation alerts audit each load with a text recipient,
+excluding group members without phone numbers. Route dispatch clicks include
+the route ID; native Houston reminders use houston_change_history, never a
+standard shift with the same numeric ID. Carrier Docs reminders remain paused.
+
+`alert-text-history.js` supplies the leaf helper and recipient-to-load mapping;
+`loadboard.logAlertTextClick` updates an already-open standard History tab.
+The capture bridge owns ordinary alert Text buttons; the extras controller owns
+Houston and dispatched-route buttons. Do not attach a second audit listener:
+that would double-log one click. The RPC is one transaction per click, remains
+security invoker under existing RLS, and rejects missing loads, mismatched
+routes, unsigned sessions and non-internal roles. If audit saving fails, leave
+the alert pending and show a retry error instead of opening an unlogged draft.
+
+Tests: scripts/alert-text-history.test.mjs, dispatch-route-text.test.mjs, and
+sandbox/alert-text-history.spec.mjs (Chromium handler and History-modal check;
+uses DOM click events to isolate the audit from widget geometry).

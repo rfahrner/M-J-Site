@@ -226,6 +226,9 @@ jobs:
       - name: Mondelez row menu and cancellation regression tests
         run: node --test scripts/mondelez-row-menu.test.mjs
 
+      - name: Test alert Text click history
+        run: node --test scripts/alert-text-history.test.mjs
+
       - name: Type-check paperwork Edge Function
         run: deno check --node-modules-dir=auto supabase/functions/paperwork-submit/.ci-check.ts
 
