@@ -12,6 +12,7 @@ import {
 import { ACCOUNTING_TABLE, ACCOUNTING_ROUTES_TABLE, loadPricingData, calcRoute, getPricingTiers, getPricingSettings } from './accountingcalc.js';
 import { releaseToAljex } from './aljex-outbox.js';
 import { saveAccountingFields } from './accounting-save.js';
+import { createAccountingMoneyQueue } from './accounting-money-queue.js';
 import { initAccountingLoadSearch } from './accounting-load-search.js';
 // Deliberately not imported from mondelez.js. loadboard.js already imports both
 // this module and that one, and both import back from it, so pulling one page
@@ -19,6 +20,12 @@ import { initAccountingLoadSearch } from './accounting-load-search.js';
 // before. A table name is a stable literal; a new import edge is not.
 const MONDELEZ_TABLE = "mondelez_loads";
 const pendingAccountingChecks = new Set();
+// Accounting and loadboard import each other. Read the debounce constant only
+// after startup, when the first edit/Refresh needs the queue.
+let accountingMoneyQueue = null;
+function getAccountingMoneyQueue() {
+  return accountingMoneyQueue ||= createAccountingMoneyQueue(saveAccountingMoneyField, SAVE_DEBOUNCE_MS);
+}
 
 // Why a release refused, keyed by accounting id. The status line lives above
 // the table; by the time an operator is clicking Released on row 900 it is
@@ -83,7 +90,7 @@ async function saveAccountingCheckbox(rec, patch, label) {
  * being calculated rather than being frozen at blank.
  */
 const ACCOUNTING_MONEY_FIELDS = {
-  "acct-carrier-pay": { column: "total_carrier_pay", label: "carrier pay" },
+  "acct-carrier-pay": { column: "total_carrier_pay", label: "carrier pay", freezes: "carrier_pay_manual" },
   "acct-customer-rate": { column: "total_revenue", label: "customer rate", freezes: "revenue_manual" },
 };
 
@@ -107,8 +114,10 @@ async function saveAccountingMoneyField(rec, field, value) {
       current[field.column] = saved[field.column];
       if (field.freezes) current[field.freezes] = saved[field.freezes];
     }
+    return true;
   } catch (err) {
     setDriverSyncStatus(`Couldn't save ${field.label} (${err.message || err}).`, "error");
+    return false;
   }
 }
 
@@ -429,10 +438,9 @@ function accountingNoteButton(rec) {
   /*
    * Everything this page shows, re-read from the database.
    *
-   * It is a READ. It writes nothing, recalculates nothing, and does not
-   * re-push from the load board -- see "Refresh re-reads; it never
-   * re-pushes" in CLAUDE.md for why that matters. A refresh can never cost
-   * you a figure someone typed.
+   * Check existing calculated carrier figures against their daily rate cards,
+   * then re-read the sheet. The guarded RPC preserves manual totals, customer
+   * money and billing status; it does not re-push loads or route snapshots.
    *
    * Four separate things go stale independently, which is why this is not
    * just location.reload():
@@ -460,10 +468,17 @@ function accountingNoteButton(rec) {
     const stamp = $("#acct-refreshed-at");
     if (btn) { btn.disabled = true; btn.textContent = "Refreshing…"; }
     try {
+      await getAccountingMoneyQueue().flush();
       // Tell the other modules to drop their caches BEFORE the re-read, so
       // the re-render they do afterwards fetches rather than reuses.
       document.dispatchEvent(new CustomEvent("accounting:refresh"));
       await loadPricingData();
+      const { data: rateCheck, error: rateError } = await supabaseClient.rpc("refresh_accounting_daily_rates", {
+        p_location: state.acctLocationTab || "atlanta",
+        p_from: state.minDate,
+        p_to: state.maxDate,
+      });
+      if (rateError) throw rateError;
       const settings = getPricingSettings();
       // Someone mid-edit in the FSC box keeps what they typed.
       if (settings && $("#fsc-rate-input") && document.activeElement !== $("#fsc-rate-input")) {
@@ -482,11 +497,11 @@ function accountingNoteButton(rec) {
       } else {
         const at = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
         if (stamp) stamp.textContent = `Updated ${at}`;
-        setDriverSyncStatus(`Accounting refreshed — ${accountingRecords.length} records re-read.`, "success");
+        setDriverSyncStatus(`Accounting refreshed — ${accountingRecords.length} records re-read; ${rateCheck?.checked || 0} daily rates checked, ${rateCheck?.updated || 0} carrier rates updated.`, "success");
       }
     } catch (error) {
       console.error("Accounting refresh failed:", error);
-      setDriverSyncStatus(`Couldn't refresh (${error.message || error}). Nothing was changed.`, "error");
+      setDriverSyncStatus(`Couldn't finish refreshing (${error.message || error}). Refresh again to confirm the latest saved figures.`, "error");
     } finally {
       accountingRefreshInFlight = false;
       if (btn) { btn.disabled = false; btn.textContent = "Refresh"; }
@@ -1077,8 +1092,7 @@ export function renderDriverStatsTable() {
         // parses is the same rule the board's cells follow.
         if (val === undefined) return;
         rec[field.column] = val;
-        clearTimeout(t._saveTimer);
-        t._saveTimer = setTimeout(() => void saveAccountingMoneyField(rec, field, val), SAVE_DEBOUNCE_MS);
+        getAccountingMoneyQueue().schedule(rec, field, val);
       });
       table.addEventListener("focusout", (e) => {
         const t = e.target;

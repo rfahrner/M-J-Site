@@ -380,6 +380,7 @@ function initAccountingPricingV2() {
   const table = document.getElementById('accounting-table');
   if (!table) return;
   installStyles();
+  document.addEventListener('accounting:refresh', invalidateAppliedSources);
   new MutationObserver(scheduleNormalize).observe(table, { childList: true, subtree: true });
   document.getElementById('acct-location-tabs')?.addEventListener('click', scheduleNormalize);
   setupAppliedSourceRealtime();

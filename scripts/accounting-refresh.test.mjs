@@ -1,12 +1,9 @@
 /*
  * The Accounting sheet's Refresh button.
  *
- * It is a READ, and that is the property worth protecting. The owner chose
- * this over a version that also re-pushes from the load board: a re-push can
- * overwrite a figure an accountant typed, and a "Push to Accounting" button
- * was built and deliberately removed once already. So this test asserts the
- * absence of writes as hard as it asserts the presence of reads -- if someone
- * later "improves" Refresh into a sync, these checks are what fail.
+ * October 12: the owner explicitly requested daily-rate checks after a load
+ * has reached Accounting. Allow the guarded rate-only RPC, while continuing
+ * to prohibit a full board re-push or client-side money rewrites.
  *
  * The rest is about staleness that is easy to miss, because the page looks
  * perfectly normal in every one of these states:
@@ -74,16 +71,21 @@ check('it tells the other modules to drop their caches',
 check('before the re-read, not after',
   refresh.indexOf('accounting:refresh') < refresh.indexOf('loadAccountingRecordsForRange('), true);
 
-console.log('\n3. it is a read — it must never write');
+console.log('\n3. it permits only the guarded daily-rate check');
 for (const [what, re] of [
   ['no insert', /\.insert\(/],
   ['no update', /\.update\(/],
   ['no upsert', /\.upsert\(/],
   ['no delete', /\.delete\(/],
-  ['no rpc', /\.rpc\(/],
   ['no board re-push', /push_shift_to_accounting|pushToAccounting|maybeSendToAccounting/],
   ['no recalculation of stored figures', /recalcAccountingRecord|saveAccountingFields/],
 ]) check(what, re.test(refresh), false);
+check('only one RPC', (refresh.match(/\.rpc\(/g) || []).length, 1);
+check('the RPC checks daily rates', /rpc\("refresh_accounting_daily_rates"/.test(refresh), true);
+check('it checks the selected tab', /p_location: state\.acctLocationTab/.test(refresh), true);
+check('it preserves the loaded range', /p_from: state\.minDate,[\s\S]*p_to: state\.maxDate/.test(refresh), true);
+check('manual edits save before checking rates', refresh.indexOf('getAccountingMoneyQueue().flush()') < refresh.indexOf('.rpc('), true);
+check('the sheet re-reads after checking rates', refresh.indexOf('.rpc(') < refresh.indexOf('loadAccountingRecordsForRange('), true);
 
 console.log('\n4. it keeps the window the user is actually looking at');
 check('it refreshes from state.minDate, not a fresh 60-day window',
@@ -97,7 +99,7 @@ console.log('\n5. it cannot be double-fired, and it always releases the button')
 check('a second click while running is ignored', /if \(accountingRefreshInFlight/.test(refresh), true);
 check('the button is disabled while it runs', /btn\.disabled = true/.test(refresh), true);
 check('and re-enabled in a finally', /finally \{[\s\S]*btn\.disabled = false/.test(refresh), true);
-check('a failure says nothing was changed', /Nothing was changed/.test(refresh), true);
+check('a failure asks for another refresh without claiming rollback of earlier saves', /Refresh again to confirm/.test(refresh), true);
 
 console.log('\n6. the realtime channel is replaced, not stacked');
 check('it resubscribes', /setupAccountingRealtimeSync\(\)/.test(refresh), true);

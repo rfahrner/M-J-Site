@@ -36,8 +36,8 @@ console.log('\n1. typing a customer rate marks it as set');
 const FIELDS = /const ACCOUNTING_MONEY_FIELDS = \{[\s\S]*?\};/.exec(ACCT)[0];
 check('the customer rate cell declares what it freezes',
   /"acct-customer-rate":[^}]*freezes:\s*"revenue_manual"/.test(FIELDS), true);
-check('carrier pay does not -- the board owns that figure',
-  /"acct-carrier-pay":[^}]*freezes/.test(FIELDS), false);
+check('carrier pay declares its separate manual protection for daily-rate Refresh',
+  /"acct-carrier-pay":[^}]*freezes:\s*"carrier_pay_manual"/.test(FIELDS), true);
 
 const SAVE = /async function saveAccountingMoneyField[\s\S]*?\n\}/.exec(ACCT)[0];
 check('the save carries the flag alongside the figure',
