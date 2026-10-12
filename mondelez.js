@@ -865,7 +865,7 @@ function buildMondelezRouteEmailBody(row, driverName) {
     "Morris IL - 6104",
     "Addison IL - 6136",
     "Indianapolis - 6116",
-    "West Chester OH - 6104",
+    "West Chester OH - 6116",
     line("Your user ID:", row.driverAppId),
     "iOS: https://apps.apple.com/app/id1008328213",
     "Android: https://play.google.com/store/apps/details?id=com.descartes.mobilelink&pcampaignid=web_share",

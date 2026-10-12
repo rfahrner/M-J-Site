@@ -167,6 +167,9 @@ jobs:
       - name: Test overnight alert timing
         run: node --test scripts/overnight-alerts.test.mjs
 
+      - name: Test dispatched-route texts and paused Carrier Docs reminders
+        run: node --test scripts/dispatch-route-text.test.mjs
+
       - name: Test alerts age out finished shifts
         run: node scripts/alerts-operating-window.test.mjs
 

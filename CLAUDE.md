@@ -1006,3 +1006,17 @@ Reported load 2010710 had four routes of 15/47/48/106 miles: Delaware's
 Blank editors are excluded. Manual totals, missing-profile protection and
 other boards' flat-rate paths remain unchanged. Accounting Refresh's SQL
 helper follows the same rule; its parity fixture includes this reported load.
+
+## Dispatched-route text reminders (October 12)
+
+`preshift-pro-text.js` adds a reminder for each entered Dispatch Time on
+Atlanta, Delaware and Building C, using `dispatch-route-text.js`. The exact
+message asks drivers to track arrival/departure times and call with their
+last-stop times and return ETA. FA/GA route IDs show a waiting notice with no
+generic Text button until the owner supplies their separate message.
+`loads_trips.dispatch_text_event_id` changes when Dispatch Time changes; the
+sent timestamp/event/driver key prevents repeats across dispatchers. Only the
+existing send-modal `onSent` path acknowledges a prompt; cancelling does not.
+A stale draft cannot acknowledge a newer dispatch.
+Carrier Docs PRO/app reminder alerts are paused via CARRIER_DOCS_ALERTS_PAUSED;
+pre-shift ETA alerts remain enabled. West Chester's Mobile Link key is 6116.

@@ -1,4 +1,6 @@
-import { supabaseClient, openSendTextModal } from './loadboard.js';
+import { supabaseClient, openSendTextModal, setDriverSyncStatus } from './loadboard.js';
+import { DISPATCH_ROUTE_MESSAGE, dispatchRoutePrompt, acknowledgeDispatchRouteText } from './dispatch-route-text.js';
+import { boardDateKey, offsetDate } from './overnight-times.js';
 
 /*
  * The Carrier Docs link, derived from wherever this page is served rather
@@ -19,6 +21,7 @@ import { supabaseClient, openSendTextModal } from './loadboard.js';
  * driver and its upload is refused. See docs/HOSTING_CUTOVER.md.
  */
 const CARRIER_DOCS_URL = new URL('./driver/', document.baseURI).href;
+const CARRIER_DOCS_ALERTS_PAUSED = true;
 const BOARD_FILE_TO_LOCATION = {
   '': 'atlanta',
   'index.html': 'atlanta',
@@ -173,6 +176,7 @@ async function houstonPreShiftAlerts() {
 }
 
 async function carrierDocsAlerts() {
+  if (CARRIER_DOCS_ALERTS_PAUSED) return [];
   const loc = currentLocation();
   if (!['atlanta','delaware'].includes(loc) || !supabaseClient) return [];
   const zone = 'America/New_York';
@@ -222,14 +226,46 @@ async function carrierDocsAlerts() {
   });
 }
 
+async function dispatchedRouteAlerts() {
+  const loc = currentLocation();
+  if (!['atlanta','delaware','buildingc'].includes(loc) || !supabaseClient) return [];
+  const now = new Date(), today = boardDateKey(now);
+  const {data:shifts,error} = await supabaseClient.from('loads_shifts').select('*')
+    .eq('location',loc).in('shift_date',[offsetDate(today,-1),today,offsetDate(today,1)]);
+  if (error) throw error;
+  if (!shifts?.length) return [];
+  const {data:trips,error:tripError} = await supabaseClient.from('loads_trips').select('*').in('shift_id',shifts.map(s=>s.id));
+  if (tripError) throw tripError;
+  const drivers = await driverMap(shifts.map(s=>s.driver_id));
+  const extras = [];
+  for (const shift of shifts) {
+    const drv = drivers.get(String(shift.driver_id)) || {};
+    const name = drv.name || clean(shift.driver_name_text) || 'Driver';
+    const phone = drv.phone || clean(shift.driver_cell_snapshot);
+    const rowTrips = (trips || []).filter(t=>t.shift_id===shift.id).sort((a,b)=>a.trip_number-b.trip_number);
+    for (const trip of rowTrips) {
+      const prompt = dispatchRoutePrompt(shift,trip,now,rowTrips);
+      if (!prompt) continue;
+      const label = clean(trip.route_id || trip.trip_id);
+      const attrs = !prompt.waitingForMessage && phone
+        ? `data-dispatch-text-trip="${trip.id}" data-dispatch-event="${esc(prompt.eventId)}" data-dispatch-time="${esc(prompt.dispatchTime)}" data-dispatch-driver-key="${esc(prompt.driverKey)}" data-driver-name="${esc(name)}" data-driver-phone="${esc(phone)}"` : '';
+      extras.push({html:extraAlertHtml({icon:'📲',jumpId:shift.id,buttonAttrs:attrs,
+        text:`${name} (${shift.pro_number || 'No PRO'}, ${label}) — ${prompt.waitingForMessage ? 'FA/GA dispatch message awaiting setup' : phone ? 'send dispatched-route reminder' : 'dispatch reminder needs a driver phone number'}`})});
+    }
+  }
+  return extras;
+}
+
 async function refreshExtraAlerts() {
   clearTimeout(refreshTimer);
   const body = document.getElementById('alert-widget-body');
   const widget = document.getElementById('alert-widget');
   if (!body || !widget || !currentLocation()) return;
+  let extras;
+  try { extras = [...await houstonPreShiftAlerts(), ...await carrierDocsAlerts(), ...await dispatchedRouteAlerts()]; }
+  catch(error) { console.error('Could not refresh dispatch reminders',error);return; }
   suppressObserverUntil = Date.now() + 450;
   body.querySelectorAll('.dispatch-extra-alert').forEach((el) => el.remove());
-  const extras = [...await houstonPreShiftAlerts(), ...await carrierDocsAlerts()];
   for (const extra of extras) body.insertAdjacentHTML('beforeend', extra.html);
   const count = body.querySelectorAll('.alert-chat-item').length;
   const countEl = document.getElementById('alert-widget-count');
@@ -278,6 +314,7 @@ document.addEventListener('click', (event) => {
   if (docs) {
     event.preventDefault();
     event.stopImmediatePropagation();
+    if (CARRIER_DOCS_ALERTS_PAUSED) return;
     const id = Number(docs.dataset.carrierDocsShift);
     openTrackedText(
       [{ name:docs.dataset.driverName, phone:docs.dataset.driverPhone }],
@@ -285,10 +322,25 @@ document.addEventListener('click', (event) => {
       () => supabaseClient.from('loads_shifts').update({ carrier_docs_text_sent_at:new Date().toISOString() }).eq('id', id),
     );
   }
+  const dispatched = event.target.closest('[data-dispatch-text-trip]');
+  if (dispatched) {
+    event.preventDefault();event.stopImmediatePropagation();
+    const prompt = {tripId:Number(dispatched.dataset.dispatchTextTrip),eventId:dispatched.dataset.dispatchEvent,
+      dispatchTime:dispatched.dataset.dispatchTime,driverKey:dispatched.dataset.dispatchDriverKey};
+    openSendTextModal([{name:dispatched.dataset.driverName,phone:dispatched.dataset.driverPhone}],DISPATCH_ROUTE_MESSAGE,null,{
+      allowDnu:true,
+      onSent:()=>{void acknowledgeDispatchRouteText(supabaseClient,prompt).then(()=>scheduleRefresh(100)).catch(error=>{
+        setDriverSyncStatus(`Text sent, but its dispatch reminder could not be marked handled (${error.message || error}).`,'error');scheduleRefresh(100);
+      });},
+    });
+  }
 }, true);
 
 document.addEventListener('change', (event) => {
-  if (event.target.matches?.('[data-field="routeId"],[data-field="tripId"]')) scheduleRefresh(350);
+  if (event.target.matches?.('[data-field="routeId"],[data-field="tripId"],[data-field="dispatchTime"]')) scheduleRefresh(1100);
+});
+document.addEventListener('input',event=>{
+  if (event.target.matches?.('[data-field="dispatchTime"]')) scheduleRefresh(1100);
 });
 
 function init() {
