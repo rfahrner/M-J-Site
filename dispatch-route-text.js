@@ -14,7 +14,8 @@ export function dispatchRoutePrompt(shift, trip, now, rowTrips = [trip]) {
   if (trip.dispatch_text_sent_at && trip.dispatch_text_sent_event_id === trip.dispatch_text_event_id
       && trip.dispatch_text_sent_driver_key === driverKey) return null;
   return {tripId:trip.id,eventId:trip.dispatch_text_event_id,dispatchTime:trip.dispatch_time,driverKey,
-    waitingForMessage:/^(FA|GA)/i.test(String(trip.route_id || '').trim())};
+    // FA/GA use the regular reminder until their replacement text is supplied.
+    waitingForMessage:false};
 }
 export async function acknowledgeDispatchRouteText(client, prompt) {
   const {data,error} = await client.from('loads_trips').update({

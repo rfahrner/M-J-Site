@@ -1012,8 +1012,8 @@ helper follows the same rule; its parity fixture includes this reported load.
 `preshift-pro-text.js` adds a reminder for each entered Dispatch Time on
 Atlanta, Delaware and Building C, using `dispatch-route-text.js`. The exact
 message asks drivers to track arrival/departure times and call with their
-last-stop times and return ETA. FA/GA route IDs show a waiting notice with no
-generic Text button until the owner supplies their separate message.
+last-stop times and return ETA. FA/GA routes use the regular Text reminder
+for now; the owner will supply their separate message later.
 `loads_trips.dispatch_text_event_id` changes when Dispatch Time changes; the
 sent timestamp/event/driver key prevents repeats across dispatchers. Only the
 existing send-modal `onSent` path acknowledges a prompt; cancelling does not.
@@ -1044,3 +1044,12 @@ Regression checks: scripts/mondelez-row-menu.test.mjs (actual handlers plus
 migration in PGlite), scripts/mondelez-night-shift-edit.test.mjs, and the actual
 Chromium page sandbox/mondelez-row-menu.spec.mjs. Failed deletes must retain the
 row on screen; cancellation failures must allow retry without claiming saved.
+
+### FA/GA dispatch reminder interim message (2026-10-12)
+
+FA and GA routes currently use the exact same dispatch reminder text and Text
+alert button as other route prefixes. Do not hold these alerts awaiting a
+custom message. The user will supply replacement wording later. Existing
+per-dispatch acknowledgement, age/timing rules and paused Carrier Docs alerts
+remain unchanged. Verified by scripts/dispatch-route-text.test.mjs, including
+actual FA and GA alert clicks and independent acknowledgements.

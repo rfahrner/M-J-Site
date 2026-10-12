@@ -19,8 +19,8 @@ test('exact message; dispatches are independent and handled state survives a fre
   assert.ok(api.dispatchRoutePrompt({...shift,driver_id:8},sent,now));
   assert.ok(api.dispatchRoutePrompt(shift,{...trip,id:3},now));
 });
-test('FA/GA await their own message; blank, settled and future dispatches are excluded',()=>{
-  for(const id of ['FA123','GA222',' fa999'])assert.equal(api.dispatchRoutePrompt(shift,{...trip,route_id:id},now).waitingForMessage,true);
+test('FA/GA use the regular message; blank, settled and future dispatches are excluded',()=>{
+  for(const id of ['FA123','GA222',' fa999',' ga999'])assert.equal(api.dispatchRoutePrompt(shift,{...trip,route_id:id},now).waitingForMessage,false);
   for(const s of [{...shift,shift_complete:true},{...shift,tonu:true},{...shift,load_cancelled:true},{...shift,called_off:true}])assert.equal(api.dispatchRoutePrompt(s,trip,now),null);
   for(const t of [{...trip,complete:true},{...trip,minimized:true},{...trip,route_id:''},{...trip,dispatch_time:''},{...trip,dispatch_time:'20:00'}])assert.equal(api.dispatchRoutePrompt(shift,t,now),null);
   assert.equal(api.dispatchRoutePrompt(shift,trip,new Date('2026-10-13T14:00:00Z')),null);
@@ -53,7 +53,8 @@ test('actual alerts open the exact draft, cancellation leaves it pending, and on
   const dom=new JSDOM('<div id="alert-widget"><div id="alert-widget-body"></div><span id="alert-widget-count"></span></div>',{url:'https://fixture.invalid/index.html'});
   const data={loads_shifts:[{...shift,location:'atlanta',shift_date:timeApi.boardDateKey(new Date()),shift_start:'00:00'}],
     loads_trips:[{...trip,shift_id:shift.id,dispatch_time:new Intl.DateTimeFormat('en-GB',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date())},
-      {...trip,shift_id:shift.id,id:3,route_id:'FA123',dispatch_time:new Intl.DateTimeFormat('en-GB',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date())}],
+      {...trip,shift_id:shift.id,id:3,route_id:'FA123',dispatch_time:new Intl.DateTimeFormat('en-GB',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date())},
+      {...trip,shift_id:shift.id,id:4,route_id:'GA123',dispatch_time:new Intl.DateTimeFormat('en-GB',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date())}],
     atlanta_drivers:[{id:7,'Driver Name':'Test Driver','Driver Cell':'7705551234'}]};
   const writes=[],opened=[];
   const client={from:table=>{
@@ -68,13 +69,22 @@ test('actual alerts open the exact draft, cancellation leaves it pending, and on
     window:dom.window,location:dom.window.location,MutationObserver:dom.window.MutationObserver,setTimeout:()=>0,clearTimeout:()=>{},setInterval:()=>0};
   const module=new Function(...Object.keys(env),source+';return {refreshExtraAlerts};')(...Object.values(env));
   await module.refreshExtraAlerts();
-  const buttons=dom.window.document.querySelectorAll('[data-dispatch-text-trip]');assert.equal(buttons.length,1,'FA route has no generic Text button');
+  const buttons=dom.window.document.querySelectorAll('[data-dispatch-text-trip]');assert.equal(buttons.length,3,'regular, FA and GA routes all offer Text');
   buttons[0].dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true}));
   assert.equal(opened.length,1);assert.equal(opened[0][1],api.DISPATCH_ROUTE_MESSAGE);assert.equal(opened[0][0][0].phone,'7705551234');
   assert.equal(writes.length,0,'opening/cancelling does not mark sent');
-  await module.refreshExtraAlerts();assert.equal(dom.window.document.querySelectorAll('[data-dispatch-text-trip]').length,1);
+  await module.refreshExtraAlerts();assert.equal(dom.window.document.querySelectorAll('[data-dispatch-text-trip]').length,3);
   opened[0][3].onSent();await new Promise(setImmediate);assert.equal(writes.length,1);
-  await module.refreshExtraAlerts();assert.equal(dom.window.document.querySelectorAll('[data-dispatch-text-trip]').length,0);
-  assert.ok(dom.window.document.body.textContent.includes('FA/GA dispatch message awaiting setup'));
+  await module.refreshExtraAlerts();assert.equal(dom.window.document.querySelectorAll('[data-dispatch-text-trip]').length,2);
+  for (const id of [3,4]) {
+    dom.window.document.querySelector(`[data-dispatch-text-trip="${id}"]`).dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true}));
+    const draft=opened.at(-1);assert.equal(draft[1],api.DISPATCH_ROUTE_MESSAGE);assert.equal(draft[0][0].phone,'7705551234');
+    assert.equal(data.loads_trips.find(t=>t.id===id).dispatch_text_sent_at,undefined,'draft stays pending until sent');
+    draft[3].onSent();await new Promise(setImmediate);await module.refreshExtraAlerts();
+    assert.ok(data.loads_trips.find(t=>t.id===id).dispatch_text_sent_at);
+    assert.equal(dom.window.document.querySelector(`[data-dispatch-text-trip="${id}"]`),null);
+  }
+  assert.equal(writes.length,3);assert.equal(dom.window.document.querySelectorAll('[data-dispatch-text-trip]').length,0);
+  assert.ok(!dom.window.document.body.textContent.includes('FA/GA dispatch message awaiting setup'));
   dom.window.close();
 });
