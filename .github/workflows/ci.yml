@@ -93,6 +93,12 @@ jobs:
       - name: Test an alert clears when its text goes out
         run: node --test scripts/alert-clears-on-outlook-draft.test.mjs
 
+      - name: Test nothing shipped hardcodes our host
+        run: node scripts/no-hardcoded-host.test.mjs
+
+      - name: Test the deploy staging keeps the site and drops the internals
+        run: bash deploy/stage-site.sh "$RUNNER_TEMP/_site"
+
       - name: Test accounting checkbox persistence
         run: node --test scripts/accounting-save.test.mjs scripts/accounting-note-icon.test.mjs
 

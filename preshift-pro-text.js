@@ -1,6 +1,24 @@
 import { supabaseClient, openSendTextModal } from './loadboard.js';
 
-const CARRIER_DOCS_URL = 'https://rfahrner.github.io/M-J-Site/driver/';
+/*
+ * The Carrier Docs link, derived from wherever this page is served rather
+ * than written down.
+ *
+ * It used to be the literal GitHub Pages URL. That string goes out in a TEXT
+ * TO A DRIVER -- "submit your paperwork to <url>" -- so the day the site
+ * moves host, or the repository goes private and Pages stops serving, every
+ * driver texted gets a dead link and simply stops submitting paperwork.
+ * Nothing on our screens would say so; it would look like drivers being slow.
+ *
+ * `./driver/` against the current page resolves identically on the old host
+ * (…/M-J-Site/index.html -> …/M-J-Site/driver/) and on any new one, so this
+ * is a no-op today and right afterwards without anyone remembering it.
+ *
+ * NOTE: the paperwork-pwa-submit edge function keeps its own ALLOWED_ORIGINS
+ * list. A new domain has to be added there too, or the PWA loads for the
+ * driver and its upload is refused. See docs/HOSTING_CUTOVER.md.
+ */
+const CARRIER_DOCS_URL = new URL('./driver/', document.baseURI).href;
 const BOARD_FILE_TO_LOCATION = {
   '': 'atlanta',
   'index.html': 'atlanta',

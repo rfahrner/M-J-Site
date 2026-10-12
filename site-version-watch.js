@@ -114,9 +114,44 @@ function goStale() {
   setInterval(reloadIfUnattended, 30 * 1000);
 }
 
+/*
+ * A marker we cannot read is the one failure mode that hides itself.
+ *
+ * `if (!seen) return` is correct per-check -- a flaky network is not a reason
+ * to declare a deploy -- but if the HEAD request is permanently wrong (the
+ * file moved, the host hashes filenames, a rewrite swallows it) then this
+ * returns quietly forever and the whole stale-tab protection is simply off.
+ * Nothing on screen, nothing in the log, and the next rate-churn incident is
+ * the first anyone hears of it.
+ *
+ * That matters most on the day the host changes. So after two consecutive
+ * failures -- the first check plus one poll, i.e. about five minutes -- say so
+ * once, loudly enough to be found by whoever is verifying a deploy, and expose
+ * it in __state() so a check can assert on it.
+ */
+let consecutiveUnknown = 0;
+let reportedUnknown = false;
+export function __versionMarkerUnknown() { return consecutiveUnknown >= UNKNOWN_LIMIT; }
+const UNKNOWN_LIMIT = 2;
+
 export async function checkForNewDeploy() {
   const seen = await currentVersion();
-  if (!seen) return;
+  if (!seen) {
+    consecutiveUnknown += 1;
+    if (consecutiveUnknown >= UNKNOWN_LIMIT && !reportedUnknown) {
+      reportedUnknown = true;
+      console.error(
+        `[site-version-watch] Cannot read a version marker for ${WATCHED}. ` +
+        'Stale-tab protection is OFF: a tab left open across a deploy will not ' +
+        'notice and will keep making calculated writes. Check that a HEAD ' +
+        `request for ${WATCHED} returns 200 with an ETag or Last-Modified ` +
+        'header on this host.',
+      );
+    }
+    return;
+  }
+  consecutiveUnknown = 0;
+  reportedUnknown = false;
   if (deployedVersion == null) { deployedVersion = seen; return; }
   if (seen !== deployedVersion) goStale();
 }
@@ -141,7 +176,7 @@ export async function initSiteVersionWatch() {
 // Test seam.
 export const __safeToReloadUnattended = safeToReloadUnattended;
 export function __state() {
-  return { deployedVersion, stale, lastActivityAt, lastLongTaskEndedAt };
+  return { deployedVersion, stale, lastActivityAt, lastLongTaskEndedAt, consecutiveUnknown };
 }
 
 if (document.readyState === 'loading') {
