@@ -1,6 +1,7 @@
+import { boardAlertTextDetails } from './alert-text-history.js';
 import { boardDateKey, offsetDate, shiftRelativeNow, tripTimeline } from './overnight-times.js';
 /* ---------------- board alerts: bottom-right notification panel ---------------- */
-import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, parseHHMM, AVG_MPH, minsToClock, escapeHtml, $, openSendTextModal, isAccountingUser, isAdminUser, signOut, scrollToAndOutlineShiftRow} from './loadboard.js';
+import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, parseHHMM, AVG_MPH, minsToClock, escapeHtml, $, openSendTextModal, logAlertTextClick, setDriverSyncStatus, isAccountingUser, isAdminUser, signOut, scrollToAndOutlineShiftRow} from './loadboard.js';
 import './paperwork-load-integration.js';
   const ALL_ALERT_LOCATIONS = ["atlanta", "buildingc", "delaware"];
   export const IDLE_THRESHOLD_MIN = 45; // Stage 4: 45 min after shift start, no dispatch yet -- repeats every 45 min after that
@@ -365,6 +366,7 @@ import './paperwork-load-integration.js';
         // shifts get marked as texted -- they only coincided for stage 1.
         jumpShiftIds: list.map((d) => d.shiftDbId),
         message,
+        textShiftIds: withPhone.map((d) => d.shiftDbId),
         recipients: withPhone.map((d) => ({ name: d.driverName, phone: d.driverPhone })),
         actionMessage: `This is D&L Transportation, could we have an ETA for your ${clockLabel} kroger shift`,
       });
@@ -562,13 +564,15 @@ import './paperwork-load-integration.js';
     wireAlertWidgetDrag(el, $("#alert-widget-header"));
     // Delegated -- alert items are re-rendered wholesale on every scan, so
     // listeners attached directly to them would be lost each time.
-    el.addEventListener("click", (e) => {
+    el.addEventListener("click", async (e) => {
       const btn = e.target.closest("[data-alert-action-key]");
       if (btn) {
         e.preventDefault();
         e.stopPropagation();
         const alert = boardAlerts.find((a) => a.key === btn.dataset.alertActionKey);
         if (alert && alert.recipients && alert.recipients.length) {
+          try { await logAlertTextClick(boardAlertTextDetails(alert)); }
+          catch (error) { setDriverSyncStatus(`Could not save alert text history (${error.message || error}). Please try again.`, "error"); return; }
           openSendTextModal(alert.recipients, alert.actionMessage || "", alert.markShiftIdsOnSent || null,
             { allowDnu: alert.recipients.length === 1, onSent: () => dismissAlert(alert.key) });
         }

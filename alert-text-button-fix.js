@@ -31,12 +31,15 @@
     button.disabled = true;
     button.textContent = '...';
 
+    let historyClient;
     try {
-      const [alertsModule, loadboardModule] = await Promise.all([
+      const [alertsModule, loadboardModule, historyModule] = await Promise.all([
         import('./alerts.js'),
         import('./loadboard.js'),
+        import('./alert-text-history.js'),
       ]);
 
+      historyClient = loadboardModule;
       // The alert the widget is already showing. This used to re-run
       // scanForBoardAlerts() -- a full database scan -- on every click, and
       // return silently when the re-scan came back without this key, so the
@@ -68,6 +71,7 @@
         return;
       }
 
+      await loadboardModule.logAlertTextClick(historyModule.boardAlertTextDetails(alert));
       loadboardModule.openSendTextModal(
         alert.recipients,
         alert.actionMessage || '',
@@ -80,6 +84,7 @@
       );
     } catch (error) {
       console.error('Alert Text button failed:', error);
+      historyClient?.setDriverSyncStatus(`Could not open the alert text or save its history (${error.message || error}). Please try again.`, 'error');
     } finally {
       opening = false;
       if (button.isConnected) {

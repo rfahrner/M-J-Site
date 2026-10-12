@@ -56,7 +56,7 @@ test('actual alerts open the exact draft, cancellation leaves it pending, and on
       {...trip,shift_id:shift.id,id:3,route_id:'FA123',dispatch_time:new Intl.DateTimeFormat('en-GB',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date())},
       {...trip,shift_id:shift.id,id:4,route_id:'GA123',dispatch_time:new Intl.DateTimeFormat('en-GB',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date())}],
     atlanta_drivers:[{id:7,'Driver Name':'Test Driver','Driver Cell':'7705551234'}]};
-  const writes=[],opened=[];
+  const writes=[],opened=[],audit=[];
   const client={from:table=>{
     const filters=[];let patch=null;
     const q={select:()=>q,in:()=>q,eq:(key,value)=>{filters.push([key,value]);return q;},update:p=>{patch=p;return q;},
@@ -65,12 +65,14 @@ test('actual alerts open the exact draft, cancellation leaves it pending, and on
   }};
   const strip=s=>s.replace(/^import[^;]+;\n/gm,'').replace(/export /g,'');
   const source=strip(fs.readFileSync('overnight-times.js','utf8'))+'\n'+strip(fs.readFileSync('dispatch-route-text.js','utf8'))+'\n'+strip(fs.readFileSync('preshift-pro-text.js','utf8'));
-  const env={supabaseClient:client,openSendTextModal:(...args)=>opened.push(args),setDriverSyncStatus:()=>{},document:dom.window.document,
+  const env={supabaseClient:client,logAlertTextClick:async details=>{audit.push(details);},openSendTextModal:(...args)=>opened.push(args),setDriverSyncStatus:()=>{},document:dom.window.document,
     window:dom.window,location:dom.window.location,MutationObserver:dom.window.MutationObserver,setTimeout:()=>0,clearTimeout:()=>{},setInterval:()=>0};
   const module=new Function(...Object.keys(env),source+';return {refreshExtraAlerts};')(...Object.values(env));
   await module.refreshExtraAlerts();
   const buttons=dom.window.document.querySelectorAll('[data-dispatch-text-trip]');assert.equal(buttons.length,3,'regular, FA and GA routes all offer Text');
   buttons[0].dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true}));
+  await new Promise(setImmediate);
+  assert.equal(audit.length,1);assert.deepEqual(audit[0].loadIds,[shift.id]);assert.equal(audit[0].tripId,trip.id);assert.ok(audit[0].label.includes(trip.route_id));
   assert.equal(opened.length,1);assert.equal(opened[0][1],api.DISPATCH_ROUTE_MESSAGE);assert.equal(opened[0][0][0].phone,'7705551234');
   assert.equal(writes.length,0,'opening/cancelling does not mark sent');
   await module.refreshExtraAlerts();assert.equal(dom.window.document.querySelectorAll('[data-dispatch-text-trip]').length,3);
@@ -78,12 +80,14 @@ test('actual alerts open the exact draft, cancellation leaves it pending, and on
   await module.refreshExtraAlerts();assert.equal(dom.window.document.querySelectorAll('[data-dispatch-text-trip]').length,2);
   for (const id of [3,4]) {
     dom.window.document.querySelector(`[data-dispatch-text-trip="${id}"]`).dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true}));
+    await new Promise(setImmediate);
     const draft=opened.at(-1);assert.equal(draft[1],api.DISPATCH_ROUTE_MESSAGE);assert.equal(draft[0][0].phone,'7705551234');
     assert.equal(data.loads_trips.find(t=>t.id===id).dispatch_text_sent_at,undefined,'draft stays pending until sent');
     draft[3].onSent();await new Promise(setImmediate);await module.refreshExtraAlerts();
     assert.ok(data.loads_trips.find(t=>t.id===id).dispatch_text_sent_at);
     assert.equal(dom.window.document.querySelector(`[data-dispatch-text-trip="${id}"]`),null);
   }
+  assert.ok(audit.some(a=>a.label.includes('FA123')));assert.ok(audit.some(a=>a.label.includes('GA123')));
   assert.equal(writes.length,3);assert.equal(dom.window.document.querySelectorAll('[data-dispatch-text-trip]').length,0);
   assert.ok(!dom.window.document.body.textContent.includes('FA/GA dispatch message awaiting setup'));
   dom.window.close();

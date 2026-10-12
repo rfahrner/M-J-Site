@@ -708,6 +708,7 @@ let mdzLoadDetailsHistory = [];
 
 function mondelezHistoryFieldLabel(fieldName) {
   const labels = {
+    alert_text_clicked: "Alert Text clicked",
     cancellation: "Cancellation",
     location: "Location",
     shift_date: "Date",

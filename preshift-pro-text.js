@@ -1,4 +1,4 @@
-import { supabaseClient, openSendTextModal, setDriverSyncStatus } from './loadboard.js';
+import { supabaseClient, openSendTextModal, setDriverSyncStatus, logAlertTextClick } from './loadboard.js';
 import { DISPATCH_ROUTE_MESSAGE, dispatchRoutePrompt, acknowledgeDispatchRouteText } from './dispatch-route-text.js';
 import { boardDateKey, offsetDate } from './overnight-times.js';
 
@@ -132,6 +132,7 @@ async function handleBasePreShiftClick(button) {
     return { name: drv.name || clean(row.driver_name_text) || 'Driver', phone: drv.phone || clean(row.driver_cell_snapshot) };
   }).filter((r) => r.phone);
   if (!recipients.length) return true;
+  await logAlertTextClick({loadIds:unsent.filter(row => {const drv=drivers.get(String(row.driver_id)) || {};return drv.phone || clean(row.driver_cell_snapshot);}).map(row => row.id),label:'Pre-shift ETA reminder',message:preShiftMessage(unsent[0].shift_start)});
   openSendTextModal(
     recipients,
     preShiftMessage(unsent[0].shift_start),
@@ -248,7 +249,7 @@ async function dispatchedRouteAlerts() {
       if (!prompt) continue;
       const label = clean(trip.route_id || trip.trip_id);
       const attrs = !prompt.waitingForMessage && phone
-        ? `data-dispatch-text-trip="${trip.id}" data-dispatch-event="${esc(prompt.eventId)}" data-dispatch-time="${esc(prompt.dispatchTime)}" data-dispatch-driver-key="${esc(prompt.driverKey)}" data-driver-name="${esc(name)}" data-driver-phone="${esc(phone)}"` : '';
+        ? `data-dispatch-route="${esc(label)}" data-dispatch-text-shift="${shift.id}" data-dispatch-text-trip="${trip.id}" data-dispatch-event="${esc(prompt.eventId)}" data-dispatch-time="${esc(prompt.dispatchTime)}" data-dispatch-driver-key="${esc(prompt.driverKey)}" data-driver-name="${esc(name)}" data-driver-phone="${esc(phone)}"` : '';
       extras.push({html:extraAlertHtml({icon:'📲',jumpId:shift.id,buttonAttrs:attrs,
         text:`${name} (${shift.pro_number || 'No PRO'}, ${label}) — ${prompt.waitingForMessage ? 'FA/GA dispatch message awaiting setup' : phone ? 'send dispatched-route reminder' : 'dispatch reminder needs a driver phone number'}`})});
     }
@@ -288,12 +289,13 @@ function installAlertObserver() {
   }).observe(body, { childList:true });
 }
 
-document.addEventListener('click', (event) => {
+document.addEventListener('click', async (event) => {
+  try {
   const base = event.target.closest('[data-alert-action-key]');
   if (base && /^preshift-\d+$/.test(base.dataset.alertActionKey || '')) {
     event.preventDefault();
     event.stopImmediatePropagation();
-    void handleBasePreShiftClick(base);
+    await handleBasePreShiftClick(base);
     return;
   }
 
@@ -302,6 +304,7 @@ document.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopImmediatePropagation();
     const id = Number(hou.dataset.houstonPreshiftId);
+    await logAlertTextClick({source:'loads_houston',loadIds:[id],label:'Pre-shift ETA reminder',message:preShiftMessage(hou.dataset.shiftTime)});
     openTrackedText(
       [{ name:hou.dataset.driverName, phone:hou.dataset.driverPhone }],
       preShiftMessage(hou.dataset.shiftTime),
@@ -316,6 +319,7 @@ document.addEventListener('click', (event) => {
     event.stopImmediatePropagation();
     if (CARRIER_DOCS_ALERTS_PAUSED) return;
     const id = Number(docs.dataset.carrierDocsShift);
+    await logAlertTextClick({loadIds:[id],label:'Carrier Docs reminder',message:carrierDocsMessage(docs.dataset.pro)});
     openTrackedText(
       [{ name:docs.dataset.driverName, phone:docs.dataset.driverPhone }],
       carrierDocsMessage(docs.dataset.pro),
@@ -327,6 +331,7 @@ document.addEventListener('click', (event) => {
     event.preventDefault();event.stopImmediatePropagation();
     const prompt = {tripId:Number(dispatched.dataset.dispatchTextTrip),eventId:dispatched.dataset.dispatchEvent,
       dispatchTime:dispatched.dataset.dispatchTime,driverKey:dispatched.dataset.dispatchDriverKey};
+    await logAlertTextClick({loadIds:[Number(dispatched.dataset.dispatchTextShift)],tripId:prompt.tripId,label:`Dispatched-route reminder — ${dispatched.dataset.dispatchRoute || "route"} — ${dispatched.dataset.driverName}`,message:DISPATCH_ROUTE_MESSAGE});
     openSendTextModal([{name:dispatched.dataset.driverName,phone:dispatched.dataset.driverPhone}],DISPATCH_ROUTE_MESSAGE,null,{
       allowDnu:true,
       onSent:()=>{void acknowledgeDispatchRouteText(supabaseClient,prompt).then(()=>scheduleRefresh(100)).catch(error=>{
@@ -334,6 +339,7 @@ document.addEventListener('click', (event) => {
       });},
     });
   }
+  } catch (error) { setDriverSyncStatus(`Could not save alert text history (${error.message || error}). Please try again.`, 'error'); }
 }, true);
 
 document.addEventListener('change', (event) => {
