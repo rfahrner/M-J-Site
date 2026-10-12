@@ -2366,19 +2366,11 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     return computeCalc(latest, row).hosLeft;
   }
 
-  // Priority for what a load's rate actually is: (1) a manual override
-  // typed directly on this load — highest priority, most specific intent
-  // wins; (2) for Atlanta, the assigned driver's own tier/setting rate
-  // card, if any of those boxes are filled in on their profile — some
-  // drivers run a negotiated structure instead of one flat number, so
-  // this lets calcLoadRateBreakdown() apply it tier-by-tier via
-  // effectiveTierRate()/effectiveSetting() in boardrates.js; (3) the
-  // driver's flat usual rate, for locations where a single number is the
-  // right shape (or as a fallback if an Atlanta driver has a flat rate
-  // but no tier boxes filled in); (4) the location's calculated
-  // tier/flat engine. This is the one place that priority gets decided,
-  // so recomputeRowRate() and the Rate panel's live breakdown can't
-  // drift from each other.
+  // Manual totals are protected by the writers. For mileage boards, sum
+  // the route rates using load > daily > base values and driver tier floors,
+  // then compare the aggregate with the driver's usual minimum. Other board
+  // types retain their direct usual-rate behavior. Every writer and modal
+  // uses this entry point so they agree on the total.
   // Exported because it is the ONLY place the rate priority is decided, and
   // several modules recompute row.rate after the board has drawn. Calling
   // calcLoadRateBreakdown() directly instead skips the driver's-usual-rate
@@ -2407,14 +2399,11 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
         note: "Waiting for the assigned driver's rate profile. The saved rate is unchanged.",
       };
     }
-    const driverOv = drv && (
-      locationKey === "atlanta" ? drv.atlantaRateOverrides :
-      locationKey === "delaware" ? drv.delawareRateOverrides :
-      null
-    );
-    const hasLocationOverrides = driverOv && (Object.keys(driverOv.tiers || {}).length || Object.keys(driverOv.settings || {}).length);
-    if ((locationKey === "atlanta" || locationKey === "delaware") && hasLocationOverrides) {
-      return calcLoadRateBreakdown(locationKey, row); // picks up the driver's tier/setting overrides itself
+    if (locationKey === "atlanta" || locationKey === "delaware") {
+      // Sum each real route first. The engine applies both negotiated tier
+      // overrides and the driver's usual rate as a floor on the load total.
+      // Returning the usual flat rate here bypassed every entered route.
+      return calcLoadRateBreakdown(locationKey, row);
     }
     if (drv && drv.normalRate) {
       const amount = Number(drv.normalRate);

@@ -76,6 +76,8 @@ test('daily-rate refresh matches the shipped board calculator and preserves Acco
     for(const [key,value] of Object.entries(settings))await db.query('insert into board_rate_settings values($1,$2,$3)',['atlanta',key,value]);
     await db.exec("insert into loads_shifts(id,location,shift_date,carrier_rate) values(99,'atlanta','2026-10-11',400);insert into loads_accounting(id,source_shift_id,location,total_carrier_pay,total_cost) values(99,99,'atlanta',777,777)");
     await db.exec(migration);
+    const routeFloorMigration=fs.readdirSync('supabase/migrations').find(name=>name.endsWith('_route_total_driver_rate_floor.sql'));
+    await db.exec(fs.readFileSync('supabase/migrations/'+routeFloorMigration,'utf8'));
     assert.equal((await db.query('select carrier_pay_manual from loads_accounting where id=99')).rows[0].carrier_pay_manual,true,'legacy different Accounting figure is protected');
     await db.exec(`create trigger rate_push after update of carrier_rate on loads_shifts
       for each row when(old.carrier_rate is distinct from new.carrier_rate)
@@ -101,6 +103,15 @@ test('daily-rate refresh matches the shipped board calculator and preserves Acco
       for(const type of ['birm','hostler','na'])cases.push([{...shift,location:'buildingc',route_type:type,hostler_hours:8},[],[],{birm_flat:800,hostler_hourly:100},{settings:{birm_flat:900,hostler_hourly:125}},null]);
       cases.push([{...shift,driver_id:7},[trip],tiers,settings,daily,null]);
       cases.push([shift,[trip],[],settings,daily,null]);
+      // Reported load 2010710: Loui's usual $1000 cannot replace the sum of
+      // Delaware's four entered routes (a fifth blank editor is ignored).
+      const delawareBands=tiers.map((t,i)=>({...t,id:16+i,min_miles:[0,26,76,151,201][i],max_miles:[25,75,150,200,250][i],rate:[600,700,800,900,1000][i]}));
+      const reportedTrips=[15,47,48,106].map((m,i)=>({...trip,id:i+1,route_miles:m}));
+      reportedTrips.push({id:5,route_id:'',route_miles:999,stop_count:0});
+      cases.push([{...shift,location:'delaware',driver_id:6079},reportedTrips,delawareBands,{}, {tiers:{},settings:{}},{id:6079,normal_rate:1000}]);
+      assert.equal(shippedRate(...cases.at(-1)),2800,'reported four-route total');
+      cases.push([{...shift,location:'delaware',driver_id:6079},reportedTrips,delawareBands,{}, {tiers:{},settings:{}},{id:6079,normal_rate:3500}]);
+      assert.equal(shippedRate(...cases.at(-1)),3500,'a higher negotiated minimum still wins');
       for(const args of cases) {
         const result=await db.query('select accounting_refresh_carrier_total($1::jsonb,$2::jsonb,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb) value',args.map(x=>x===null?null:JSON.stringify(x)));
         assert.equal(result.rows[0].value===null?null:Number(result.rows[0].value),shippedRate(...args),JSON.stringify(args));
