@@ -91,3 +91,11 @@ test('RPC respects source/history RLS and rejects an unsigned session without pa
   await db.exec("select set_config('fixture.uid','',false)");await assert.rejects(db.exec("select log_alert_text_click('loads_shifts',array[10]::bigint[],'Reminder','Draft')"),/internal signed-in/);
  }finally{await db.close();}
 });
+test('an open History tab updates after auditing without overwriting unsaved history notes',async()=>{
+ const dom=new JSDOM('<div id="ld-tab-content"><input data-hist-note-id="1" value="Unsaved note"></div><button id="text">Text</button>');dom.window.document.getElementById('text').focus();
+ let renders=0;const state={rowId:'load',activeTab:'history',history:[{id:1,note:'Saved note'}]};
+ const src=fs.readFileSync('loadboard.js','utf8').match(/export async function logAlertTextClick\([^]*?\n  \}/)[0].replace('export ','');
+ const fn=vm.runInNewContext('('+src+')',{writeAlertTextClick:async()=>[{id:2,source:'loads_shifts',shift_id:10}],supabaseClient:{},loadDetailsState:state,findRowAnywhere:()=>({row:{dbId:10}}),document:dom.window.document,renderLoadDetailsTabContent:()=>renders++});
+ await fn({loadIds:[10]});assert.equal(renders,0);assert.equal(state.history.length,2);assert.equal(dom.window.document.querySelector('input').value,'Unsaved note');
+ dom.window.document.querySelector('input').value='Saved note';await fn({loadIds:[10]});assert.equal(renders,1);dom.window.close();
+});

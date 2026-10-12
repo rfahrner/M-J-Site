@@ -1790,8 +1790,12 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       const id = findRowAnywhere(loadDetailsState.rowId)?.row.dbId;
       const matching = entries.filter(h => h.source === "loads_shifts" && String(h.shift_id) === String(id));
       if (matching.length) {
+        const unsavedHistoryNote = [...document.querySelectorAll('#ld-tab-content [data-hist-note-id]')].some(input => {
+          const saved = loadDetailsState.history.find(h => String(h.id) === String(input.dataset.histNoteId));
+          return input.value !== (saved?.note || "");
+        });
         loadDetailsState.history = [...matching, ...loadDetailsState.history];
-        if (loadDetailsState.activeTab === "history" && !document.activeElement?.dataset?.histNoteId) renderLoadDetailsTabContent();
+        if (loadDetailsState.activeTab === "history" && !unsavedHistoryNote && !document.activeElement?.dataset?.histNoteId) renderLoadDetailsTabContent();
       }
     }
     return entries;
