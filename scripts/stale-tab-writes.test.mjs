@@ -158,5 +158,58 @@ check('it does not import loadboard.js', /from '\.\/loadboard\.js'/.test(WATCH),
 check('it is wired into every board page',
   /import '\.\/site-version-watch\.js';/.test(read('loadboard-toolbar-controls.js')), true);
 
+/* ------------------------------------------------------------------
+   A marker it cannot read must not be silent.
+   ------------------------------------------------------------------ */
+// `if (!seen) return` is right for one flaky request. But if the HEAD is
+// permanently wrong -- the file moved, the host hashes filenames, a rewrite
+// swallows it -- this returns quietly forever and the whole protection above
+// is simply off, with nothing on screen and nothing in the log. That is the
+// shape of a host migration, which is exactly when it would happen.
+console.log('\n6. it says so when it cannot read a version marker at all');
+
+const dir2 = mkdtempSync(join(tmpdir(), 'mj-unknown-'));
+writeFileSync(join(dir2, 'rate-write-limiter.mjs'), read('rate-write-limiter.js'));
+writeFileSync(join(dir2, 'long-task-guard.mjs'), read('long-task-guard.js'));
+writeFileSync(join(dir2, 'site-version-watch.mjs'),
+  WATCH.replace("'./rate-write-limiter.js'", "'./rate-write-limiter.mjs'")
+       .replace("'./long-task-guard.js'", "'./long-task-guard.mjs'"));
+
+global.fetch = async () => ({ ok: false, status: 404, headers: new dom.window.Headers({}) });
+const errors = [];
+const realError = console.error;
+console.error = (m) => errors.push(String(m));
+// Importing the module runs initSiteVersionWatch(), which performs the first
+// check itself -- so that import IS failure number one.
+const watcher4 = await import(join(dir2, 'site-version-watch.mjs'));
+check('one unreadable check says nothing -- a flaky network is not a deploy',
+  errors.length, 0);
+
+await watcher4.checkForNewDeploy();
+check('two in a row reports it', errors.length, 1);
+check('and names the consequence, not just the symptom',
+  /stale-tab protection is OFF/i.test(errors[0] || ''), true);
+check('and says what to check', /ETag|Last-Modified/i.test(errors[0] || ''), true);
+
+await watcher4.checkForNewDeploy();
+check('it reports once, not on every poll', errors.length, 1);
+check('and the state exposes it for a deploy check', watcher4.__versionMarkerUnknown(), true);
+
+// Recovering must clear it, or a blip would leave a permanent false alarm.
+global.fetch = async () => ({ ok: true, headers: new dom.window.Headers({ etag: '"v9"' }) });
+await watcher4.checkForNewDeploy();
+check('a marker coming back clears the alarm', watcher4.__versionMarkerUnknown(), false);
+console.error = realError;
+
+// Never acts on not knowing: an unreadable marker must not block writes.
+// This is dir2's own limiter -- the one in dir1 was deliberately blocked by
+// the genuine stale deploy in section 2, and asserting on it here would be
+// reading the wrong instance.
+const limiter2 = await import(join(dir2, 'rate-write-limiter.mjs'));
+// automaticWritesBlocked() returns the REASON, or null when nothing is
+// blocking -- not a boolean.
+check('it did not block writes over a marker it could not read',
+  limiter2.automaticWritesBlocked(), null);
+
 console.log(failures ? `\n  ${failures} check(s) FAILED\n` : '\n  All checks passed.\n');
 process.exit(failures ? 1 : 0);

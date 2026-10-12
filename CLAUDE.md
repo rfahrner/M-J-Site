@@ -6,7 +6,21 @@ Read this file before making changes. This is a live dispatch/load-board applica
 
 - Repo: `rfahrner/M-J-Site`
 - Default branch: `main`
-- Production: GitHub Pages
+- Production: GitHub Pages; moving to **Cloudflare Pages** -- see
+  `docs/HOSTING_CUTOVER.md`. (Not Vercel: its free tier is non-commercial only.)
+- **The site ships SOURCE, not a bundle.** `index.html` loads `loadboard.js`
+  directly and Pages serves the repository root verbatim; `vite build` is a CI
+  validation step that has never produced a deploy artifact. Any host that
+  builds this repo breaks every `<script src>` AND silently kills
+  `site-version-watch.js`, which HEADs `/loadboard.js` by that exact path.
+  `deploy/stage-site.sh` is a COPY for that reason.
+- **Nothing shipped may hardcode our host.** The Carrier Docs link in
+  `preshift-pro-text.js` goes out in a TEXT TO A DRIVER, so a stale URL there
+  is a dead link in a driver's hand and reads as a driver not submitting
+  paperwork. It derives from `document.baseURI`.
+  `scripts/no-hardcoded-host.test.mjs` pins it. The one origin that cannot be
+  derived is `paperwork-pwa-submit`'s server-side ALLOWED_ORIGINS -- that is a
+  manual step at cutover.
 - Backend: Supabase project `ygsapysqzwrpcimgvaqx`
 - Main board logic is concentrated in `loadboard.js`; several compatibility/helper modules are deliberately loaded dynamically from `loadboard-toolbar-controls.js` to avoid circular-import startup failures.
 
