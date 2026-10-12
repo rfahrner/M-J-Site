@@ -8,7 +8,7 @@ const migration = fs.readFileSync("supabase/migrations/20260917203000_add_delawa
 assert.match(board, /"delaware_rate_overrides": d\.delawareRateOverrides/);
 assert.match(board, /id="ad-delaware-rate-section"/);
 assert.match(board, /data-ddr-tier-id/);
-assert.match(board, /locationKey === "delaware" \? drv\.delawareRateOverrides/);
+assert.match(board, /locationKey === "atlanta" \|\| locationKey === "delaware"\) \{[\s\S]{0,350}return calcLoadRateBreakdown\(locationKey, row\)/);
 assert.match(board, /data-rate-setting-key="over_tier_per_mile"/);
 assert.doesNotMatch(board, /data-rate-setting-key="flat_minimum"/);
 assert.match(board, /t\.dataset\.field === "rate"\) markFieldDirty\(dirtyShiftFields, rowId, "rateManual"\)/);

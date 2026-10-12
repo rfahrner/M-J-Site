@@ -952,3 +952,14 @@ reads.
 ## Current user priorities
 
 The current interaction is focused on polishing production behavior rather than redesigning architecture. Prefer fixing the exact observed UI/data-flow issue with the smallest safe change.
+
+## Mileage-board route totals and driver usual rates
+
+Atlanta and Delaware always sum real routes through `calcLoadRateBreakdown`,
+then apply the driver usual rate as a minimum on the aggregate. A profile
+without tier overrides must not short-circuit that calculation to normal_rate.
+Reported load 2010710 had four routes of 15/47/48/106 miles: Delaware's
+600/700/700/800 route amounts total 2800, not the driver's usual 1000.
+Blank editors are excluded. Manual totals, missing-profile protection and
+other boards' flat-rate paths remain unchanged. Accounting Refresh's SQL
+helper follows the same rule; its parity fixture includes this reported load.
