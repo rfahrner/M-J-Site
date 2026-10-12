@@ -1,0 +1,30 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "m-j-site",
+  "compatibility_date": "2026-10-12",
+  "main": "deploy/worker.js",
+  "assets": {
+    "directory": "./_site",
+    "binding": "ASSETS",
+    // DO NOT change html_handling to any value that strips ".html".
+    //
+    // Seventeen served files decide which board they are on by reading the
+    // filename straight out of the URL:
+    //
+    //     location.pathname.split('/').pop()   ->  "houston.html"
+    //
+    // loadboard.js, alerts.js, site-nav-v2.js, accounting-route-images.js,
+    // accounting-audit-snapshots.js, houston-load-details-v2.js,
+    // mondelez-completed-row-layout.js, delaware-rate-tiers.js and the rest
+    // all compare that against literals ending in ".html".
+    //
+    // Cloudflare's DEFAULT ("auto-trailing-slash") serves houston.html at
+    // /houston. Every one of those comparisons would then see "houston",
+    // match nothing, and quietly do nothing -- the pre-shift texting, the
+    // nav highlight, the Houston load details, the Mondelez row layout,
+    // the Delaware rate tiers. No error, just a board that has forgotten
+    // where it is. scripts/html-url-shape.test.mjs fails if this changes.
+    "html_handling": "none",
+    "not_found_handling": "none"
+  }
+}

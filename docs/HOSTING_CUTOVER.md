@@ -36,12 +36,42 @@ did not — and fails the build rather than deploying a broken site.
 
 ## Cloudflare setup
 
-1. Cloudflare Dashboard → Workers & Pages → Create → Pages → Connect to Git →
+Cloudflare now steers new git-connected projects to **Workers**, not Pages, so
+there is no "build output directory" field — that comes from `wrangler.jsonc`.
+
+1. Dashboard → Workers & Pages → Create → Import a repository →
    `rfahrner/M-J-Site`.
 2. **Build command:** `bash deploy/stage-site.sh _site`
-3. **Build output directory:** `_site`
-4. **Framework preset:** None.
-5. Deploy. It takes seconds — nothing is compiled.
+3. **Deploy command:** `npx wrangler deploy` (the default)
+4. Deploy. It takes seconds — nothing is compiled.
+
+### `wrangler.jsonc` is load-bearing, and not in the obvious way
+
+    "html_handling": "none"
+
+**The URLs must keep their `.html`.** Sixteen served modules read
+`location.pathname.split('/').pop()` and compare it to `.html` literals to
+decide which board they are on — `loadboard.js`, `alerts.js`, `site-nav-v2.js`,
+`houston-load-details-v2.js`, `mondelez-completed-row-layout.js`,
+`delaware-rate-tiers.js`, `accounting-route-images.js` and the rest.
+Cloudflare's **default** (`auto-trailing-slash`) serves `houston.html` at
+`/houston`. Every one of those comparisons would match nothing and quietly do
+nothing: no error, just a board that has forgotten where it is.
+`scripts/html-url-shape.test.mjs` fails if this is relaxed, and prints the
+file list so the cost is visible before anyone changes it.
+
+`"none"` also switches off directory indexes, and that matters more than it
+sounds: **`/driver/` is the URL drivers are texted.** `deploy/worker.js` is a
+~20-line shim that maps a directory-shaped path to its `index.html`. Exact
+asset hits never reach it — `/loadboard.js` and `/houston.html` are served
+directly by Cloudflare with their ETags intact, which is what
+`site-version-watch.js` depends on.
+
+Verified against a real `wrangler dev` server, not read off the docs: all 13
+board pages serve with the extension intact, `/driver/`, `/driver` and `/`
+all resolve, `loadboard.js` returns an ETag and a 304 on revalidation, and
+`CLAUDE.md`, `wrangler.jsonc`, `deploy/`, `supabase/`, `scripts/`, `sandbox/`,
+`docs/`, `.github/` and `.wrangler/` all 404.
 
 ## The two origin changes that are not optional
 

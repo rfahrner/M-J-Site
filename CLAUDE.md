@@ -6,8 +6,18 @@ Read this file before making changes. This is a live dispatch/load-board applica
 
 - Repo: `rfahrner/M-J-Site`
 - Default branch: `main`
-- Production: GitHub Pages; moving to **Cloudflare Pages** -- see
-  `docs/HOSTING_CUTOVER.md`. (Not Vercel: its free tier is non-commercial only.)
+- Production: GitHub Pages; moving to **Cloudflare Workers static assets**
+  -- see `docs/HOSTING_CUTOVER.md`. (Not Vercel: its free tier is
+  non-commercial only. Workers rather than Pages because Cloudflare now
+  steers new git-connected projects there.)
+- **URLs must keep their `.html`.** Sixteen served modules read
+  `location.pathname.split('/').pop()` and compare it against `.html`
+  literals to decide which board they are on. Cloudflare's default asset
+  routing serves `houston.html` at `/houston`, which would make every one
+  of those comparisons match nothing -- silently. `wrangler.jsonc` pins
+  `html_handling:"none"` and `scripts/html-url-shape.test.mjs` fails if it
+  is relaxed. `"none"` also disables directory indexes, so `deploy/worker.js`
+  maps `/driver/` (the URL TEXTED TO DRIVERS) to its `index.html`.
 - **The site ships SOURCE, not a bundle.** `index.html` loads `loadboard.js`
   directly and Pages serves the repository root verbatim; `vite build` is a CI
   validation step that has never produced a deploy artifact. Any host that

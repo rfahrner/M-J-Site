@@ -26,6 +26,7 @@ mkdir -p "$OUT"
 tar -C "$SRC" -cf - \
   --exclude='./.git' \
   --exclude='./.github' \
+  --exclude='./.wrangler' \
   --exclude='./node_modules' \
   --exclude='./dist' \
   --exclude="./${OUT#./}" \
@@ -47,6 +48,15 @@ tar -C "$SRC" -cf - \
   --exclude='./package-lock.json' \
   --exclude='./.env.example' \
   --exclude='./vercel.json' \
+  --exclude='./wrangler.jsonc' \
+  --exclude='./.gitignore' \
+  --exclude='./.gitattributes' \
+  --exclude='./.editorconfig' \
+  --exclude='./.vscode' \
+  --exclude='./.idea' \
+  --exclude='./.npmrc' \
+  --exclude='./.nvmrc' \
+  --exclude='./wrangler.toml' \
   . | tar -C "$OUT" -xf -
 
 # A page the site cannot serve is the failure that matters, so prove the
