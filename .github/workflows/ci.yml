@@ -96,6 +96,9 @@ jobs:
       - name: Test nothing shipped hardcodes our host
         run: node scripts/no-hardcoded-host.test.mjs
 
+      - name: Test the deploy keeps ".html" in the URL
+        run: node --test scripts/html-url-shape.test.mjs
+
       - name: Test the deploy staging keeps the site and drops the internals
         run: bash deploy/stage-site.sh "$RUNNER_TEMP/_site"
 

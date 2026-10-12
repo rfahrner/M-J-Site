@@ -14,3 +14,10 @@ pnpm-debug.log*
 
 .DS_Store
 Thumbs.db
+
+# Cloudflare Workers
+.wrangler/
+_site/
+
+# Patch files handed over in chat -- these have been committed by accident before
+Claude outputs/*.patch
