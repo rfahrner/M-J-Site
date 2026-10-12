@@ -96,6 +96,9 @@ jobs:
       - name: Test nothing shipped hardcodes our host
         run: node scripts/no-hardcoded-host.test.mjs
 
+      - name: Test Night Shift rows stay editable on Mondelez
+        run: node --test scripts/mondelez-night-shift-edit.test.mjs
+
       - name: Test the deploy keeps ".html" in the URL
         run: node --test scripts/html-url-shape.test.mjs
 
