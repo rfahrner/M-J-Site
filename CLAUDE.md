@@ -785,21 +785,31 @@ historical validity. The historical membership reconciliation is still pending;
 do not replace it with a start-time-plus-route filter or assume missing site
 Accounting rows prove invalidity. The site ledger has historical gaps.
 
-## Refresh re-reads; it never re-pushes
+## Refresh checks daily carrier rates, then re-reads; it never re-pushes
 
-The Accounting sheet's Refresh button (`refreshAccountingSheet()`) is a READ.
-It re-pulls the accounting rows, routes, notes, driver contacts,
+The Accounting sheet's Refresh button (`refreshAccountingSheet()`) first calls
+`refresh_accounting_daily_rates` for the selected location and loaded date range,
+then re-pulls the accounting rows, routes, notes, driver contacts,
 shift-complete status, pricing/FSC and location notes, empties the per-id
 caches in `accounting-columns.js` and
 `accounting-applied-and-aljex-status.js`, and replaces the realtime channel.
-It writes nothing.
+The October 12 request explicitly replaces the former read-only rule: a daily
+rate corrected after the 04:00 push must reach existing Accounting loads.
+The RPC updates calculated carrier pay and its source board rate together,
+only for active existing standard-board loads on dates with daily rate cards
+(including cards deliberately cleared; `board_rate_daily_refresh_dates` retains
+those dates so their loads can return to the base).
+It preserves manual board totals, `carrier_pay_manual` Accounting overrides,
+customer money, Sent/Released status and route snapshots. Existing Accounting
+figures which differ from the board are conservatively marked manual at setup.
+Clearing a manually entered carrier cell clears that flag. The ordinary board
+push remains unchanged; an actual board rate change takes ownership again.
 
-The owner chose that over a version that also re-syncs from the load board.
-A re-push can overwrite a figure an accountant typed, and the "Push to
-Accounting" button was built and removed once already for its own reasons
-(see above). `scripts/accounting-refresh.test.mjs` asserts the absence of
-every write path inside the function, not just the presence of the reads --
-turning Refresh into a sync is the regression it exists to catch.
+A full re-push can overwrite a figure an accountant typed, and the "Push to
+Accounting" button remains removed. Refresh does not invoke that full push;
+the RPC suppresses its rate-trigger route sync only within its transaction.
+`scripts/accounting-refresh.test.mjs` protects the limited RPC and cache reads;
+the database sandbox checks rate parity, manual values and idempotence.
 
 Three things go stale independently and none of them look wrong on screen:
 the two helper modules fetch only ids they have not seen, so a Trip ID edited

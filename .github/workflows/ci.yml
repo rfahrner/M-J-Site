@@ -108,8 +108,10 @@ jobs:
       - name: Test Houston accounting columns
         run: node scripts/accounting-houston-columns.test.mjs
 
-      - name: Test the Accounting Refresh button re-reads and never writes
-        run: node scripts/accounting-refresh.test.mjs
+      - name: Test Accounting Refresh daily rates and manual money protection
+        run: |
+          node scripts/accounting-refresh.test.mjs
+          node --test scripts/accounting-refresh-daily-rates.test.mjs scripts/accounting-money-queue.test.mjs
 
       - name: Test Mondelez accounting tab
         run: node scripts/accounting-mondelez-tab.test.mjs
