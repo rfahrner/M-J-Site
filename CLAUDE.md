@@ -199,6 +199,25 @@ realtime handler must accept payloads for the carried day as well as the
 active one, or rows go stale while they are on screen.
 `scripts/night-shift.test.mjs` pins it.
 
+**Three** things, in fact. The third cost a day of a dispatcher's time:
+**every row lookup must search all loaded days, not the active one.** Mondelez
+had eighteen copies of
+
+    getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId)
+
+and each caller ends `if (!row) return;`. A carried row is in
+`rowsByDate[tomorrow]`, so with Night Shift on it silently refused a dropped
+route image, a cell edit, TONU, Highlight, Shift Complete, Load Details, Text
+Now, Email Now and Delete -- with nothing on screen to say why. It was reported
+as the page "not letting us click and drag an image into it", and the dropzone
+was never the problem.
+
+Houston has `findHoustonRowAnywhere()` and the standard board has
+`findRowAnywhere()`; Mondelez was the only board without one and now has
+`findMondelezRowAnywhere()` / `mondelezRowById()`. A delete must splice from
+the row's OWN day's array, or the row vanishes from the database and stays on
+the board. `scripts/mondelez-night-shift-edit.test.mjs` pins it.
+
 ## Images / archival work
 
 Images currently live in Supabase Storage buckets including:

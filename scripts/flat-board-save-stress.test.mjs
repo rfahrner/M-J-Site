@@ -33,7 +33,7 @@ for(const board of ['mondelez','houston'])test(board+' driver picker preserves n
  const row={id:'local',dbId:1,driverName:'Old Driver',driverId:'1'};h.ctx.fixtureRow=row;
  const block=isM?src.match(/  table.addEventListener\("focusin", \(e\) => \{[^]*?\n  \}\);/)[0]:src.match(/    boardTable.addEventListener\("focusin", \(e\) => \{[^]*?\n    \}\);/)[0];
  vm.runInContext(`const table={addEventListener:(_,cb)=>this.pickDriver=cb},boardTable=table;
- const getMondelezRowsForDate=()=>[fixtureRow],findHoustonRowAnywhere=()=>({row:fixtureRow});
+ const getMondelezRowsForDate=()=>[fixtureRow],mondelezRowById=()=>fixtureRow,findHoustonRowAnywhere=()=>({row:fixtureRow});
  const acknowledgeDnuAssignment=()=>{},updateMondelezMcCell=()=>{};
  const document={getElementById:()=>null};
  const openDriverAutocomplete=(_,loc,cb)=>cb({id:'2',name:'New Driver'});
@@ -54,7 +54,7 @@ for(const board of ['mondelez','houston'])test(board+' modal changes survive a s
  const h=harness(board),cap=board==='mondelez'?'Mondelez':'Houston',isM=board==='mondelez';
  const row={id:'local',dbId:1,shiftDate:'2026-10-02',location:'addison',notes:'old',comments:'old',driverName:'',driverId:null};h.ctx.fixtureRow=row;h.db.push({id:1});
  vm.runInContext(`let mdzLoadDetailsRowId='local',houstonLdRowId='local';
- const getMondelezRowsForDate=()=>[fixtureRow],findHoustonRowAnywhere=()=>({row:fixtureRow});
+ const getMondelezRowsForDate=()=>[fixtureRow],mondelezRowById=()=>fixtureRow,findHoustonRowAnywhere=()=>({row:fixtureRow});
  const driversForLocation=()=>[],findDriver=()=>null,acknowledgeDnuAssignment=()=>{};
  const $=id=>id==='${isM?'#mdz-ld-notes':'#hou-ld-comments'}'?{value:'Keep modal notes'}:null;
  const closeMondelezLoadDetailsModal=()=>{},closeHoustonLoadDetailsModal=()=>{};

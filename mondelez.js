@@ -220,6 +220,39 @@ function getMondelezRowsForDate(dKey) {
  */
 export function mondelezNightShiftActive() { return !!state.nightShift; }
 
+/*
+ * Find a row by id in ANY loaded day, not just the day on screen.
+ *
+ * Night Shift puts tomorrow's early-AM loads on today's board -- that is the
+ * whole point of it -- but those rows live in rowsByDate[tomorrow]. Every
+ * lookup here used to be
+ *
+ *     mondelezRowById(rowId)
+ *
+ * which cannot see them. The callers all end in `if (!row) return;`, so with
+ * Night Shift on, a carried row silently refused EVERYTHING: dropping a route
+ * image, editing a cell, TONU, Highlight, Shift Complete, Load Details, Text
+ * Now, Email Now, Delete. Nothing on screen said so -- it was reported as the
+ * Mondelez page "not letting us click and drag an image into it".
+ *
+ * Houston has findHoustonRowAnywhere() and the standard board has
+ * findRowAnywhere() for exactly this. Mondelez was the only board without one.
+ *
+ * Saving was never the problem: persistMondelezRow() already writes under
+ * row.shiftDate, so a carried row saves back to its own day once it is found.
+ */
+function findMondelezRowAnywhere(rowId) {
+  for (const k in mondelezState.rowsByDate) {
+    const list = mondelezState.rowsByDate[k] || [];
+    const index = list.findIndex((x) => x.id === rowId);
+    if (index !== -1) return { row: list[index], rows: list, dateKey: k, index };
+  }
+  return null;
+}
+function mondelezRowById(rowId) {
+  const found = findMondelezRowAnywhere(rowId);
+  return found ? found.row : null;
+}
 function getMondelezDisplayRows(dKey) {
   const rows = mondelezNightShiftActive()
     ? nightShiftRows(getMondelezRowsForDate(dKey),
@@ -300,7 +333,7 @@ function mondelezLocationLabel(key) {
 // recreate it — everything on the row carries over, only the location changes.
 function openMondelezRowContextMenu(rowId, x, y) {
   closeContextMenu();
-  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
+  const row = mondelezRowById(rowId);
   if (!row) return;
   const items = [
     { label: row.tonu ? "Un-TONU" : "TONU", action: () => toggleMondelezTonu(rowId) },
@@ -326,7 +359,7 @@ function openMondelezRowContextMenu(rowId, x, y) {
   });
 }
 function moveMondelezRowToLocation(rowId, newLocationKey) {
-  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
+  const row = mondelezRowById(rowId);
   if (!row) return;
   row.location = newLocationKey;
   markFieldDirty(dirtyMondelezFields, row.id, "location");
@@ -334,7 +367,7 @@ function moveMondelezRowToLocation(rowId, newLocationKey) {
   renderMondelezTable(); // the row now belongs to a different tab, so it drops out of the current view
 }
 function toggleMondelezTonu(rowId) {
-  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
+  const row = mondelezRowById(rowId);
   if (!row) return;
   row.tonu = !row.tonu;
   markFieldDirty(dirtyMondelezFields, row.id, "tonu");
@@ -343,7 +376,7 @@ function toggleMondelezTonu(rowId) {
   saveMondelezRowNow(row);
 }
 function toggleMondelezHighlight(rowId) {
-  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
+  const row = mondelezRowById(rowId);
   if (!row) return;
   row.highlighted = !row.highlighted;
   markFieldDirty(dirtyMondelezFields, row.id, "highlighted");
@@ -352,7 +385,7 @@ function toggleMondelezHighlight(rowId) {
   saveMondelezRowNow(row);
 }
 function toggleMondelezShiftComplete(rowId) {
-  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
+  const row = mondelezRowById(rowId);
   if (!row) return;
   row.shiftComplete = !row.shiftComplete;
   markFieldDirty(dirtyMondelezFields, row.id, "shiftComplete");
@@ -512,7 +545,7 @@ function renderMondelezRateSettingsPanel() {
 }
 /* ---------------- image upload / view ---------------- */
 async function uploadRouteImage(rowId, files) {
-  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
+  const row = mondelezRowById(rowId);
   if (!row || !supabaseClient) return;
   if (!row.dbId) await saveMondelezRowNow(row);
   if (!row.dbId) { setDriverSyncStatus("Couldn't save this load before uploading — try again.", "error"); return; }
@@ -536,7 +569,7 @@ async function uploadRouteImage(rowId, files) {
   } catch (e) { console.error("uploadRouteImage failed:", e); setDriverSyncStatus(`Couldn't upload that image (${e.message || e}).`, "error"); }
 }
 function viewRouteImage(rowId, imageIndex = 0) {
-  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
+  const row = mondelezRowById(rowId);
   const urls = (row?.routeImageUrls || []).filter(Boolean);
   if (!urls.length) return;
   const startIndex = Math.max(0, Math.min(Number(imageIndex) || 0, urls.length - 1));
@@ -580,7 +613,7 @@ function viewRouteImage(rowId, imageIndex = 0) {
 }
 
 async function deleteRouteImage(rowId, imageIndex = 0) {
-  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId); if (!row) return;
+  const row = mondelezRowById(rowId); if (!row) return;
   const paths = row.routeImagePaths || parseMondelezImagePaths(row.routeImagePath); const oldPath = paths[Number(imageIndex)]; if (!oldPath) return;
   paths.splice(Number(imageIndex), 1); row.routeImagePaths = paths; row.routeImagePath = paths[0] || ""; row.routeImageUrls = (row.routeImageUrls || []).filter((_, i) => i !== Number(imageIndex)); row.routeImageUrl = row.routeImageUrls[0] || ""; renderMondelezTable();
   markFieldDirty(dirtyMondelezFields, row.id, "routeImagePaths");
@@ -595,9 +628,12 @@ function quickAddMondelezRow() {
   renderMondelezTable();
 }
 async function deleteMondelezRow(rowId) {
-  const rows = getMondelezRowsForDate(state.activeDate);
-  const row = rows.find((r) => r.id === rowId);
-  if (!row) return;
+  // Splice out of the day the row actually belongs to. Under Night Shift the
+  // row on screen can be tomorrow's, and removing it from today's array would
+  // leave it on the board while deleting it from the database.
+  const found = findMondelezRowAnywhere(rowId);
+  if (!found) return;
+  const { row, rows } = found;
   if (!confirm(`Delete this Mondelez load${row.aljexNumber ? ` (${row.aljexNumber})` : ""}? This can't be undone.`)) return;
   const idx = rows.findIndex((r) => r.id === rowId);
   if (idx !== -1) rows.splice(idx, 1);
@@ -643,7 +679,7 @@ function mondelezHistoryFieldLabel(fieldName) {
 function renderMondelezChangeHistory() {
   const target = document.querySelector('#modal-mdz-load-details [data-unified-ld-panel="history"]');
   if (!target) return;
-  const row = getMondelezRowsForDate(state.activeDate).find((item) => item.id === mdzLoadDetailsRowId);
+  const row = mondelezRowById(mdzLoadDetailsRowId);
   if (!row?.dbId) {
     target.innerHTML = `<div class="subtext">Save this load first to begin Change History.</div>`;
     return;
@@ -682,14 +718,14 @@ async function loadMondelezChangeHistory(row) {
     setDriverSyncStatus(`Couldn't load this load's change history (${error.message}).`, "error");
     return;
   }
-  const currentRow = getMondelezRowsForDate(state.activeDate).find((item) => item.id === mdzLoadDetailsRowId);
+  const currentRow = mondelezRowById(mdzLoadDetailsRowId);
   if (!currentRow || currentRow.dbId !== requestedDbId) return;
   mdzLoadDetailsHistory = data || [];
   renderMondelezChangeHistory();
 }
 
 async function saveMondelezHistoryNotes() {
-  const row = getMondelezRowsForDate(state.activeDate).find((item) => item.id === mdzLoadDetailsRowId);
+  const row = mondelezRowById(mdzLoadDetailsRowId);
   if (!row?.dbId || !supabaseClient) return;
   const button = $("#mdz-hist-save-notes");
   if (button) { button.disabled = true; button.textContent = "Saving…"; }
@@ -712,7 +748,7 @@ async function saveMondelezHistoryNotes() {
 }
 
 function openMondelezLoadDetailsModal(rowId) {
-  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
+  const row = mondelezRowById(rowId);
   if (!row) return;
   const modal = $("#modal-mdz-load-details");
   if (!modal) { console.error("Mondelez Load Details modal HTML isn't on this page yet."); return; }
@@ -757,7 +793,7 @@ function closeMondelezLoadDetailsModal() {
 }
 function saveMondelezLoadDetailsModal() {
   if (!mdzLoadDetailsRowId) return;
-  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === mdzLoadDetailsRowId);
+  const row = mondelezRowById(mdzLoadDetailsRowId);
   if (!row) { closeMondelezLoadDetailsModal(); return; }
   const before = { ...row };
   const getVal = (id) => { const el = $("#" + id); return el ? el.value : ""; };
@@ -796,7 +832,7 @@ function saveMondelezLoadDetailsModal() {
   renderMondelezTable(); // if location changed, this drops the row out of the current tab's view
 }
 function textMondelezDriverForRow(rowId) {
-  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
+  const row = mondelezRowById(rowId);
   if (!row) return;
   const drv = row.driverId ? findDriver(row.driverId) : null;
   textDriverPhone(drv ? drv.phone : null);
@@ -847,7 +883,7 @@ function buildMondelezRouteEmailBody(row, driverName) {
 // the email that's about to open, rather than the dispatcher having to
 // go hunt for it separately.
 function emailMondelezRouteInfo(rowId) {
-  const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
+  const row = mondelezRowById(rowId);
   if (!row) return;
   const drv = row.driverId ? findDriver(row.driverId) : null;
   const driverName = drv ? drv.name : (row.driverName || "");
@@ -1092,7 +1128,7 @@ export async function initMondelezPage() {
       return;
     }
     if (t.dataset.action === "toggle-mdz-select") {
-      const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === t.dataset.mdzRow);
+      const row = mondelezRowById(t.dataset.mdzRow);
       if (row) row.selected = t.checked;
       updateMondelezSelectCount();
       return;
@@ -1145,7 +1181,7 @@ export async function initMondelezPage() {
     const rowId = t.dataset.mdzRow;
     openDriverAutocomplete(t, "mondelez", (drv) => {
       t.value = drv.name;
-      const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
+      const row = mondelezRowById(rowId);
       if (row) {
         acknowledgeDnuAssignment(drv, row.driverId);
         markFieldDirty(dirtyMondelezFields, row.id, "driverName");
@@ -1165,7 +1201,7 @@ export async function initMondelezPage() {
     const rowId = t.dataset.mdzRow;
     const field = t.dataset.mdzField;
     if (!rowId || !field) return;
-    const row = getMondelezRowsForDate(state.activeDate).find((r) => r.id === rowId);
+    const row = mondelezRowById(rowId);
     if (!row) return;
     markFieldDirty(dirtyMondelezFields, row.id, field);
     if (field === 'driverName') markFieldDirty(dirtyMondelezFields, row.id, 'driverId');
