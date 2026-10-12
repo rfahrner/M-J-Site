@@ -223,6 +223,9 @@ jobs:
           fs.writeFileSync(checkPath, checked);
           NODE
 
+      - name: Mondelez row menu and cancellation regression tests
+        run: node --test scripts/mondelez-row-menu.test.mjs
+
       - name: Type-check paperwork Edge Function
         run: deno check --node-modules-dir=auto supabase/functions/paperwork-submit/.ci-check.ts
 

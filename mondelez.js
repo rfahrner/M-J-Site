@@ -70,6 +70,8 @@ function blankMondelezRow(locationKey) {
     fsc: "", additionalCharges: "", revenueTotal: "", revenueManual: false,
     routeImagePath: "", routeImagePaths: [], routeImageUrl: "", routeImageUrls: [],
     tonu: false, highlighted: false, shiftComplete: false, selected: false,
+    calledOff: false, calledOffReason: "", calledOffAt: null,
+    loadCancelled: false, loadCancelledReason: "", loadCancelledAt: null,
     createdAt: null, updatedAt: null, addedAt: null,
   };
 }
@@ -99,6 +101,12 @@ function mondelezRowToDbRow(row, dKey) {
     tonu: !!row.tonu,
     highlighted: !!row.highlighted,
     shift_complete: !!row.shiftComplete,
+    called_off: !!row.calledOff,
+    called_off_reason: row.calledOffReason || null,
+    called_off_at: row.calledOffAt || null,
+    load_cancelled: !!row.loadCancelled,
+    load_cancelled_reason: row.loadCancelledReason || null,
+    load_cancelled_at: row.loadCancelledAt || null,
   };
 }
 function parseMondelezImagePaths(value) {
@@ -128,6 +136,8 @@ function mondelezRowFromDbRow(r) {
     routeImagePaths: parseMondelezImagePaths(r.route_image_path),
     routeImageUrl: "", routeImageUrls: [], // filled in by batchSignImageUrls after loading
     tonu: !!r.tonu, highlighted: !!r.highlighted, shiftComplete: !!r.shift_complete, selected: false,
+    calledOff: !!r.called_off, calledOffReason: r.called_off_reason || "", calledOffAt: r.called_off_at || null,
+    loadCancelled: !!r.load_cancelled, loadCancelledReason: r.load_cancelled_reason || "", loadCancelledAt: r.load_cancelled_at || null,
     createdAt: r.created_at || null, updatedAt: r.updated_at || null, addedAt: null,
   };
 }
@@ -328,26 +338,22 @@ function mondelezLocationLabel(key) {
   const loc = MONDELEZ_LOCATIONS.find((l) => l.key === key);
   return loc ? loc.label : key;
 }
-// Right-click a row to move it to a different Mondelez location tab (e.g. a
-// load built under the wrong tab by mistake) without having to delete and
-// recreate it — everything on the row carries over, only the location changes.
+// Keep the load-level actions in the same order as Atlanta's row menu.
 function openMondelezRowContextMenu(rowId, x, y) {
   closeContextMenu();
   const row = mondelezRowById(rowId);
   if (!row) return;
   const items = [
     { label: row.tonu ? "Un-TONU" : "TONU", action: () => toggleMondelezTonu(rowId) },
-    { label: row.highlighted ? "Remove Highlight" : "Highlight", action: () => toggleMondelezHighlight(rowId) },
-    { label: row.shiftComplete ? "Mark Shift Incomplete" : "Shift Complete", action: () => toggleMondelezShiftComplete(rowId) },
-    { label: "Load Details", action: () => openMondelezLoadDetailsModal(rowId) },
-    { label: "Text Now", action: () => textMondelezDriverForRow(rowId) },
-    { label: "Email Now", action: () => emailMondelezRouteInfo(rowId) },
-    { label: "Delete", action: () => deleteMondelezRow(rowId), danger: true },
+    { label: row.calledOff ? "Un-mark driver fall off" : "Cancellation - driver fall off", action: () => openMondelezCancellation(rowId, "calledOff") },
+    { label: row.loadCancelled ? "Un-mark Mondelez cancellation" : "Mondelez cancellation - non-TONU", action: () => openMondelezCancellation(rowId, "loadCancelled") },
+    { label: row.shiftComplete ? "Mark Shift Incomplete" : "Shift Complete", action: () => toggleMondelezShiftComplete(rowId), success: true },
+    { label: `Delete entire load ${row.aljexNumber || "(no Aljex#)"}`, action: () => deleteMondelezRow(rowId), danger: true },
   ];
   const menu = document.createElement("div");
   menu.className = "row-context-menu";
   menu.id = "row-context-menu";
-  menu.innerHTML = items.map((it, i) => `<button class="context-menu-item${it.danger ? " context-menu-item-danger" : ""}" data-idx="${i}">${it.label}</button>`).join("");
+  menu.innerHTML = items.map((it, i) => `<button class="context-menu-item${it.danger ? " context-menu-item-danger" : ""}${it.success ? " context-menu-item-success" : ""}" data-idx="${i}">${escapeHtml(it.label)}</button>`).join("");
   document.body.appendChild(menu);
   menu.style.left = x + "px";
   menu.style.top = y + "px";
@@ -357,6 +363,52 @@ function openMondelezRowContextMenu(rowId, x, y) {
   $all(".context-menu-item", menu).forEach((btn, i) => {
     btn.addEventListener("click", () => { items[i].action(); closeContextMenu(); });
   });
+}
+async function saveMondelezCancellation(row, field, reason, enabled) {
+  const fields = [field, `${field}Reason`, `${field}At`];
+  const previous = Object.fromEntries(fields.map(key => [key, row[key]]));
+  Object.assign(row, { [field]: enabled, [`${field}Reason`]: enabled ? reason : "", [`${field}At`]: enabled ? new Date().toISOString() : null });
+  fields.forEach(key => markFieldDirty(dirtyMondelezFields, row.id, key));
+  const saved = await saveMondelezRowNow(row);
+  if (!saved) {
+    Object.assign(row, previous);
+    const dirty = dirtyMondelezFields.get(row.id);
+    fields.forEach(key => dirty?.delete(key));
+    if (dirty && !dirty.size) dirtyMondelezFields.delete(row.id);
+    return false;
+  }
+  renderMondelezTable();
+  setDriverSyncStatus(enabled ? "Mondelez load cancelled — reason saved to Accounting with no money applied." : "Mondelez cancellation removed.", "success");
+  return true;
+}
+async function openMondelezCancellation(rowId, field) {
+  const row = mondelezRowById(rowId);
+  if (!row) return;
+  if (row[field]) { await saveMondelezCancellation(row, field, "", false); return; }
+  document.getElementById("mdz-cancellation-overlay")?.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "mdz-cancellation-overlay";
+  overlay.className = "overlay";
+  overlay.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mdz-cancellation-title">
+    <div class="modal-header"><h2 id="mdz-cancellation-title">${field === "calledOff" ? "Cancellation - driver fall off" : "Mondelez cancellation - non-TONU"}</h2></div><div class="modal-body">
+    <p>Load ${escapeHtml(row.aljexNumber || "(no Aljex#)")} — ${escapeHtml(row.driverName || "no driver")}</p>
+    <label for="mdz-cancellation-reason">Reason</label><textarea id="mdz-cancellation-reason" rows="4" class="cell-input" required></textarea>
+    <p class="mdz-cancellation-error" role="alert"></p>
+    </div><div class="modal-footer"><button type="button" class="btn btn-ghost" data-cancel>Close</button><button type="button" class="btn" data-save>Save cancellation</button></div>
+  </div>`;
+  document.body.appendChild(overlay);
+  const reason = overlay.querySelector("textarea");
+  const save = overlay.querySelector("[data-save]");
+  const close = overlay.querySelector("[data-cancel]");
+  close.addEventListener("click", () => { if (!save.disabled) overlay.remove(); });
+  save.addEventListener("click", async () => {
+    const text = reason.value.trim();
+    if (!text) { overlay.querySelector("[role=alert]").textContent = "Enter the cancellation reason."; reason.focus(); return; }
+    save.disabled = true; close.disabled = true;
+    if (await saveMondelezCancellation(row, field, text, true)) overlay.remove();
+    else { save.disabled = false; close.disabled = false; overlay.querySelector("[role=alert]").textContent = "Cancellation was not saved. Try again."; }
+  });
+  reason.focus();
 }
 function moveMondelezRowToLocation(rowId, newLocationKey) {
   const row = mondelezRowById(rowId);
@@ -401,7 +453,7 @@ function mondelezRowHtml(row) {
   const drv = row.driverId ? findDriver(row.driverId) : null;
   const displayName = drv ? drv.name : row.driverName;
   const showLocationCol = mondelezState.activeTab === "combined";
-  const rowClasses = [row.tonu ? "is-tonu" : "", row.highlighted ? "is-row-pinned" : "", row.addedAt ? "is-new" : "", row.shiftComplete ? "shift-complete-tint" : ""].join(" ");
+  const rowClasses = [row.tonu ? "is-tonu" : "", row.highlighted ? "is-row-pinned" : "", row.addedAt ? "is-new" : "", row.shiftComplete ? "shift-complete-tint" : "", (row.calledOff || row.loadCancelled) ? "is-load-cancelled" : ""].join(" ");
   if (row.shiftComplete) {
     // Minimized to a pill once complete, same idea as Atlanta's
     // completed-trip chips — nothing left to edit inline, just a quick
@@ -416,7 +468,7 @@ function mondelezRowHtml(row) {
       ${MDZ_EMAIL_LOCATIONS.has(row.location) ? `<button class="text-btn" data-action="email-mdz-driver" data-mdz-row="${row.id}" title="Email route info">Email</button>` : ""}
     </td>
     <td colspan="${collapsedCols}">
-      <button type="button" class="trip-chip trip-segment-done" data-open-mdz-load="${row.id}" title="Closed out — click to view or edit">${escapeHtml(row.aljexNumber || "(no Aljex#)")} — ${escapeHtml(displayName || "no driver")}</button>
+      <button type="button" class="trip-chip trip-segment-done" data-open-mdz-load="${row.id}" title="Closed out — click to view or edit">${escapeHtml(row.aljexNumber || "(no Aljex#)")} — ${escapeHtml(displayName || "no driver")}${row.calledOff || row.loadCancelled ? " — CANCELLED" : ""}</button>
     </td>
   </tr>`;
   }
@@ -441,9 +493,9 @@ function mondelezRowHtml(row) {
     <td class="col-mdz-miles"><input class="cell-input small" style="width:52px;" inputmode="decimal" data-mdz-row="${row.id}" data-mdz-field="miles" value="${escapeHtml(row.miles)}"></td>
     <td class="col-mdz-stops"><input class="cell-input small" style="width:40px;" inputmode="numeric" data-mdz-row="${row.id}" data-mdz-field="stopCount" value="${escapeHtml(row.stopCount)}"></td>
     <td class="col-mdz-fsc"><input class="cell-input small" style="width:52px;" placeholder="FSC" data-mdz-row="${row.id}" data-mdz-field="fsc" value="${escapeHtml(row.fsc)}"></td>
-    <td class="col-mdz-revenue"><input class="cell-input small" style="width:70px; font-weight:800;" data-mdz-row="${row.id}" data-mdz-field="revenueTotal" value="${escapeHtml(row.revenueTotal)}" title="${row.revenueManual ? "Manually overridden" : "Auto-calculated"}"></td>
-    <td class="col-mdz-carrierpay"><input class="cell-input small" style="width:64px;" placeholder="Carrier Pay" data-mdz-row="${row.id}" data-mdz-field="carrierPay" value="${escapeHtml(row.carrierPay)}"></td>
-    <td class="col-mdz-notes"><input class="cell-input" placeholder="Status / Notes" data-mdz-row="${row.id}" data-mdz-field="notes" value="${escapeHtml(row.notes)}"></td>
+    <td class="col-mdz-revenue">${row.calledOff || row.loadCancelled ? `<span class="static-text">cancelled</span>` : `<input class="cell-input small" style="width:70px; font-weight:800;" data-mdz-row="${row.id}" data-mdz-field="revenueTotal" value="${escapeHtml(row.revenueTotal)}" title="${row.revenueManual ? "Manually overridden" : "Auto-calculated"}">`}</td>
+    <td class="col-mdz-carrierpay">${row.calledOff || row.loadCancelled ? `<span class="static-text">cancelled</span>` : `<input class="cell-input small" style="width:64px;" placeholder="Carrier Pay" data-mdz-row="${row.id}" data-mdz-field="carrierPay" value="${escapeHtml(row.carrierPay)}">`}</td>
+    <td class="col-mdz-notes">${row.calledOff || row.loadCancelled ? `<span class="static-text" title="${escapeHtml(row.loadCancelledReason || row.calledOffReason)}">CANCELLED — ${escapeHtml(row.loadCancelledReason || row.calledOffReason)}</span>` : ""}<input class="cell-input" placeholder="Status / Notes" data-mdz-row="${row.id}" data-mdz-field="notes" value="${escapeHtml(row.notes)}"></td>
     <td class="col-mdz-image">
       <div class="mdz-image-dropzone" tabindex="0" data-action="image-dropzone" data-mdz-row="${row.id}" title="Click to browse, or drag/paste an image here">
         ${(row.routeImageUrls || []).filter(Boolean).length
@@ -462,7 +514,8 @@ function mondelezRowHtml(row) {
 function renderMondelezTable() {
   if (!$("#mondelez-table")) return;
   const rows = getMondelezDisplayRows(state.activeDate);
-  const displayRows = [...rows].sort((a, b) => (a.shiftComplete ? 1 : 0) - (b.shiftComplete ? 1 : 0));
+  const rank = row => row.calledOff || row.loadCancelled ? 2 : row.shiftComplete ? 1 : 0;
+  const displayRows = [...rows].sort((a, b) => rank(a) - rank(b));
   const showLocationCol = mondelezState.activeTab === "combined";
   const thead = `<thead><tr>
     <th class="pin pin-select"><div id="mdz-select-count" class="board-select-count"></div><input type="checkbox" class="chk" id="mdz-select-all" title="Select all"></th>
@@ -635,13 +688,19 @@ async function deleteMondelezRow(rowId) {
   if (!found) return;
   const { row, rows } = found;
   if (!confirm(`Delete this Mondelez load${row.aljexNumber ? ` (${row.aljexNumber})` : ""}? This can't be undone.`)) return;
+  if (row.dbId && supabaseClient) {
+    try {
+      const { error } = await supabaseClient.from(MONDELEZ_TABLE).delete().eq("id", row.dbId);
+      if (error) throw error;
+    } catch (e) {
+      setDriverSyncStatus(`Couldn't delete this Mondelez load (${e.message || e}).`, "error");
+      return;
+    }
+  }
+  clearTimeout(mondelezSaveTimers.get(row.id));
   const idx = rows.findIndex((r) => r.id === rowId);
   if (idx !== -1) rows.splice(idx, 1);
   renderMondelezTable();
-  if (row.dbId && supabaseClient) {
-    try { await supabaseClient.from(MONDELEZ_TABLE).delete().eq("id", row.dbId); }
-    catch (e) { console.error("deleteMondelezRow failed:", e); }
-  }
 }
 /* ---------------- Load Details modal ---------------- */
 let mdzLoadDetailsRowId = null;
@@ -649,6 +708,7 @@ let mdzLoadDetailsHistory = [];
 
 function mondelezHistoryFieldLabel(fieldName) {
   const labels = {
+    cancellation: "Cancellation",
     location: "Location",
     shift_date: "Date",
     aljex_number: "Aljex #",
