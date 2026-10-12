@@ -1020,3 +1020,27 @@ existing send-modal `onSent` path acknowledges a prompt; cancelling does not.
 A stale draft cannot acknowledge a newer dispatch.
 Carrier Docs PRO/app reminder alerts are paused via CARRIER_DOCS_ALERTS_PAUSED;
 pre-shift ETA alerts remain enabled. West Chester's Mobile Link key is 6116.
+
+### Mondelez load-row menu parity (2026-10-12)
+
+Right-clicking a native Mondelez load uses Atlanta's load-level action order:
+TONU, driver fall-off cancellation, Mondelez non-TONU cancellation, Shift
+Complete, and a clearly labeled entire-load delete. Native Mondelez has one
+row per load, so there is no separate child-route delete. Text/Email and load
+details remain available on the row.
+
+Cancellation captures a required reason and uses dirty-field saves against the
+row's own ID/date, including combined and Night Shift views. The database
+transaction records the cancellation in Mondelez history, creates a linked
+zero-dollar cancelled Accounting record, and adds a driver cancellation note
+when the load has a linked driver. Do not use load_notes.shift_id or
+source_shift_id for a mondelez_loads ID. Original source rates/notes survive;
+a private server-owned backup restores existing Accounting amounts and manual
+flags on undo. Sent/released/deleted Accounting records require resolution in
+Accounting before changing cancellation. A cancellation guard keeps overnight
+pushes and later Accounting edits from billing a cancelled source load.
+
+Regression checks: scripts/mondelez-row-menu.test.mjs (actual handlers plus
+migration in PGlite), scripts/mondelez-night-shift-edit.test.mjs, and the actual
+Chromium page sandbox/mondelez-row-menu.spec.mjs. Failed deletes must retain the
+row on screen; cancellation failures must allow retry without claiming saved.

@@ -40,6 +40,7 @@ function setup({ nightShift = true } = {}) {
     mondelezState: { rowsByDate: { [TODAY]: [todayRow], [TOMORROW]: [carried, lateTomorrow] }, activeTab: 'combined' },
     state: { activeDate: TODAY, nightShift },
     dirtyMondelezFields: new Map(),
+    mondelezSaveTimers: new Map(),
     markFieldDirty: () => {},
     saveMondelezRowNow: (row) => { saved.push(row.id); return Promise.resolve(); },
     renderMondelezTable: () => { rendered.push(1); },
