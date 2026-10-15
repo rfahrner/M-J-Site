@@ -33,6 +33,27 @@ Read this file before making changes. This is a live dispatch/load-board applica
   manual step at cutover.
 - Backend: Supabase project `ygsapysqzwrpcimgvaqx`
 - Main board logic is concentrated in `loadboard.js`; several compatibility/helper modules are deliberately loaded dynamically from `loadboard-toolbar-controls.js` to avoid circular-import startup failures.
+- **A helper must not TOUCH a `loadboard.js` import while its own module body
+  runs.** They import each other, so loadboard.js is still evaluating and its
+  `export let` bindings are in their temporal dead zone -- reading one throws
+  `Cannot access 'supabaseClient' before initialization`, and a
+  `typeof x === 'function'` guard does NOT save you (evaluating the identifier
+  throws first). The throw then aborts loadboard.js's own evaluation, so
+  nothing is ever initialized and every later reader throws too. On
+  2026-10-15 one realtime subscription inside an `init()` called from module
+  scope took **10 of 11 pages** down -- empty board, blank date picker --
+  and `storage-compat.js` threw the same error as a cascade. Defer with
+  `setTimeout(fn, 0)`.
+- **That failure also disables the stale-tab protection**, because
+  `site-version-watch.js` loads through the same chain. Measured: zero HEAD
+  requests for `/loadboard.js` on the broken build, so an open tab never
+  notices the fix and never reloads itself. A boot failure therefore does not
+  heal when you deploy the repair -- every open tab needs a hard refresh.
+  That is why it must be caught before it ships.
+  `sandbox/page-boots.spec.mjs` loads every page in real Chromium and fails on
+  exactly this; nothing in `scripts/` can see it, because jsdom imports
+  modules in isolation and never reproduces the browser's circular-import
+  order.
 
 ## Working style
 

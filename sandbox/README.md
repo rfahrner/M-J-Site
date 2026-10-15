@@ -7,6 +7,7 @@ exercised before it goes near production.
 node sandbox/serve.mjs . 8787 &     # serves the repo exactly as Pages does
 node sandbox/board-scroll.spec.mjs  # board holds its scroll position
 node sandbox/text-group.spec.mjs    # Text a Group modal opens and behaves
+node sandbox/page-boots.spec.mjs    # every page finishes evaluating its modules
 ```
 
 ## Why this exists alongside scripts/
