@@ -123,7 +123,7 @@ jobs:
       - name: Test Accounting Refresh daily rates and manual money protection
         run: |
           node scripts/accounting-refresh.test.mjs
-          node --test scripts/accounting-refresh-daily-rates.test.mjs scripts/accounting-money-queue.test.mjs scripts/accounting-clear-rate.test.mjs
+          node --test scripts/accounting-refresh-daily-rates.test.mjs scripts/accounting-money-queue.test.mjs scripts/accounting-clear-rate.test.mjs scripts/accounting-row-delete.test.mjs
 
       - name: Test Mondelez accounting tab
         run: node scripts/accounting-mondelez-tab.test.mjs

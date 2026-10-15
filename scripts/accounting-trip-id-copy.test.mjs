@@ -12,8 +12,7 @@
  *      textContent would silently hand over the wrong one on Atlanta.
  *   2. The menu names the column it is standing on -- "Trip ID" on
  *      Atlanta, "Route ID" on Delaware, matching the renamed header.
- *   3. Right-clicking anywhere else on the sheet leaves the browser's own
- *      menu alone. Accounting is a page people copy cells out of.
+ *   3. Every load row offers Delete from Accounting, even without a Trip ID.
  *   4. It closes on click-away, Escape and scroll. Accounting never runs
  *      initBoardPage(), so loadboard.js's closers are NOT on this page;
  *      this module owns them. Deleting them as "duplicates" would leave
@@ -66,6 +65,7 @@ const dom = new JSDOM(`<!doctype html><body>
 
 globalThis.document = dom.window.document;
 globalThis.window = dom.window;
+globalThis.CustomEvent = dom.window.CustomEvent;
 Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.window.navigator });
 
 let clipboard = null;
@@ -102,7 +102,7 @@ const ev = rightClick(pill(0));
 check('the browser menu is suppressed', ev.defaultPrevented, true);
 check('our menu opened', !!menu(), true);
 check('it names the column and the value',
-  menu().textContent, 'Copy Trip ID 2210556');
+  menu().textContent, 'Copy Trip ID 2210556Delete from Accounting');
 check('it reuses the board menu styling', menu().className, 'row-context-menu');
 
 console.log('\n3. choosing it copies what the pill says');
@@ -117,22 +117,28 @@ console.log('\n4. Delaware names the column it is standing on');
 $('#acct-location-tabs .location-tab[data-location="atlanta"]').classList.remove('is-active');
 $('#acct-location-tabs .location-tab[data-location="delaware"]').classList.add('is-active');
 rightClick(pill(0));
-check('the item says Route ID there', menu().textContent, 'Copy Route ID 2210556');
+check('the item says Route ID there', menu().textContent, 'Copy Route ID 2210556Delete from Accounting');
 $('#acct-location-tabs .location-tab[data-location="delaware"]').classList.remove('is-active');
 $('#acct-location-tabs .location-tab[data-location="atlanta"]').classList.add('is-active');
 mod.closeAccountingContextMenu();
 
-console.log('\n5. a pill with no Trip ID recorded keeps the browser menu');
+console.log('\n5. an empty identifier still offers deletion');
 const dashEv = rightClick(pill(1));
-check('nothing was suppressed', dashEv.defaultPrevented, false);
-check('and no menu opened', menu(), null);
+check('row menu suppresses browser menu', dashEv.defaultPrevented, true);
+check('empty identifier still offers deletion', menu().textContent, 'Delete from Accounting');
+mod.closeAccountingContextMenu();
 
-console.log('\n6. the rest of the sheet keeps the browser menu');
+console.log('\n6. other cells in the load row also offer deletion');
 const cellEv = rightClick($('.plain-cell'));
-check('a normal cell is left alone', cellEv.defaultPrevented, false);
-check('no menu opened', menu(), null);
+check('normal row cell opens menu', cellEv.defaultPrevented, true);
+check('row offers deletion', menu().textContent, 'Delete from Accounting');
+mod.closeAccountingContextMenu();
 const loadEv = rightClick($('.acct-load-number'));
-check('the Load # cell is left alone too', loadEv.defaultPrevented, false);
+check('the Load # cell opens the same row menu', loadEv.defaultPrevented, true);
+let deletionId=null;document.addEventListener('accounting:delete-request',e=>{deletionId=e.detail.accountingId;});
+leftClick(menu().querySelector('[data-action="acct-delete"]'));
+check('deletion targets the actual accounting ID',deletionId,'101');
+check('deletion closes the menu',menu(),null);
 
 console.log('\n7. the menu goes away the three ways a menu should');
 rightClick(pill(0));
