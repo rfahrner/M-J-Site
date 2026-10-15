@@ -320,8 +320,34 @@ exact: our own mutations are never seen, anyone else's always are, and no
 timing is involved. The observer also tracks the body ELEMENT rather than
 setting a flag on it -- alerts.js rebuilds the whole widget in some paths, and
 a flag goes with the old node, leaving the observer watching something
-detached. `scripts/alert-extras-survive-redraw.test.mjs` pins both, and fails
-on the old code with the collision case and the replaced-element case.
+detached.
+
+**Two more causes, found only by measuring in a real browser.** The
+suppression window was not the whole story, and fixing it alone changed
+nothing a dispatcher would notice:
+
+- **The observer was never created.** `installAlertObserver()` ran in
+  `init()`, but alerts.js builds `#alert-widget-body` when it MOUNTS the
+  widget, which is later -- so the install found no element and returned. The
+  only thing restoring a wiped alert was the 60-second interval, which is
+  exactly the reported symptom. It installs from `refreshExtraAlerts()` now,
+  where the element certainly exists.
+- **Recomputing takes three database round trips.** Even with a working
+  observer the alert was gone for most of a second on every wipe. The last
+  rendered HTML is cached and repainted SYNCHRONOUSLY in the observer
+  callback (`restoreExtrasNow()`), so the wipe never reaches the screen; the
+  refresh behind it then corrects anything that really changed. A stale alert
+  for one frame beats a missing one for a second.
+
+Measured in `sandbox/alert-stability.spec.mjs` at 120ms query latency, six
+redraws: **production and the suppression-window fix both absorbed 0 of 6**
+(the alert vanished and stayed gone); the full fix absorbs **6 of 6 with a
+worst gap of 0-1ms**. Nothing in `scripts/` could have told the difference --
+jsdom has no real event loop and the fake database answered instantly, which
+is why the fake now supports `window.__SANDBOX_LATENCY_MS`. Startup latency
+(about 1s to first paint) is measured separately and is not a drop-out.
+`scripts/alert-extras-survive-redraw.test.mjs` pins the behaviour going
+forward.
 
 `alerts.js` keeps a dismissed-key set (localStorage, scoped to today)
 and filters it out of every scan. Repeating rules roll a tier into their key, so

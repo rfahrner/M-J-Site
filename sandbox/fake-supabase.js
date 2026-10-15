@@ -16,11 +16,21 @@
 (function () {
   const rows = () => (window.__SANDBOX_ROWS || {});
 
+  // window.__SANDBOX_LATENCY_MS makes queries take time, which some bugs need.
+  // With an instant database every re-render looks seamless; a dispatcher's
+  // does not. A gap measured at 0ms latency is the FLOOR, not the experience.
+  const latency = () => Number(window.__SANDBOX_LATENCY_MS || 0);
+
   function result(data) {
     // A PostgREST builder is a thenable that also answers every filter method
     // by returning itself. Tests care about what comes back, not the WHERE.
     const builder = {
-      then: (resolve) => resolve({ data, error: null, count: data.length }),
+      then: (resolve) => {
+        const ms = latency();
+        const payload = { data, error: null, count: data.length };
+        if (ms > 0) { setTimeout(() => resolve(payload), ms); return; }
+        resolve(payload);
+      },
       catch: undefined, // deliberately absent -- the real builder has none either
     };
     const passthrough = ['select', 'eq', 'neq', 'in', 'is', 'not', 'gte', 'lte', 'gt', 'lt',

@@ -36,6 +36,12 @@ let refreshTimer = null;
 // installAlertObserver().
 let alertObserver = null;
 let observedAlertBody = null;
+// What we last painted. alerts.js wipes the widget on its own 60-second scan,
+// and recomputing takes three database round trips -- on a real connection
+// that is most of a second with the alert MISSING. Repainting from this first
+// makes the wipe invisible; the refresh behind it then corrects anything that
+// actually changed.
+let lastExtrasHtml = [];
 
 function currentFile() { return location.pathname.split('/').pop() || ''; }
 function currentLocation() { return BOARD_FILE_TO_LOCATION[currentFile()] || null; }
@@ -270,34 +276,47 @@ async function dispatchedRouteAlerts() {
   return extras;
 }
 
+// One place that writes our alerts, with the observer off so our own writes
+// are never mistaken for someone else's.
+function paintExtras(body, htmlList) {
+  if (alertObserver) alertObserver.disconnect();
+  try {
+    body.querySelectorAll('.dispatch-extra-alert').forEach((el) => el.remove());
+    for (const html of htmlList) body.insertAdjacentHTML('beforeend', html);
+  } finally {
+    if (alertObserver && observedAlertBody === body) alertObserver.observe(body, { childList: true });
+  }
+  const count = body.querySelectorAll('.alert-chat-item').length;
+  const countEl = document.getElementById('alert-widget-count');
+  if (countEl) countEl.textContent = count ? `(${count})` : '';
+}
+
+// Synchronous, inside the observer callback: no await, no debounce, so the
+// wipe and the repaint land in the same frame and nothing blinks.
+function restoreExtrasNow() {
+  if (!lastExtrasHtml.length) return;
+  const body = document.getElementById('alert-widget-body');
+  if (!body || body.querySelector('.dispatch-extra-alert')) return;
+  paintExtras(body, lastExtrasHtml);
+}
+
 async function refreshExtraAlerts() {
   clearTimeout(refreshTimer);
   const body = document.getElementById('alert-widget-body');
   const widget = document.getElementById('alert-widget');
   if (!body || !widget || !currentLocation()) return;
+  // Install HERE, not only in init(). alerts.js builds #alert-widget-body when
+  // it mounts the widget, which is AFTER this module's init() runs -- so the
+  // install found no element, returned early, and the observer was never
+  // created. Nothing restored a wiped alert except the 60-second interval,
+  // which is exactly the "there for a bit and then it disappears" everyone
+  // was seeing. By the time we are rendering, the element certainly exists.
+  installAlertObserver();
   let extras;
   try { extras = [...await houstonPreShiftAlerts(), ...await carrierDocsAlerts(), ...await dispatchedRouteAlerts()]; }
   catch(error) { console.error('Could not refresh dispatch reminders',error);return; }
-  // Stop watching while WE write, then watch again. This used to be a 450ms
-  // time window, and a time window cannot tell our own mutation from
-  // alerts.js's: both run on 60-SECOND timers, so once they drifted into the
-  // same 450ms they stayed there, alerts.js's innerHTML wipe was swallowed as
-  // if it were ours, and the call alert vanished until the next minute tick.
-  // Reported as "the call driver alert keeps disappearing and coming back
-  // after a few minutes". disconnect() also drops any records already queued,
-  // which is right: we are about to render the current truth anyway.
-  if (alertObserver) alertObserver.disconnect();
-  try {
-    body.querySelectorAll('.dispatch-extra-alert').forEach((el) => el.remove());
-    for (const extra of extras) body.insertAdjacentHTML('beforeend', extra.html);
-  } finally {
-    if (alertObserver) alertObserver.observe(body, { childList: true });
-  }
-  // Acknowledgments are shared through the database; refresh on changes so
-  // other dispatchers' panels clear without waiting for the minute timer.
-  const count = body.querySelectorAll('.alert-chat-item').length;
-  const countEl = document.getElementById('alert-widget-count');
-  if (countEl) countEl.textContent = count ? `(${count})` : '';
+  lastExtrasHtml = extras.map((extra) => extra.html);
+  paintExtras(body, lastExtrasHtml);
   if (extras.length && !widget.classList.contains('expanded')) widget.classList.add('blinking');
 }
 
@@ -316,7 +335,13 @@ function installAlertObserver() {
   if (observedAlertBody === body && alertObserver) return;
   if (alertObserver) alertObserver.disconnect();
   observedAlertBody = body;
-  alertObserver = new MutationObserver(() => scheduleRefresh(150));
+  alertObserver = new MutationObserver(() => {
+    // Repaint first so the wipe is never visible, THEN reconcile with the
+    // database. The repaint is what the dispatcher sees; the refresh is what
+    // makes it true.
+    restoreExtrasNow();
+    scheduleRefresh(150);
+  });
   alertObserver.observe(body, { childList:true });
 }
 
