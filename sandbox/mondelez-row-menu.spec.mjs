@@ -22,8 +22,8 @@ try{
  const input=page.locator('#mondelez-table input[data-mdz-field="aljexNumber"]').filter({hasText:''});await input.first().waitFor();
  const row=page.locator('#mondelez-table tbody tr').filter({has:page.locator('input[data-mdz-field="aljexNumber"][value="2012345"]')});
  await row.locator('input[data-mdz-field="aljexNumber"]').click({button:'right'});
- assert.deepEqual(await page.locator('#row-context-menu button').allTextContents(),['TONU','Cancellation - driver fall off','Mondelez cancellation - non-TONU','Shift Complete','Delete entire load 2012345']);
- await page.getByRole('button',{name:'Mondelez cancellation - non-TONU',exact:true}).click();
+ assert.deepEqual(await page.locator('#row-context-menu button').allTextContents(),['TONU','Cancellation - driver fall off','Mondelez cancelled shift - non-TONU','Shift Complete','Delete entire load 2012345']);
+ await page.getByRole('button',{name:'Mondelez cancelled shift - non-TONU',exact:true}).click();
  const modal=page.locator('#mdz-cancellation-overlay');await modal.waitFor();
  const box=await modal.locator('.modal').boundingBox();assert.ok(box&&box.width>200&&box.x>=0&&box.y>=0);
  await page.locator('#mdz-cancellation-reason').fill('Customer cancelled');await modal.getByRole('button',{name:'Save cancellation'}).click();await modal.waitFor({state:'detached'});
@@ -31,7 +31,7 @@ try{
  assert.equal(await page.locator('#mondelez-table tr.is-load-cancelled .col-mdz-carrierpay').innerText(),'cancelled');
  assert.equal(await page.locator('#mondelez-table tr.is-load-cancelled input[data-mdz-field="notes"]').inputValue(),'Keep my notes');
  let writes=await page.evaluate(()=>window.__menuWrites);assert.equal(writes.length,1);assert.deepEqual(writes[0].ids,[41]);assert.deepEqual(Object.keys(writes[0].patch).sort(),['load_cancelled','load_cancelled_at','load_cancelled_reason']);
- await page.locator('#mondelez-table tr.is-load-cancelled input[data-mdz-field="aljexNumber"]').click({button:'right'});await page.getByRole('button',{name:'Un-mark Mondelez cancellation',exact:true}).click();
+ await page.locator('#mondelez-table tr.is-load-cancelled input[data-mdz-field="aljexNumber"]').click({button:'right'});await page.getByRole('button',{name:'Un-mark Mondelez cancelled shift',exact:true}).click();
  await page.waitForSelector('#mondelez-table input[data-mdz-field="carrierPay"][value="600"]');
  assert.equal(await page.locator('#mondelez-table input[data-mdz-field="revenueTotal"][value="950"]').count(),1);
  await page.reload({waitUntil:'networkidle'});await page.waitForSelector('#mondelez-table input[data-mdz-field="aljexNumber"]');

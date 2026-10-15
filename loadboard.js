@@ -6178,7 +6178,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     const items = [
       { label: row.tonu ? "Un-TONU" : "TONU", action: () => toggleTonu(rowId) },
       { label: row.calledOff ? "Un-mark driver fall off" : "Cancellation - driver fall off", action: () => row.calledOff ? unmarkDriverCalledOff(rowId) : openCalledOffModal(rowId) },
-      { label: row.loadCancelled ? "Un-mark Kroger cancellation" : "Kroger cancellation - non-TONU", action: () => row.loadCancelled ? unmarkLoadCancelled(rowId) : openCancelLoadModal(rowId) },
+      { label: row.loadCancelled ? "Un-mark Kroger cancelled shift" : "Kroger cancelled shift - non-TONU", action: () => row.loadCancelled ? unmarkLoadCancelled(rowId) : openCancelLoadModal(rowId) },
       ...(canDeleteRoute ? [{ label: `Delete route ${routeLabelForConfirm(trip)} only`, action: () => deleteTrip(rowId, trip.id), danger: true }] : []),
       { label: completionLabel, action: () => toggleShiftComplete(rowId), success: true },
       { label: `Delete entire load ${loadLabelForConfirm(row)}`, action: () => deleteRow(rowId), danger: true },

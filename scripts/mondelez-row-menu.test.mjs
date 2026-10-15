@@ -31,7 +31,7 @@ function fixture(){
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
 test('actual row menu matches Atlanta order, labels, styles and escaped load number',()=>{
  const f=fixture();try{
-  const b=f.menu(f.row.id);assert.deepEqual(b.map(x=>x.textContent),['TONU','Cancellation - driver fall off','Mondelez cancellation - non-TONU','Shift Complete','Delete entire load <img src=x onerror=alert(1)>']);
+  const b=f.menu(f.row.id);assert.deepEqual(b.map(x=>x.textContent),['TONU','Cancellation - driver fall off','Mondelez cancelled shift - non-TONU','Shift Complete','Delete entire load <img src=x onerror=alert(1)>']);
   assert.ok(b[3].classList.contains('context-menu-item-success'));assert.ok(b[4].classList.contains('context-menu-item-danger'));assert.equal(f.dom.window.document.querySelector('#row-context-menu img'),null);
   b[0].click();assert.equal(f.row.tonu,true);assert.equal(f.dom.window.document.getElementById('row-context-menu'),null);
   f.menu(f.row.id)[3].click();assert.equal(f.row.shiftComplete,true);
