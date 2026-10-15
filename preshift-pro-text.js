@@ -246,6 +246,7 @@ async function dispatchedRouteAlerts() {
     const rowTrips = (trips || []).filter(t=>t.shift_id===shift.id).sort((a,b)=>a.trip_number-b.trip_number);
     for (const trip of rowTrips) {
       const callRequired = isCallRequiredRoute(trip);
+      // Backhaul/salvage affects texting only; a PA/FA route still needs the call.
       // Do not clear a call alert for a newly entered route before dispatch time exists.
       // Unlike routine text reminders, this call alert is due as soon as the route is entered.
       const prompt = dispatchRoutePrompt(shift,trip,now,rowTrips);
