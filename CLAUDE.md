@@ -1066,6 +1066,22 @@ migration in PGlite), scripts/mondelez-night-shift-edit.test.mjs, and the actual
 Chromium page sandbox/mondelez-row-menu.spec.mjs. Failed deletes must retain the
 row on screen; cancellation failures must allow retry without claiming saved.
 
+### PA/FA call alerts are same-day only (2026-10-15)
+
+`dispatchedRouteAlerts()` scans **yesterday, today and tomorrow** on purpose --
+the routine text reminders need the neighbouring days for their timing math.
+The call branch inherited that window and never narrowed it back, so an
+unacknowledged PA route from yesterday kept asking to be called the next
+morning ("this route is for yesterday. these only apply to the day of").
+
+A call is a same-day instruction: there is nothing useful to do about
+yesterday's route, and an alert nobody can act on teaches dispatchers to
+ignore the widget. `shift.shift_date === today` gates it. Note this is the
+real calendar day, not the board's selected date, and not the Night Shift
+operating window -- a 03:00 route dated tomorrow raises its call after
+midnight, when it is actually that route's day.
+`scripts/dispatch-route-text.test.mjs` pins all three days.
+
 ### FA/GA dispatch reminder interim message (2026-10-12)
 
 FA and GA routes currently use the exact same dispatch reminder text and Text

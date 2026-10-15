@@ -93,3 +93,52 @@ test('actual alerts open the exact draft, cancellation leaves it pending, and on
   assert.equal(dom.window.document.querySelectorAll('[data-dispatch-text-trip]').length,0);
   dom.window.close();
 });
+
+/*
+ * A PA/FA call is a SAME-DAY instruction.
+ *
+ * dispatchedRouteAlerts() deliberately pulls yesterday/today/tomorrow, because
+ * the routine text reminders need the neighbouring days for their timing math.
+ * The call branch inherited that window and never narrowed it back, so an
+ * unacknowledged PA route from yesterday kept asking to be called this
+ * morning: "this alert, this route is for yesterday. these only apply to the
+ * day of." There is nothing useful to do about yesterday's route, so the alert
+ * is pure noise -- and noise in that widget teaches dispatchers to ignore it.
+ */
+for (const [when, offset, expected] of [['yesterday', -1, 0], ['today', 0, 1], ['tomorrow', 1, 0]]) {
+  test(`a PA call alert appears only on the day of -- ${when}`, async () => {
+    const dom = new JSDOM('<div id="alert-widget"><div id="alert-widget-body"></div><span id="alert-widget-count"></span></div>', {url:'https://fixture.invalid/index.html'});
+    const today = timeApi.boardDateKey(new Date());
+    const dayKey = timeApi.offsetDate(today, offset);
+    const data = {
+      loads_shifts: [{...shift, id: 50, location:'atlanta', shift_date: dayKey, shift_start:'00:00'}],
+      loads_trips: [{...trip, id: 60, shift_id: 50, route_id:'PA5007', dispatch_time:'09:00', dispatch_text_event_id:'ev-call'}],
+      atlanta_drivers: [{id:7,'Driver Name':'Ryan Lyn','Driver Cell':'7705551234'}],
+    };
+    // A client that honours the real in('shift_date',[...]) window.
+    const realClient = {from: table => {
+      const preds = [];
+      const q = {select:()=>q,
+        eq:(k,v)=>{preds.push(r=>r[k]===v);return q;},
+        in:(k,vals)=>{preds.push(r=>vals.includes(r[k]));return q;},
+        update:()=>q,
+        then:resolve=>resolve({data:(data[table]||[]).filter(r=>preds.every(p=>p(r))), error:null})};
+      return q;
+    }};
+    const strip = s => s.replace(/^import[^;]+;\n/gm,'').replace(/export /g,'');
+    const source = strip(fs.readFileSync('overnight-times.js','utf8')) + '\n'
+      + strip(fs.readFileSync('dispatch-route-text.js','utf8')) + '\n'
+      + strip(fs.readFileSync('preshift-pro-text.js','utf8'));
+    const env = {supabaseClient: realClient, logAlertTextClick: async()=>{}, openSendTextModal: ()=>{},
+      setDriverSyncStatus: ()=>{}, document: dom.window.document, window: dom.window,
+      location: dom.window.location, MutationObserver: dom.window.MutationObserver,
+      setTimeout: ()=>0, clearTimeout: ()=>{}, setInterval: ()=>0};
+    const module = new Function(...Object.keys(env), source + ';return {refreshExtraAlerts};')(...Object.values(env));
+    await module.refreshExtraAlerts();
+    const calls = dom.window.document.querySelectorAll('[data-special-call-trip]').length;
+    assert.equal(calls, expected,
+      expected ? 'a PA route dated today must still raise its call'
+               : `a PA route dated ${when} must not raise a call -- there is nothing to do about it now`);
+    dom.window.close();
+  });
+}

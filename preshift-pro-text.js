@@ -250,7 +250,16 @@ async function dispatchedRouteAlerts() {
       // Do not clear a call alert for a newly entered route before dispatch time exists.
       // Unlike routine text reminders, this call alert is due as soon as the route is entered.
       const prompt = dispatchRoutePrompt(shift,trip,now,rowTrips);
-      if (!prompt && !(callRequired && !shift.shift_complete && !shift.tonu && !shift.called_off && !shift.load_cancelled && !trip.complete && !trip.minimized && clean(trip.route_id || trip.trip_id) && trip.dispatch_text_event_id && trip.dispatch_call_ack_event_id !== trip.dispatch_text_event_id)) continue;
+      // TODAY ONLY. The scan deliberately pulls yesterday/today/tomorrow,
+      // because the routine text reminders need neighbouring days for their
+      // timing math -- but a CALL is a same-day instruction. Without this
+      // gate an unacknowledged PA/FA route from yesterday keeps asking to be
+      // called this morning, which is how this was reported: a 10/14 route
+      // still showing a Call button on 10/15. There is nothing useful to do
+      // about yesterday's route, so the alert is only noise that teaches
+      // dispatchers to ignore the widget.
+      const callToday = shift.shift_date === today;
+      if (!prompt && !(callRequired && callToday && !shift.shift_complete && !shift.tonu && !shift.called_off && !shift.load_cancelled && !trip.complete && !trip.minimized && clean(trip.route_id || trip.trip_id) && trip.dispatch_text_event_id && trip.dispatch_call_ack_event_id !== trip.dispatch_text_event_id)) continue;
       const label = clean(trip.route_id || trip.trip_id);
       if (callRequired) {
         extras.push({html:extraAlertHtml({icon:'📞',jumpId:shift.id,buttonLabel:'Call',
