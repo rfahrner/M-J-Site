@@ -19,12 +19,51 @@ test('a failed manual save stops Refresh from proceeding to calculated rate upda
   const queue=createAccountingMoneyQueue(async()=>false,100000);queue.schedule(row,field,750);
   await assert.rejects(queue.flush(),/manual Accounting rate could not be saved/);
 });
-test('typing and clearing carrier pay sets/clears its manual protection flag',async()=>{
+test('zero is saved as an override, while blank invokes the atomic recalculation',async()=>{
   const source=readFileSync('accounting.js','utf8');
   const map=source.match(/const ACCOUNTING_MONEY_FIELDS = \{[\s\S]*?\n\};/)[0];
   const save=source.match(/async function saveAccountingMoneyField\([\s\S]*?\n\}/)[0];
-  const patches=[];const current={id:1};
-  const api=new Function('saveAccountingFields','supabaseClient','getAccountingRecordById','setDriverSyncStatus',`${map}\n${save}\nreturn {save:saveAccountingMoneyField,field:ACCOUNTING_MONEY_FIELDS['acct-carrier-pay']};`)(async(c,id,p)=>{patches.push(p);return p;},{},()=>current,()=>{});
-  assert.equal(await api.save(row,api.field,777),true);assert.deepEqual(patches[0],{total_carrier_pay:777,carrier_pay_manual:true});
-  assert.equal(await api.save(row,api.field,null),true);assert.deepEqual(patches[1],{total_carrier_pay:null,carrier_pay_manual:false});
+  const patches=[],calls=[];const current={id:1};
+  const client={rpc:async(name,args)=>{calls.push({name,args});return {data:{id:1,[args.p_column]:600,carrier_pay_manual:false,revenue_manual:false},error:null};}};
+  const api=new Function('saveAccountingFields','supabaseClient','getAccountingRecordById','setDriverSyncStatus','document','renderDriverStatsTable',`${map}\n${save}\nreturn {save:saveAccountingMoneyField,fields:Object.values(ACCOUNTING_MONEY_FIELDS)};`)(async(c,id,p)=>{patches.push(p);return p;},client,()=>current,()=>{},{querySelector:()=>null},()=>{});
+  for(const field of api.fields) {
+    for(const value of [777,0]) {
+      assert.equal(await api.save(row,field,value),true);
+      assert.deepEqual(patches.at(-1),{[field.column]:value,[field.freezes]:true});
+      assert.equal(current[field.column],value);
+    }
+    const count=patches.length;
+    assert.equal(await api.save(row,field,null),true);
+    assert.equal(patches.length,count,'never save an intermediate blank');
+    assert.deepEqual(calls.at(-1),{name:'reset_accounting_rate',args:{p_accounting_id:1,p_column:field.column}});
+    assert.equal(current[field.column],600);assert.equal(current[field.freezes],false);
+  }
+});
+test('a slow blank calculation cannot overwrite a newer zero; realtime keeps queued input',async()=>{
+  const writes=[],finish=[];const currentChecks=[];
+  const queue=createAccountingMoneyQueue((r,f,value,isCurrent)=>new Promise(resolve=>{
+    writes.push(value);finish.push(()=>{currentChecks.push(isCurrent());resolve(true);});
+  }),100000);
+  queue.schedule(row,field,null);const first=queue.flush();await new Promise(setImmediate);
+  queue.schedule(row,field,0);
+  assert.equal(queue.overlay({id:1,total_carrier_pay:600}).total_carrier_pay,0);
+  const second=queue.flush();finish.shift()();await new Promise(setImmediate);
+  assert.deepEqual(writes,[null,0]);finish.shift()();await Promise.all([first,second]);
+  assert.deepEqual(currentChecks,[false,true]);
+  assert.equal(queue.overlay({id:1,total_carrier_pay:0}).total_carrier_pay,0);
+});
+test('carrier and customer resets for the same load save in order',async()=>{
+  const calls=[],finish=[];
+  const queue=createAccountingMoneyQueue((r,f)=>new Promise(resolve=>{calls.push(f.column);finish.push(()=>resolve(true));}),100000);
+  queue.schedule(row,field,null);queue.schedule(row,{column:'total_revenue'},null);
+  const done=queue.flush();await new Promise(setImmediate);
+  assert.deepEqual(calls,['total_carrier_pay']);finish.shift()();await new Promise(setImmediate);
+  assert.deepEqual(calls,['total_carrier_pay','total_revenue']);finish.shift()();await done;
+});
+
+test('Refresh orders debounced replacements by the most recent edit',async()=>{
+  const calls=[];const queue=createAccountingMoneyQueue(async(r,f)=>{calls.push(f.column);return true;},100000);
+  const customer={column:'total_revenue'};
+  queue.schedule(row,customer,123);queue.schedule(row,field,null);queue.schedule(row,customer,null);
+  await queue.flush();assert.deepEqual(calls,['total_carrier_pay','total_revenue']);
 });
