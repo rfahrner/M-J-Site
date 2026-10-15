@@ -277,6 +277,8 @@ async function refreshExtraAlerts() {
   suppressObserverUntil = Date.now() + 450;
   body.querySelectorAll('.dispatch-extra-alert').forEach((el) => el.remove());
   for (const extra of extras) body.insertAdjacentHTML('beforeend', extra.html);
+  // Acknowledgments are shared through the database; refresh on changes so
+  // other dispatchers' panels clear without waiting for the minute timer.
   const count = body.querySelectorAll('.alert-chat-item').length;
   const countEl = document.getElementById('alert-widget-count');
   if (countEl) countEl.textContent = count ? `(${count})` : '';
@@ -418,6 +420,11 @@ function init() {
   installTrackedModalWatcher();
   installAlertObserver();
   scheduleRefresh(700);
+  if (supabaseClient) supabaseClient.channel('special-route-call-acknowledgments')
+    .on('postgres_changes', {event:'UPDATE',schema:'public',table:'loads_trips'}, payload => {
+      if (payload.new?.dispatch_call_ack_event_id !== payload.old?.dispatch_call_ack_event_id ||
+          payload.new?.dispatch_text_event_id !== payload.old?.dispatch_text_event_id) scheduleRefresh(100);
+    }).subscribe();
   setInterval(() => {
     installTrackedModalWatcher();
     installAlertObserver();
