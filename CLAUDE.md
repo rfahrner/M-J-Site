@@ -1099,3 +1099,32 @@ the alert pending and show a retry error instead of opening an unlogged draft.
 Tests: scripts/alert-text-history.test.mjs, dispatch-route-text.test.mjs, and
 sandbox/alert-text-history.spec.mjs (Chromium handler and History-modal check;
 uses DOM click events to isolate the audit from widget geometry).
+
+## Atlanta / Preferred rating cleanup and R meaning (2026-10-15)
+
+The owner approved including A/B variants and aliases (A1/A+, B2, Core,
+Preferred, etc.) using driverClassification. One-time cleanup uses the exact
+carrier inheritance and activity scope rules in driver-activity-core.js:
+zero-activity A/B -> C; active R -> C; all remaining R -> unrated. Missing
+carrier activity (—) is not zero for A/B. Preferred uses Atlanta activity;
+Building-C-only Atlanta members retain their existing Building C scope.
+
+Reviewed batch: 389 directly matching list rows plus one linked Atlanta peer
+whose Preferred membership qualifies, 390 memberships / 281 shared profiles.
+309 entries become C and 81 become unrated. No other location's profiles share
+these identities. The migration updates one representative per profile because
+sync_shared_driver_profile propagates its rating to peers; directly updating
+all peers in one command can produce tuple-already-modified errors.
+
+Complete before-images and expected new ratings are retained privately under
+private.driver_profile_sync_backups, migration_name
+atlanta_preferred_rating_cleanup_20261015. The migration rejects stale ratings,
+unreviewed memberships and any non-rating changes. A guarded manual rollback
+is in supabase/rollback/atlanta_preferred_rating_cleanup_20261015.sql.
+
+From now on R means Restricted — Georgia only. The profile selector and list
+spell this out; Text Group R tooltips explain the same restriction. Legacy
+"refused load" / "refused" remain D, not Restricted. This rating label does not
+add a route-geography enforcement system. The cleanup is not a recurring rule
+that automatically demotes future A/B profiles. Sandbox tests replay the exact
+batch and existing shared-profile sync with synthetic profile UUIDs.

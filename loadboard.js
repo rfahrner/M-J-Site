@@ -3811,7 +3811,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
       const rateCell = preferred
         ? `<td class="driver-list-rate-cell" title="Driver profile: 61–140.9 MI">${displayRate == null ? "Default" : `$${Number(displayRate).toLocaleString()}`}</td>`
         : `<td class="driver-list-rate-cell">${displayRate != null ? `$${Number(displayRate).toLocaleString()}` : "—"}</td>`;
-      const ratingCell = `<td class="driver-list-rating-cell">${escapeHtml(d.rating || "—")}</td>`;
+      const ratingCell = `<td class="driver-list-rating-cell">${escapeHtml(d.rating === "R" ? "R — Restricted (Georgia only)" : d.rating || "—")}</td>`;
       return `
       <tr id="dl-${d.id}" class="${d.addedAt ? "is-new" : ""}">
         <td><button type="button" class="cell-link-btn" data-action="edit-driver" data-driver-id="${d.id}" title="Open driver profile">↗</button></td>
@@ -5551,6 +5551,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
   function variantTitle(members, classOf, bucket) {
     // Unrated is the absence of a rating, so there are no variants to list.
     if (bucket === "Unrated") return "Drivers with no rating recorded";
+    if (bucket === "R") return "Restricted — Georgia routes only";
     const seen = new Set();
     for (const driver of members) {
       if (classOf(driver) !== bucket) continue;
