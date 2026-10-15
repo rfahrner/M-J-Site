@@ -242,7 +242,7 @@ function renderHistory() {
     ${history.length ? history.map((h) => `
       <div class="ld-history-row" style="grid-template-columns:130px 150px 1fr 200px;align-items:start;">
         <div>${new Date(h.changed_at).toLocaleString()}</div>
-        <div>${esc(h.changed_by || "Unknown user")}</div>
+        <div>${esc((h.changed_by || "Unknown user").split("@")[0])}</div>
         <div>${formatHistoryEntry(h)}</div>
         <div><input type="text" class="cell-input" style="width:100%;" data-hou-hist-note-id="${h.id}" value="${esc(h.note || "")}" placeholder="Why was this changed?"></div>
       </div>`).join("") : `<div class="subtext" style="padding:10px 0;">No changes recorded yet.</div>`}`;

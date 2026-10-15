@@ -6826,7 +6826,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
         ${rows.length ? rows.map((h) => `
           <div class="ld-history-row" style="grid-template-columns: 130px 110px 1fr 200px; align-items:start;">
             <div>${new Date(h.changed_at).toLocaleString()}</div>
-            <div>${escapeHtml(h.changed_by || "Unknown user")}</div>
+            <div>${escapeHtml((h.changed_by || "Unknown user").split("@")[0])}</div>
             <div>${formatChangeHistoryEntry(h.field_name, h.old_value, h.new_value)}</div>
             <div><input type="text" class="cell-input" style="width:100%;" data-hist-note-id="${h.id}" value="${escapeHtml(h.note || "")}" placeholder="Why was this changed?"></div>
           </div>`).join("") : `<div class="subtext" style="padding:10px 0;">No changes recorded yet.</div>`}
@@ -7954,7 +7954,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
           rateRows.map((r) => `
             <div class="ld-history-row">
               <div>${new Date(r.changed_at).toLocaleString()}</div>
-              <div>${escapeHtml(r.changed_by || "—")}</div>
+              <div>${escapeHtml((r.changed_by || "—").split("@")[0])}</div>
               <div class="ld-history-old">${r.old_rate != null ? fmtRateMoney(Number(r.old_rate)) : "—"}</div>
               <div class="ld-history-new">${r.new_rate != null ? fmtRateMoney(Number(r.new_rate)) : "—"}</div>
             </div>`).join("")
