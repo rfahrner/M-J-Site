@@ -246,8 +246,10 @@ async function dispatchedRouteAlerts() {
     const rowTrips = (trips || []).filter(t=>t.shift_id===shift.id).sort((a,b)=>a.trip_number-b.trip_number);
     for (const trip of rowTrips) {
       const callRequired = isCallRequiredRoute(trip);
+      // Do not clear a call alert for a newly entered route before dispatch time exists.
+      // Unlike routine text reminders, this call alert is due as soon as the route is entered.
       const prompt = dispatchRoutePrompt(shift,trip,now,rowTrips);
-      if (!prompt && !(callRequired && !shift.shift_complete && !shift.tonu && !shift.called_off && !shift.load_cancelled && !trip.complete && !trip.minimized && clean(trip.dispatch_time) && trip.dispatch_text_event_id && trip.dispatch_call_ack_event_id !== trip.dispatch_text_event_id)) continue;
+      if (!prompt && !(callRequired && !shift.shift_complete && !shift.tonu && !shift.called_off && !shift.load_cancelled && !trip.complete && !trip.minimized && clean(trip.route_id || trip.trip_id) && trip.dispatch_text_event_id && trip.dispatch_call_ack_event_id !== trip.dispatch_text_event_id)) continue;
       const label = clean(trip.route_id || trip.trip_id);
       if (callRequired) {
         extras.push({html:extraAlertHtml({icon:'📞',jumpId:shift.id,buttonLabel:'Call',
