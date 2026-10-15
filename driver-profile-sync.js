@@ -8,7 +8,7 @@ function equalValue(a, b) {
 }
 export function driverProfilePatch(original, draft) {
   return Object.fromEntries(Object.entries(draft).filter(([key, value]) =>
-    !['id', 'location', 'profile_key'].includes(key) && !equalValue(original?.[key], value)
+    !['id', 'location', 'profile_key', 'preferred_list_active'].includes(key) && !equalValue(original?.[key], value)
   ));
 }
 export function mergeSavedDriverProfiles(drivers, saved) {

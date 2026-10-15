@@ -1129,6 +1129,32 @@ add a route-geography enforcement system. The cleanup is not a recurring rule
 that automatically demotes future A/B profiles. Sandbox tests replay the exact
 batch and existing shared-profile sync with synthetic profile UUIDs.
 
+## Preferred zero-activity membership cleanup (2026-10-15)
+
+One-time removal of entries whose displayed Preferred activity is exactly 0:
+373 entries (372 shared profiles), with 364 already represented on the shared
+Atlanta/Building C list and 9 missing Atlanta memberships. The 9 missing rows
+move from Preferred to Atlanta with their original IDs. Existing Atlanta rows
+are reused. No driver record is deleted or reassigned: historic loads, notes,
+rate history and financial links remain intact. Unknown activity (—) is not 0.
+The reviewed result is 173 active Preferred entries, including 18 with unknown
+activity; moving the 9 rows does not create any further zero-activity entries.
+
+`atlanta_drivers.preferred_list_active` is membership metadata, local to a row.
+Default/missing means active. `driversForLocation('preferred')` filters false
+memberships; other lists and `findDriver(id)` still resolve their records.
+The mapper reads it but normal profile saves never write it. Both database
+shared-profile triggers and driverProfilePatch exclude it alongside location,
+so a later contact edit or new list membership cannot reactivate an old one.
+This is an explicit one-time batch, not an automatic activity-based filter.
+
+Complete before-images and expected destinations are private backups under
+migration_name preferred_zero_activity_memberships_20261015. The migration
+checks all planned memberships, validates Atlanta coverage, and rejects any
+unplanned field/identity change. The guarded manual rollback restores only list
+memberships, preserving later contact/rating edits. Tests replay the exact ID
+plan with synthetic profile UUIDs and keep all historical references intact.
+
 ### Accounting: empty rate recalculates; explicit zero stays zero (2026-10-15)
 
 Clearing Customer Rate or Carrier Rate calls `reset_accounting_rate` atomically;

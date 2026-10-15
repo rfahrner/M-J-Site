@@ -232,6 +232,9 @@ jobs:
       - name: Test Atlanta and Preferred driver rating cleanup
         run: node --test scripts/driver-rating-cleanup.test.mjs
 
+      - name: Test Preferred zero-activity membership cleanup
+        run: node --test scripts/preferred-membership-cleanup.test.mjs
+
       - name: Type-check paperwork Edge Function
         run: deno check --node-modules-dir=auto supabase/functions/paperwork-submit/.ci-check.ts
 
