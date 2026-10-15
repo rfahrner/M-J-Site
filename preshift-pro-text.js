@@ -421,7 +421,7 @@ function init() {
   installTrackedModalWatcher();
   installAlertObserver();
   scheduleRefresh(700);
-  if (supabaseClient) supabaseClient.channel('special-route-call-acknowledgments')
+  if (supabaseClient && typeof supabaseClient.channel === 'function') supabaseClient.channel('special-route-call-acknowledgments')
     .on('postgres_changes', {event:'UPDATE',schema:'public',table:'loads_trips'}, payload => {
       if (payload.new?.dispatch_call_ack_event_id !== payload.old?.dispatch_call_ack_event_id ||
           payload.new?.dispatch_text_event_id !== payload.old?.dispatch_text_event_id) scheduleRefresh(100);
