@@ -1,10 +1,10 @@
 /* ================================================================
-   Right-click a Trip ID pill on Accounting to copy it
+   Accounting row context menu: copy identifiers or delete from Accounting
 
    The Trip ID is the number that gets read out on the phone and pasted
    into Aljex, and left-click on the pill is already spoken for -- it
    opens the route's details. So the copy lives on the context menu,
-   which is otherwise unused on this page.
+   alongside Delete from Accounting on every load row.
 
    Two things about this page decide the shape of the code:
 
@@ -19,15 +19,12 @@
      header changes with it. Reading textContent instead of a dataset
      value keeps the menu honest about which of those you are looking at.
 
-   A pill with no Trip ID recorded is disabled by accounting-columns.js,
-   and a disabled button fires no mouse events, so those fall through to
-   the browser's own menu. That is deliberate -- offering "Copy" on a
-   dash would be a worse answer than offering nothing.
+   Empty identifier cells still offer Delete from Accounting. Deletion is
+   dispatched to accounting.js through a DOM event to avoid an import cycle.
    ================================================================ */
 import { escapeHtml, setDriverSyncStatus } from './loadboard.js';
 
 const MENU_ID = 'acct-context-menu';
-const PILL_SELECTOR = 'button.trip-chip[data-open-acct-route-text]';
 
 function activeLocation() {
   return document.querySelector('#acct-location-tabs .location-tab.is-active')?.dataset.location || 'atlanta';
@@ -73,13 +70,13 @@ async function copyText(text) {
   }
 }
 
-function openCopyMenu(value, x, y) {
+function openCopyMenu(value, x, y, accountingId, label = idLabel()) {
   closeAccountingContextMenu();
-  const label = idLabel();
   const menu = document.createElement('div');
   menu.className = 'row-context-menu';
   menu.id = MENU_ID;
-  menu.innerHTML = `<button class="context-menu-item" data-action="acct-copy-trip-id">Copy ${escapeHtml(label)} ${escapeHtml(value)}</button>`;
+  menu.innerHTML = (value ? `<button class="context-menu-item" data-action="acct-copy-trip-id">Copy ${escapeHtml(label)} ${escapeHtml(value)}</button>` : '')
+    + '<button class="context-menu-item context-menu-item-danger" data-action="acct-delete">Delete from Accounting</button>';
   document.body.appendChild(menu);
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
@@ -87,25 +84,33 @@ function openCopyMenu(value, x, y) {
   if (rect.right > window.innerWidth) menu.style.left = `${Math.max(4, window.innerWidth - rect.width - 8)}px`;
   if (rect.bottom > window.innerHeight) menu.style.top = `${Math.max(4, window.innerHeight - rect.height - 8)}px`;
 
-  menu.querySelector('[data-action="acct-copy-trip-id"]').addEventListener('click', async () => {
+  menu.querySelector('[data-action="acct-copy-trip-id"]')?.addEventListener('click', async () => {
     closeAccountingContextMenu();
     const ok = await copyText(value);
     if (ok) setDriverSyncStatus(`${label} ${value} copied.`, 'success');
     else setDriverSyncStatus(`Couldn't copy ${label} ${value} — copy it by hand.`, 'error');
   });
+  menu.querySelector('[data-action="acct-delete"]').addEventListener('click', () => {
+    closeAccountingContextMenu();
+    document.dispatchEvent(new CustomEvent('accounting:delete-request', { detail: { accountingId } }));
+  });
 }
 
 export function initAccountingTripIdCopy() {
   const table = document.getElementById('accounting-table');
-  if (!table) return;
+  if (!table || table.dataset.accountingRowMenu === 'ready') return;
+  table.dataset.accountingRowMenu = 'ready';
 
   table.addEventListener('contextmenu', (e) => {
-    const pill = e.target.closest(PILL_SELECTOR);
-    if (!pill) return; // anywhere else on the sheet keeps the browser's own menu
-    const value = (pill.textContent || '').trim();
-    if (!value || value === '—') return;
+    const row = e.target.closest('tr[id^="acct-"]');
+    if (!row || !table.contains(row)) return;
+    const accountingId = row.id.slice(5);
+    if (!/^\d+$/.test(accountingId)) return;
+    const copyTarget = e.target.closest('.acct-load-text, .trip-chip');
+    const value = (copyTarget?.textContent || '').trim();
+    const label = copyTarget?.matches('.acct-load-text') ? 'Load #' : idLabel();
     e.preventDefault();
-    openCopyMenu(value, e.clientX, e.clientY);
+    openCopyMenu(value === '—' ? '' : value, e.clientX, e.clientY, accountingId, label);
   });
 
   document.addEventListener('click', (e) => {

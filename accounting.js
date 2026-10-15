@@ -171,48 +171,6 @@ async function saveAccountingAljexNumber(rec, value) {
   }
 }
 
-function copyTextFallback(text) {
-  const area = document.createElement("textarea");
-  area.value = text;
-  area.setAttribute("readonly", "");
-  area.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0;";
-  document.body.appendChild(area);
-  area.select();
-  try { document.execCommand("copy"); } finally { area.remove(); }
-}
-
-function openAccountingCopyMenu(text, x, y) {
-  document.getElementById("accounting-copy-menu")?.remove();
-  const menu = document.createElement("div");
-  menu.id = "accounting-copy-menu";
-  menu.className = "row-context-menu";
-  const copy = document.createElement("button");
-  copy.type = "button";
-  copy.className = "context-menu-item";
-  copy.textContent = "Copy";
-  copy.addEventListener("click", async () => {
-    try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
-      else copyTextFallback(text);
-      setDriverSyncStatus("Copied.", "success");
-    } catch {
-      copyTextFallback(text);
-      setDriverSyncStatus("Copied.", "success");
-    }
-    menu.remove();
-  });
-  menu.appendChild(copy);
-  document.body.appendChild(menu);
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
-  const rect = menu.getBoundingClientRect();
-  if (rect.right > window.innerWidth) menu.style.left = `${Math.max(4, window.innerWidth - rect.width - 8)}px`;
-  if (rect.bottom > window.innerHeight) menu.style.top = `${Math.max(4, window.innerHeight - rect.height - 8)}px`;
-  const dismiss = (event) => {
-    if (!menu.contains(event.target)) { menu.remove(); document.removeEventListener("mousedown", dismiss); }
-  };
-  document.addEventListener("mousedown", dismiss);
-}
 
 /*
  * A push from the load board overwrites what Accounting has -- including a rate
@@ -788,7 +746,7 @@ function accountingNoteButton(rec) {
   }
   export function getFilteredAccountingRecords() {
     const loc = state.acctLocationTab || "atlanta";
-    let filtered = accountingRecords.filter((r) => r.location === loc);
+    let filtered = accountingRecords.filter((r) => r.location === loc && r.hidden !== true);
     if (state.acctDateFilter) filtered = filtered.filter((r) => r.shift_date === state.acctDateFilter);
     if (accountingDriverSort) filtered.sort((a, b) => compareAccountingDriverNames(a.driver_name_text, b.driver_name_text) || acctSortCompare(a, b));
     return filtered;
@@ -866,6 +824,30 @@ export function renderDriverStatsTable() {
     renderAcctDateChrome();
     renderAccountingTable();
   }
+  async function deleteAccountingRecord(accountingId) {
+    const rec = getAccountingRecordById(accountingId);
+    if (!rec || rec.hidden === true || pendingAccountingChecks.has(String(rec.id))) return;
+    const label = [rec.aljex_load_number, rec.driver_name_text].filter(Boolean).join(" — ") || "this load";
+    if (!confirm(`Delete ${label} from Accounting?\n\nThis removes it from the Accounting sheet and totals. The load stays on its original board.`)) return;
+    const key = String(rec.id);
+    pendingAccountingChecks.add(key);
+    try {
+      // Finish any amount just typed before retaining the deleted record.
+      await getAccountingMoneyQueue().flush();
+      const saved = await saveAccountingFields(supabaseClient, rec.id, {
+        hidden: true, status: "deleted", deleted_at: new Date().toISOString(),
+      });
+      const current = getAccountingRecordById(rec.id);
+      if (current) Object.assign(current, saved);
+      setDriverSyncStatus(`${label} deleted from Accounting.`, "success");
+    } catch (err) {
+      setDriverSyncStatus(`Couldn't delete ${label} from Accounting (${err.message || err}).`, "error");
+    } finally {
+      pendingAccountingChecks.delete(key);
+      renderAccountingTable();
+    }
+  }
+
   /*
    * Put a deleted record back into the totals.
    *
@@ -1165,11 +1147,8 @@ export function renderDriverStatsTable() {
         const cell = e.target.closest('[data-action="acct-aljex-number"]');
         if (cell && e.key === "Enter") { e.preventDefault(); cell.blur(); }
       });
-      table.addEventListener("contextmenu", (e) => {
-        const copyTarget = e.target.closest('.acct-load-text, .trip-chip');
-        if (!copyTarget || !table.contains(copyTarget)) return;
-        e.preventDefault();
-        openAccountingCopyMenu(copyTarget.textContent.trim(), e.clientX, e.clientY);
+      document.addEventListener("accounting:delete-request", (e) => {
+        void deleteAccountingRecord(e.detail?.accountingId);
       });
       table.addEventListener("click", (e) => {
         const sticky = e.target.closest("[data-acct-open-push]");
