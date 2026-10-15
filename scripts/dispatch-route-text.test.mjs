@@ -8,7 +8,7 @@ const time=asModule(fs.readFileSync('overnight-times.js','utf8'));
 const timeApi=await import(time);
 const api=await import(asModule(fs.readFileSync('dispatch-route-text.js','utf8').replace("'./overnight-times.js'",JSON.stringify(time))));
 const shift={id:1,driver_id:7,shift_date:'2026-10-12',shift_start:'09:00'};
-const trip={id:2,trip_number:1,route_id:'PA123',dispatch_time:'09:15',dispatch_text_event_id:'event-one'};
+const trip={id:2,trip_number:1,route_id:'RO123',dispatch_time:'09:15',dispatch_text_event_id:'event-one'};
 const now=new Date('2026-10-12T14:00:00Z');
 test('exact message; dispatches are independent and handled state survives a fresh scan',()=>{
   assert.equal(api.DISPATCH_ROUTE_MESSAGE,'This is D&L be sure to keep up with your arrival and departure times per stop. when you are finished at your last stop be sure to call in and give us the times and your ETA back to the DC.');
@@ -19,8 +19,13 @@ test('exact message; dispatches are independent and handled state survives a fre
   assert.ok(api.dispatchRoutePrompt({...shift,driver_id:8},sent,now));
   assert.ok(api.dispatchRoutePrompt(shift,{...trip,id:3},now));
 });
-test('FA/GA use the regular message; blank, settled and future dispatches are excluded',()=>{
-  for(const id of ['FA123','GA222',' fa999',' ga999'])assert.equal(api.dispatchRoutePrompt(shift,{...trip,route_id:id},now).waitingForMessage,false);
+test('PA/FA/GA and salvage/backhaul suppress routine text; blank, settled and future dispatches are excluded',()=>{
+  for(const id of ['PA123','FA123','GA222',' pa999',' fa999',' ga999'])assert.equal(api.dispatchRoutePrompt(shift,{...trip,route_id:id},now),null);
+  assert.equal(api.dispatchRoutePrompt(shift,{...trip,backhaul:true},now),null);
+  assert.equal(api.dispatchRoutePrompt(shift,{...trip,salvage:true},now),null);
+  assert.equal(api.isCallRequiredRoute({route_id:'PA123'}),true);
+  assert.equal(api.isCallRequiredRoute({route_id:'FA123'}),true);
+  assert.equal(api.isCallRequiredRoute({route_id:'GA123'}),false);
   for(const s of [{...shift,shift_complete:true},{...shift,tonu:true},{...shift,load_cancelled:true},{...shift,called_off:true}])assert.equal(api.dispatchRoutePrompt(s,trip,now),null);
   for(const t of [{...trip,complete:true},{...trip,minimized:true},{...trip,route_id:''},{...trip,dispatch_time:''},{...trip,dispatch_time:'20:00'}])assert.equal(api.dispatchRoutePrompt(shift,t,now),null);
   assert.equal(api.dispatchRoutePrompt(shift,trip,new Date('2026-10-13T14:00:00Z')),null);
@@ -69,26 +74,22 @@ test('actual alerts open the exact draft, cancellation leaves it pending, and on
     window:dom.window,location:dom.window.location,MutationObserver:dom.window.MutationObserver,setTimeout:()=>0,clearTimeout:()=>{},setInterval:()=>0};
   const module=new Function(...Object.keys(env),source+';return {refreshExtraAlerts};')(...Object.values(env));
   await module.refreshExtraAlerts();
-  const buttons=dom.window.document.querySelectorAll('[data-dispatch-text-trip]');assert.equal(buttons.length,3,'regular, FA and GA routes all offer Text');
+  const buttons=dom.window.document.querySelectorAll('[data-dispatch-text-trip]');assert.equal(buttons.length,1,'only regular routes offer the routine text');
   buttons[0].dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true}));
   await new Promise(setImmediate);
   assert.equal(audit.length,1);assert.deepEqual(audit[0].loadIds,[shift.id]);assert.equal(audit[0].tripId,trip.id);assert.ok(audit[0].label.includes(trip.route_id));
   assert.equal(opened.length,1);assert.equal(opened[0][1],api.DISPATCH_ROUTE_MESSAGE);assert.equal(opened[0][0][0].phone,'7705551234');
   assert.equal(writes.length,0,'opening/cancelling does not mark sent');
-  await module.refreshExtraAlerts();assert.equal(dom.window.document.querySelectorAll('[data-dispatch-text-trip]').length,3);
+  await module.refreshExtraAlerts();assert.equal(dom.window.document.querySelectorAll('[data-dispatch-text-trip]').length,1);
   opened[0][3].onSent();await new Promise(setImmediate);assert.equal(writes.length,1);
-  await module.refreshExtraAlerts();assert.equal(dom.window.document.querySelectorAll('[data-dispatch-text-trip]').length,2);
-  for (const id of [3,4]) {
-    dom.window.document.querySelector(`[data-dispatch-text-trip="${id}"]`).dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true}));
-    await new Promise(setImmediate);
-    const draft=opened.at(-1);assert.equal(draft[1],api.DISPATCH_ROUTE_MESSAGE);assert.equal(draft[0][0].phone,'7705551234');
-    assert.equal(data.loads_trips.find(t=>t.id===id).dispatch_text_sent_at,undefined,'draft stays pending until sent');
-    draft[3].onSent();await new Promise(setImmediate);await module.refreshExtraAlerts();
-    assert.ok(data.loads_trips.find(t=>t.id===id).dispatch_text_sent_at);
-    assert.equal(dom.window.document.querySelector(`[data-dispatch-text-trip="${id}"]`),null);
-  }
-  assert.ok(audit.some(a=>a.label.includes('FA123')));assert.ok(audit.some(a=>a.label.includes('GA123')));
-  assert.equal(writes.length,3);assert.equal(dom.window.document.querySelectorAll('[data-dispatch-text-trip]').length,0);
-  assert.ok(!dom.window.document.body.textContent.includes('FA/GA dispatch message awaiting setup'));
+  // FA and GA no longer take the routine dispatch text at all (they route to
+  // the PA/FA call instead), so once the one regular route is acknowledged
+  // there is nothing left to offer. This asserted 2 -- the pre-#240 count --
+  // which contradicted the assertion of 0 four lines below it.
+  await module.refreshExtraAlerts();assert.equal(dom.window.document.querySelectorAll('[data-dispatch-text-trip]').length,0);
+  assert.equal(data.loads_trips.find(t=>t.id===3).dispatch_text_sent_at,undefined);
+  assert.equal(data.loads_trips.find(t=>t.id===4).dispatch_text_sent_at,undefined);
+  assert.equal(writes.length,1);
+  assert.equal(dom.window.document.querySelectorAll('[data-dispatch-text-trip]').length,0);
   dom.window.close();
 });
