@@ -4,14 +4,8 @@ export function dispatchDriverKey(shift) {
   return shift.driver_id != null ? `driver:${shift.driver_id}`
     : `name:${shift.driver_name_text || ''}|phone:${shift.driver_cell_snapshot || ''}`;
 }
-export function isCallRequiredRoute(trip) {
-  return /^(PA|FA)/i.test(String(trip?.route_id || trip?.trip_id || '').trim());
-}
-export function excludesRoutineDispatchText(trip) {
-  return /^(PA|FA|GA)/i.test(String(trip?.route_id || trip?.trip_id || '').trim()) || !!trip?.backhaul || !!trip?.salvage;
-}
 export function dispatchRoutePrompt(shift, trip, now, rowTrips = [trip]) {
-  if (shift.shift_complete || shift.tonu || shift.called_off || shift.load_cancelled || trip.complete || trip.minimized || excludesRoutineDispatchText(trip)) return null;
+  if (shift.shift_complete || shift.tonu || shift.called_off || shift.load_cancelled || trip.complete || trip.minimized) return null;
   if (!String(trip.route_id || trip.trip_id || '').trim() || clockMinutes(trip.dispatch_time) == null || !trip.dispatch_text_event_id) return null;
   const minutes = shiftRelativeNow(shift.shift_date, now);
   const timeline = tripTimeline(shift.shift_start, rowTrips).get(trip);
@@ -20,6 +14,7 @@ export function dispatchRoutePrompt(shift, trip, now, rowTrips = [trip]) {
   if (trip.dispatch_text_sent_at && trip.dispatch_text_sent_event_id === trip.dispatch_text_event_id
       && trip.dispatch_text_sent_driver_key === driverKey) return null;
   return {tripId:trip.id,eventId:trip.dispatch_text_event_id,dispatchTime:trip.dispatch_time,driverKey,
+    // FA/GA use the regular reminder until their replacement text is supplied.
     waitingForMessage:false};
 }
 export async function acknowledgeDispatchRouteText(client, prompt) {
