@@ -104,18 +104,54 @@ function numOrUndefined(raw) {
   return Number.isFinite(n) ? n : undefined;
 }
 
-async function saveAccountingMoneyField(rec, field, value) {
+async function saveAccountingMoneyField(rec, field, value, isCurrent = () => true) {
   try {
     const patch = { [field.column]: value };
     if (field.freezes) patch[field.freezes] = value !== null && value !== undefined;
-    const saved = await saveAccountingFields(supabaseClient, rec.id, patch);
+    let saved;
+    if (value === null && field.freezes) {
+      const result = await supabaseClient.rpc("reset_accounting_rate", {
+        p_accounting_id: Number(rec.id), p_column: field.column,
+      });
+      if (result.error) throw result.error;
+      saved = result.data;
+      if (!saved || String(saved.id) !== String(rec.id) || saved[field.column] == null || saved[field.freezes] !== false) {
+        throw new Error("The recalculated rate was not confirmed. Refresh and try again.");
+      }
+    } else {
+      saved = await saveAccountingFields(supabaseClient, rec.id, patch);
+    }
     const current = getAccountingRecordById(rec.id);
-    if (current) {
+    if (current && isCurrent()) {
       current[field.column] = saved[field.column];
       if (field.freezes) current[field.freezes] = saved[field.freezes];
+      if (field.column === "total_carrier_pay") current.total_cost = saved.total_cost ?? saved[field.column];
+      if (value === null && field.column === "total_revenue") current.fsc_payment = saved.fsc_payment;
+      // Update only this cell. A full table render would remove the input the
+      // accountant has already Tabbed into while this calculation was saving.
+      const input = document.querySelector(`[data-id="${rec.id}"][data-action="${field.column === 'total_carrier_pay' ? 'acct-carrier-pay' : 'acct-customer-rate'}"]`);
+      if (value === null && input && numOrUndefined(input.value) === null) input.value = Number(saved[field.column]).toFixed(2);
+      renderDriverStatsTable();
     }
     return true;
   } catch (err) {
+    // A reset is atomic, so its failure kept the previous database amount.
+    // Show that saved amount again, provided no newer keystroke replaced it.
+    if (value === null && field.freezes && isCurrent()) {
+      try {
+        const result = await supabaseClient.from(ACCOUNTING_TABLE).select("*").eq("id", rec.id).single();
+        if (!result.error && result.data && isCurrent()) {
+          const current = getAccountingRecordById(rec.id);
+          if (current) {
+            current[field.column] = result.data[field.column];
+            current[field.freezes] = result.data[field.freezes];
+          }
+          const action = field.column === "total_carrier_pay" ? "acct-carrier-pay" : "acct-customer-rate";
+          const input = document.querySelector(`[data-id="${rec.id}"][data-action="${action}"]`);
+          if (input && numOrUndefined(input.value) === null) input.value = result.data[field.column] == null ? "" : Number(result.data[field.column]).toFixed(2);
+        }
+      } catch (_) { /* keep the original save error visible */ }
+    }
     setDriverSyncStatus(`Couldn't save ${field.label} (${err.message || err}).`, "error");
     return false;
   }
@@ -758,9 +794,16 @@ function accountingNoteButton(rec) {
     return filtered;
   }
 
+  let accountingRenderDeferred = false;
   export function renderAccountingTable() {
     const body = $("#accounting-table-body");
     if (!body) return;
+    // Realtime echoes of a rate reset must not tear down the next money cell.
+    if (body.contains(document.activeElement) && ACCOUNTING_MONEY_FIELDS[document.activeElement?.dataset.action]) {
+      accountingRenderDeferred = true;
+      return;
+    }
+    accountingRenderDeferred = false;
     if (accountingLoadError) {
       body.innerHTML = `<tr><td colspan="40" role="alert" style="padding:16px;color:#b42318;">${escapeHtml(accountingLoadError)}</td></tr>`;
       return;
@@ -1092,9 +1135,11 @@ export function renderDriverStatsTable() {
         // parses is the same rule the board's cells follow.
         if (val === undefined) return;
         rec[field.column] = val;
+        if (field.freezes) rec[field.freezes] = val !== null;
         getAccountingMoneyQueue().schedule(rec, field, val);
       });
       table.addEventListener("focusout", (e) => {
+        setTimeout(() => { if (accountingRenderDeferred) renderAccountingTable(); }, 0);
         const t = e.target;
         if (t.dataset.action === "acct-aljex-number") {
           const rec = accountingRecords.find((r) => r.id == t.dataset.id);
@@ -1217,7 +1262,8 @@ export function renderDriverStatsTable() {
       if (payload.eventType === "DELETE") return;
       if (payload.new.source_shift_id) await refreshAccountingLoadNotes([payload.new.source_shift_id]);
       const idx = accountingRecords.findIndex((r) => r.id === payload.new.id);
-      if (idx !== -1) accountingRecords[idx] = payload.new; else accountingRecords.push(payload.new);
+      const incoming = accountingMoneyQueue?.overlay(payload.new) || payload.new;
+      if (idx !== -1) accountingRecords[idx] = incoming; else accountingRecords.push(incoming);
       accountingRecords.sort(acctSortCompare);
       // A record that just arrived via realtime was never part of the
       // original bulk fetch in loadAccountingRecordsForRange — its routes

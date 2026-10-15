@@ -1128,3 +1128,18 @@ spell this out; Text Group R tooltips explain the same restriction. Legacy
 add a route-geography enforcement system. The cleanup is not a recurring rule
 that automatically demotes future A/B profiles. Sandbox tests replay the exact
 batch and existing shared-profile sync with synthetic profile UUIDs.
+
+### Accounting: empty rate recalculates; explicit zero stays zero (2026-10-15)
+
+Clearing Customer Rate or Carrier Rate calls `reset_accounting_rate` atomically;
+never persist a temporary NULL. A numeric `0` follows the ordinary checked save
+and sets its manual flag. Reset touches only the selected money side (and its
+cost/FSC breakdown), preserving status, Sent, source loads and unrelated overrides.
+Standard carrier resets reuse `accounting_refresh_carrier_total`; Houston and
+Mondelez use their existing board/transfer sources. Customer resets honor the
+saved FSC snapshot and Atlanta Core/Holiday/Market selection. Missing calculation
+inputs fail without changing saved money. No bulk repricing happens at installation.
+Money saves serialize per load, retain newer pending input over realtime echoes,
+and update a reset cell without rebuilding the next editor. Cover with
+`scripts/accounting-clear-rate.test.mjs`, `scripts/accounting-money-queue.test.mjs`
+and `sandbox/accounting-clear-rate.spec.mjs`.
