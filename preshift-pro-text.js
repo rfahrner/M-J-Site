@@ -32,7 +32,10 @@ const BOARD_FILE_TO_LOCATION = {
 
 let pendingTrackedMarker = null;
 let refreshTimer = null;
-let suppressObserverUntil = 0;
+// The observer is DISCONNECTED while we write, never time-gated. See
+// installAlertObserver().
+let alertObserver = null;
+let observedAlertBody = null;
 
 function currentFile() { return location.pathname.split('/').pop() || ''; }
 function currentLocation() { return BOARD_FILE_TO_LOCATION[currentFile()] || null; }
@@ -275,9 +278,21 @@ async function refreshExtraAlerts() {
   let extras;
   try { extras = [...await houstonPreShiftAlerts(), ...await carrierDocsAlerts(), ...await dispatchedRouteAlerts()]; }
   catch(error) { console.error('Could not refresh dispatch reminders',error);return; }
-  suppressObserverUntil = Date.now() + 450;
-  body.querySelectorAll('.dispatch-extra-alert').forEach((el) => el.remove());
-  for (const extra of extras) body.insertAdjacentHTML('beforeend', extra.html);
+  // Stop watching while WE write, then watch again. This used to be a 450ms
+  // time window, and a time window cannot tell our own mutation from
+  // alerts.js's: both run on 60-SECOND timers, so once they drifted into the
+  // same 450ms they stayed there, alerts.js's innerHTML wipe was swallowed as
+  // if it were ours, and the call alert vanished until the next minute tick.
+  // Reported as "the call driver alert keeps disappearing and coming back
+  // after a few minutes". disconnect() also drops any records already queued,
+  // which is right: we are about to render the current truth anyway.
+  if (alertObserver) alertObserver.disconnect();
+  try {
+    body.querySelectorAll('.dispatch-extra-alert').forEach((el) => el.remove());
+    for (const extra of extras) body.insertAdjacentHTML('beforeend', extra.html);
+  } finally {
+    if (alertObserver) alertObserver.observe(body, { childList: true });
+  }
   // Acknowledgments are shared through the database; refresh on changes so
   // other dispatchers' panels clear without waiting for the minute timer.
   const count = body.querySelectorAll('.alert-chat-item').length;
@@ -293,12 +308,16 @@ function scheduleRefresh(delay = 250) {
 
 function installAlertObserver() {
   const body = document.getElementById('alert-widget-body');
-  if (!body || body.dataset.dispatchExtrasObserved === '1') return;
-  body.dataset.dispatchExtrasObserved = '1';
-  new MutationObserver(() => {
-    if (Date.now() < suppressObserverUntil) return;
-    scheduleRefresh(150);
-  }).observe(body, { childList:true });
+  if (!body) return;
+  // Track the ELEMENT, not a flag on it. alerts.js rebuilds the whole widget
+  // in places, which replaces #alert-widget-body -- a dataset flag goes with
+  // the old node and the observer is left watching something detached, so the
+  // extras stop coming back at all until the next minute tick.
+  if (observedAlertBody === body && alertObserver) return;
+  if (alertObserver) alertObserver.disconnect();
+  observedAlertBody = body;
+  alertObserver = new MutationObserver(() => scheduleRefresh(150));
+  alertObserver.observe(body, { childList:true });
 }
 
 // Shared server-side acknowledgment. Cancel never writes to Supabase.
