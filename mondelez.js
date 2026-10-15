@@ -757,7 +757,7 @@ function renderMondelezChangeHistory() {
       return `
         <div class="ld-history-row" style="grid-template-columns:130px 150px 1fr 200px;align-items:start;">
           <div>${new Date(entry.changed_at).toLocaleString()}</div>
-          <div>${escapeHtml(entry.changed_by || "Unknown user")}</div>
+          <div>${escapeHtml((entry.changed_by || "Unknown user").split("@")[0])}</div>
           <div><strong>${escapeHtml(mondelezHistoryFieldLabel(entry.field_name))}</strong><div class="subtext">${detail}</div></div>
           <div><input type="text" class="cell-input" style="width:100%;" data-mdz-hist-note-id="${entry.id}" value="${escapeHtml(entry.note || "")}" placeholder="Why was this changed?"></div>
         </div>`;

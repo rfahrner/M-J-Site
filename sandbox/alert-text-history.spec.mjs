@@ -26,7 +26,7 @@ try{
  await page.locator('#board-table [data-open-pro]:not([data-trip])').first().click();
  await page.locator('#ld-tabs [data-tab="history"]').click();
  await page.waitForFunction(()=>document.querySelector('#ld-tab-content')?.textContent.includes('Alert Text clicked'));
- const text=await page.locator('#ld-tab-content').innerText();assert.ok(text.includes('sandbox@example.invalid'));assert.ok((await page.locator('#ld-tab-content [data-hist-note-id]').evaluateAll(nodes=>nodes.map(n=>n.value))).join(' ').includes('click only; sending is not confirmed'));
+ const text=await page.locator('#ld-tab-content').innerText();assert.ok(text.includes('sandbox'));assert.ok(!text.includes('sandbox@example.invalid'));assert.ok((await page.locator('#ld-tab-content [data-hist-note-id]').evaluateAll(nodes=>nodes.map(n=>n.value))).join(' ').includes('click only; sending is not confirmed'));
  assert.equal((text.match(/Alert Text clicked/g)||[]).length,2);assert.deepEqual(errors,[]);
  console.log('PASS real page: FA dispatch alert clicked twice, both cancellations retain audit entries, History shows user/context/draft without claiming sent');
 }finally{await browser.close();server.kill();}
