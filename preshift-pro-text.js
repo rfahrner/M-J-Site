@@ -1,5 +1,5 @@
 import { supabaseClient, openSendTextModal, setDriverSyncStatus, logAlertTextClick } from './loadboard.js';
-import { DISPATCH_ROUTE_MESSAGE, dispatchRoutePrompt, acknowledgeDispatchRouteText, isCallRequiredRoute } from './dispatch-route-text.js';
+import { DISPATCH_ROUTE_MESSAGE, dispatchRoutePrompt, acknowledgeDispatchRouteText } from './dispatch-route-text.js';
 import { boardDateKey, offsetDate } from './overnight-times.js';
 
 /*
@@ -142,11 +142,11 @@ async function handleBasePreShiftClick(button) {
   return true;
 }
 
-function extraAlertHtml({ icon, text, buttonAttrs, jumpId, buttonLabel = 'Text' }) {
+function extraAlertHtml({ icon, text, buttonAttrs, jumpId }) {
   return `<div class="alert-chat-item dispatch-extra-alert"${jumpId ? ` data-alert-jump-ids="${jumpId}"` : ''}>
     <span class="alert-chat-icon">${icon}</span>
     <span class="alert-chat-text">${esc(text)}</span>
-    ${buttonAttrs ? `<button type="button" class="alert-action-btn" ${buttonAttrs}>${esc(buttonLabel)}</button>` : ''}
+    ${buttonAttrs ? `<button type="button" class="alert-action-btn" ${buttonAttrs}>Text</button>` : ''}
   </div>`;
 }
 
@@ -245,19 +245,9 @@ async function dispatchedRouteAlerts() {
     const phone = drv.phone || clean(shift.driver_cell_snapshot);
     const rowTrips = (trips || []).filter(t=>t.shift_id===shift.id).sort((a,b)=>a.trip_number-b.trip_number);
     for (const trip of rowTrips) {
-      const callRequired = isCallRequiredRoute(trip);
-      // Backhaul/salvage affects texting only; a PA/FA route still needs the call.
-      // Do not clear a call alert for a newly entered route before dispatch time exists.
-      // Unlike routine text reminders, this call alert is due as soon as the route is entered.
       const prompt = dispatchRoutePrompt(shift,trip,now,rowTrips);
-      if (!prompt && !(callRequired && !shift.shift_complete && !shift.tonu && !shift.called_off && !shift.load_cancelled && !trip.complete && !trip.minimized && clean(trip.route_id || trip.trip_id) && trip.dispatch_text_event_id && trip.dispatch_call_ack_event_id !== trip.dispatch_text_event_id)) continue;
+      if (!prompt) continue;
       const label = clean(trip.route_id || trip.trip_id);
-      if (callRequired) {
-        extras.push({html:extraAlertHtml({icon:'📞',jumpId:shift.id,buttonLabel:'Call',
-          buttonAttrs:`data-special-call-trip="${trip.id}" data-special-call-event="${esc(trip.dispatch_text_event_id)}" data-special-call-route="${esc(label)}" data-special-call-driver="${esc(name)}"`,
-          text:`${name} (${shift.pro_number || 'No PRO'}, ${label}) — call driver; dispatcher must confirm the call`})});
-        continue;
-      }
       const attrs = !prompt.waitingForMessage && phone
         ? `data-dispatch-route="${esc(label)}" data-dispatch-text-shift="${shift.id}" data-dispatch-text-trip="${trip.id}" data-dispatch-event="${esc(prompt.eventId)}" data-dispatch-time="${esc(prompt.dispatchTime)}" data-dispatch-driver-key="${esc(prompt.driverKey)}" data-driver-name="${esc(name)}" data-driver-phone="${esc(phone)}"` : '';
       extras.push({html:extraAlertHtml({icon:'📲',jumpId:shift.id,buttonAttrs:attrs,
@@ -278,8 +268,6 @@ async function refreshExtraAlerts() {
   suppressObserverUntil = Date.now() + 450;
   body.querySelectorAll('.dispatch-extra-alert').forEach((el) => el.remove());
   for (const extra of extras) body.insertAdjacentHTML('beforeend', extra.html);
-  // Acknowledgments are shared through the database; refresh on changes so
-  // other dispatchers' panels clear without waiting for the minute timer.
   const count = body.querySelectorAll('.alert-chat-item').length;
   const countEl = document.getElementById('alert-widget-count');
   if (countEl) countEl.textContent = count ? `(${count})` : '';
@@ -301,64 +289,8 @@ function installAlertObserver() {
   }).observe(body, { childList:true });
 }
 
-// Shared server-side acknowledgment. Cancel never writes to Supabase.
-async function showSpecialRouteCallModal(button) {
-  const tripId = Number(button.dataset.specialCallTrip);
-  const eventId = button.dataset.specialCallEvent;
-  const route = button.dataset.specialCallRoute;
-  const driver = button.dataset.specialCallDriver;
-  const overlay = document.createElement('div');
-  overlay.id = 'special-route-call-modal';
-  overlay.style.cssText = 'position:fixed;inset:0;z-index:200000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px';
-  overlay.innerHTML = `<form style="background:#fff;color:#172542;border-radius:10px;padding:24px;max-width:430px;width:100%;box-shadow:0 16px 48px #0005">
-    <h2 style="margin:0 0 14px;font-size:21px">📞 Call Driver</h2>
-    <p style="margin:0 0 16px"><strong>${esc(driver)}</strong> — Route ${esc(route)}</p>
-    <p>Call the driver before confirming. Enter your name to clear this alert for every dispatcher.</p>
-    <label for="special-route-call-name" style="display:block;font-weight:600;margin:12px 0 5px">Dispatcher name</label>
-    <input id="special-route-call-name" maxlength="100" minlength="2" required autocomplete="name" style="width:100%;padding:10px;border:1px solid #8895a7;border-radius:5px;box-sizing:border-box" />
-    <div role="alert" class="special-call-error" style="color:#b42318;margin:10px 0;min-height:1em"></div>
-    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px">
-      <button type="button" data-special-call-cancel style="padding:9px 16px">Cancel</button>
-      <button type="submit" style="padding:9px 16px;background:#146dc1;color:white;border:0;border-radius:5px">Confirm Call</button>
-    </div>
-  </form>`;
-  document.body.appendChild(overlay);
-  const form = overlay.querySelector('form');
-  overlay.querySelector('[data-special-call-cancel]').addEventListener('click', () => overlay.remove());
-  form.addEventListener('submit', async event => {
-    event.preventDefault();
-    const name = clean(overlay.querySelector('#special-route-call-name').value);
-    const message = overlay.querySelector('.special-call-error');
-    const submit = form.querySelector('[type="submit"]');
-    if (name.length < 2) { message.textContent = 'Enter your name before confirming.'; return; }
-    submit.disabled = true;
-    try {
-      const {data,error} = await supabaseClient.rpc('acknowledge_special_route_call',{
-        p_trip_id:tripId,p_event_id:eventId,p_dispatcher_name:name,
-      });
-      if (error) throw error;
-      if (!data) {
-        message.textContent = 'This dispatch changed or is no longer active. Refreshing its alert.';
-        scheduleRefresh(100);
-      } else {
-        overlay.remove();
-        scheduleRefresh(100);
-      }
-    } catch (error) {
-      message.textContent = `Could not confirm the call: ${error.message || error}`;
-    } finally { submit.disabled = false; }
-  });
-  overlay.querySelector('input').focus();
-}
-
 document.addEventListener('click', async (event) => {
   try {
-  const special = event.target.closest('[data-special-call-trip]');
-  if (special) {
-    event.preventDefault(); event.stopImmediatePropagation();
-    if (!document.getElementById('special-route-call-modal')) await showSpecialRouteCallModal(special);
-    return;
-  }
   const base = event.target.closest('[data-alert-action-key]');
   if (base && /^preshift-\d+$/.test(base.dataset.alertActionKey || '')) {
     event.preventDefault();
@@ -421,11 +353,6 @@ function init() {
   installTrackedModalWatcher();
   installAlertObserver();
   scheduleRefresh(700);
-  if (supabaseClient && typeof supabaseClient.channel === 'function') supabaseClient.channel('special-route-call-acknowledgments')
-    .on('postgres_changes', {event:'UPDATE',schema:'public',table:'loads_trips'}, payload => {
-      if (payload.new?.dispatch_call_ack_event_id !== payload.old?.dispatch_call_ack_event_id ||
-          payload.new?.dispatch_text_event_id !== payload.old?.dispatch_text_event_id) scheduleRefresh(100);
-    }).subscribe();
   setInterval(() => {
     installTrackedModalWatcher();
     installAlertObserver();
