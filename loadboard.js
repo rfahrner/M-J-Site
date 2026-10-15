@@ -391,6 +391,7 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     return {
       id: row.id,
       profileKey: row.profile_key || null,
+      preferredListActive: row.preferred_list_active !== false,
       name: row["Driver Name"] || "",
       phone: row["Driver Cell"] || "",
       mc: row["MC"] != null ? String(row["MC"]) : "",
@@ -844,6 +845,10 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     return [locationKey];
   }
   export function driversForLocation(locationKey) {
+    // Retired list memberships keep their IDs so historical loads/notes remain linked.
+    if (locationKey === "preferred") {
+      return state.drivers.filter(d => d.location === "preferred" && d.preferredListActive !== false);
+    }
     // Mondelez drivers aren't tagged via the single `location` field the other
     // boards use — they're tagged in runs_out_of instead (a driver can run
     // Mondelez alongside their normal home base), so this needs its own check.
