@@ -104,7 +104,7 @@ function normalizeRow(row) {
     carrier.readOnly = false;
     carrier.removeAttribute('readonly');
     carrier.classList.remove('accounting-board-rate');
-    carrier.title = 'Starts with the load-board rate; editable in Accounting';
+    carrier.title = 'Clear to restore the load-board rate. Enter 0 to keep a zero rate.';
   }
 
   const customer = row.querySelector('[data-action="acct-customer-rate"]');
@@ -112,7 +112,7 @@ function normalizeRow(row) {
     customer.readOnly = false;
     customer.removeAttribute('readonly');
     customer.classList.remove('accounting-customer-calculated');
-    customer.title = 'Starts with the calculated customer rate; editable in Accounting';
+    customer.title = 'Clear to recalculate the customer rate. Enter 0 to keep a zero rate.';
   }
 }
 
