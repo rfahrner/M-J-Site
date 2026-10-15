@@ -8,6 +8,7 @@ node sandbox/serve.mjs . 8787 &     # serves the repo exactly as Pages does
 node sandbox/board-scroll.spec.mjs  # board holds its scroll position
 node sandbox/text-group.spec.mjs    # Text a Group modal opens and behaves
 node sandbox/page-boots.spec.mjs    # every page finishes evaluating its modules
+node sandbox/alert-stability.spec.mjs  # a call alert never blinks out
 ```
 
 ## Why this exists alongside scripts/
@@ -53,3 +54,11 @@ board, use the board until it jumps, then run `__whyDidItMove()`. It records
 every `scrollIntoView`, `scrollTop` write, `focus()` without `preventScroll`,
 and `window.scrollTo/By`, with the stack that asked for it. Observe-only;
 reload to remove.
+
+## Latency is part of the test
+
+`window.__SANDBOX_LATENCY_MS` makes the fake database take time to answer.
+With an instant database every re-render looks seamless and a dispatcher's
+does not: the alert-blink bug was three database round trips wide and
+measured 0ms until the fake was slowed down. A number measured at 0ms
+latency is the FLOOR, not the experience.
