@@ -346,7 +346,7 @@ function openMondelezRowContextMenu(rowId, x, y) {
   const items = [
     { label: row.tonu ? "Un-TONU" : "TONU", action: () => toggleMondelezTonu(rowId) },
     { label: row.calledOff ? "Un-mark driver fall off" : "Cancellation - driver fall off", action: () => openMondelezCancellation(rowId, "calledOff") },
-    { label: row.loadCancelled ? "Un-mark Mondelez cancellation" : "Mondelez cancellation - non-TONU", action: () => openMondelezCancellation(rowId, "loadCancelled") },
+    { label: row.loadCancelled ? "Un-mark Mondelez cancelled shift" : "Mondelez cancelled shift - non-TONU", action: () => openMondelezCancellation(rowId, "loadCancelled") },
     { label: row.shiftComplete ? "Mark Shift Incomplete" : "Shift Complete", action: () => toggleMondelezShiftComplete(rowId), success: true },
     { label: `Delete entire load ${row.aljexNumber || "(no Aljex#)"}`, action: () => deleteMondelezRow(rowId), danger: true },
   ];
@@ -390,7 +390,7 @@ async function openMondelezCancellation(rowId, field) {
   overlay.id = "mdz-cancellation-overlay";
   overlay.className = "overlay";
   overlay.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mdz-cancellation-title">
-    <div class="modal-header"><h2 id="mdz-cancellation-title">${field === "calledOff" ? "Cancellation - driver fall off" : "Mondelez cancellation - non-TONU"}</h2></div><div class="modal-body">
+    <div class="modal-header"><h2 id="mdz-cancellation-title">${field === "calledOff" ? "Cancellation - driver fall off" : "Mondelez cancelled shift - non-TONU"}</h2></div><div class="modal-body">
     <p>Load ${escapeHtml(row.aljexNumber || "(no Aljex#)")} — ${escapeHtml(row.driverName || "no driver")}</p>
     <label for="mdz-cancellation-reason">Reason</label><textarea id="mdz-cancellation-reason" rows="4" class="cell-input" required></textarea>
     <p class="mdz-cancellation-error" role="alert"></p>

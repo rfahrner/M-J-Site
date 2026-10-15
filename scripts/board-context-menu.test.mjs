@@ -5,7 +5,7 @@ const source = fs.readFileSync(new URL("../loadboard.js", import.meta.url), "utf
 const menu = source.slice(source.indexOf("function openRowContextMenu"), source.indexOf("/* ---------------- Load History", source.indexOf("function openRowContextMenu")));
 
 assert.match(menu, /Cancellation - driver fall off/);
-assert.match(menu, /Kroger cancellation - non-TONU/);
+assert.match(menu, /Kroger cancelled shift - non-TONU/);
 assert.doesNotMatch(menu, /label: .*Highlight/);
 assert.doesNotMatch(menu, /label: "Load Details"/);
 assert.doesNotMatch(menu, /label: "Text Now"/);
