@@ -26,7 +26,7 @@ begin
     where id = p_trip_id for update;
   if not found then return false; end if;
   if v_trip.dispatch_text_event_id is distinct from p_event_id then return false; end if;
-  if upper(left(btrim(coalesce(v_trip.route_id, v_trip.trip_id, '')), 2)) not in ('PA','FA') then return false; end if;
+  if upper(left(btrim(coalesce(nullif(v_trip.route_id,''), v_trip.trip_id, '')), 2)) not in ('PA','FA') then return false; end if;
   if v_trip.dispatch_call_ack_event_id = p_event_id then return true; end if;
   select * into v_shift from public.loads_shifts where id = v_trip.shift_id;
   if not found or v_shift.shift_complete or v_shift.tonu or v_shift.called_off or v_shift.load_cancelled
