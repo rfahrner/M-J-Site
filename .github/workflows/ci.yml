@@ -96,6 +96,9 @@ jobs:
       - name: Test nothing shipped hardcodes our host
         run: node scripts/no-hardcoded-host.test.mjs
 
+      - name: Test alert extras survive an alerts.js redraw
+        run: node --test scripts/alert-extras-survive-redraw.test.mjs
+
       - name: Test Night Shift rows stay editable on Mondelez
         run: node --test scripts/mondelez-night-shift-edit.test.mjs
 

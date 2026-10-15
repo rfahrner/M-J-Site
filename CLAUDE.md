@@ -302,7 +302,28 @@ and nothing awaiting or catching the handler, so the rejection went nowhere.
 Once the message has left, the alert goes -- bookkeeping cannot resurrect it,
 and a failed write says so in the status bar instead of being swallowed.
 `scripts/alert-clears-on-outlook-draft.test.mjs` drives the real fallback with
-a dead gateway and a throwing write. `alerts.js` keeps a dismissed-key set (localStorage, scoped to today)
+a dead gateway and a throwing write.
+
+**The extras controller must never time-gate its observer.** `alerts.js` owns
+`#alert-widget-body` and rewrites it with `innerHTML` on a **60-second** scan,
+which removes every `.dispatch-extra-alert`. `preshift-pro-text.js` watches for
+that with a MutationObserver and re-renders -- but it used to ignore mutations
+inside a 450ms window after its own render, to avoid retriggering itself. A
+time window cannot tell one writer from another, and BOTH schedulers are on
+60-second timers: once they drifted into the same 450ms they stayed there,
+alerts.js's wipe was swallowed as if it were ours, and the call alert vanished
+until the next minute tick. Reported 2026-10-15 as "the call driver alert keeps
+disappearing and coming back after a few minutes".
+
+It now `disconnect()`s while it writes and re-observes afterwards, which is
+exact: our own mutations are never seen, anyone else's always are, and no
+timing is involved. The observer also tracks the body ELEMENT rather than
+setting a flag on it -- alerts.js rebuilds the whole widget in some paths, and
+a flag goes with the old node, leaving the observer watching something
+detached. `scripts/alert-extras-survive-redraw.test.mjs` pins both, and fails
+on the old code with the collision case and the replaced-element case.
+
+`alerts.js` keeps a dismissed-key set (localStorage, scoped to today)
 and filters it out of every scan. Repeating rules roll a tier into their key, so
 the next reminder is a new key and still arrives; dismissing never switches a
 rule off.
