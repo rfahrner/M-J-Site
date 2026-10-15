@@ -4,6 +4,8 @@ function normalizeDriverRating(value) {
   const rating = String(value || '').trim().toUpperCase();
   if (!rating) return '';
   if (rating.includes('DNU')) return 'DNU';
+  // Legacy refusal notes are D, never the Georgia-only restriction.
+  if (/^REFUSED(?:\s+LOAD)?$/.test(rating)) return 'D';
   const first = rating.charAt(0);
   return ALLOWED_DRIVER_RATINGS.includes(first) ? first : '';
 }
@@ -17,7 +19,7 @@ function installDriverRatingDropdown() {
   select.className = current.className;
   select.innerHTML = [
     '<option value="">-- none set --</option>',
-    ...ALLOWED_DRIVER_RATINGS.map((rating) => `<option value="${rating}">${rating}</option>`),
+    ...ALLOWED_DRIVER_RATINGS.map((rating) => `<option value="${rating}">${rating === 'R' ? 'R — Restricted (Georgia only)' : rating}</option>`),
   ].join('');
 
   // loadboard.js writes existing profile values through element.value.  Some

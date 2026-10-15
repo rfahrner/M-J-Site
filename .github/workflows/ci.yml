@@ -229,6 +229,9 @@ jobs:
       - name: Test alert Text click history
         run: node --test scripts/alert-text-history.test.mjs
 
+      - name: Test Atlanta and Preferred driver rating cleanup
+        run: node --test scripts/driver-rating-cleanup.test.mjs
+
       - name: Type-check paperwork Edge Function
         run: deno check --node-modules-dir=auto supabase/functions/paperwork-submit/.ci-check.ts
 
