@@ -532,7 +532,7 @@ async function dispatchedRouteAlerts() {
       if (callRequired) {
         extras.push({html:extraAlertHtml({icon:'📞',jumpId:shift.id,buttonLabel:'Call',
           buttonAttrs:`data-special-call-trip="${trip.id}" data-special-call-event="${esc(trip.dispatch_text_event_id)}" data-special-call-route="${esc(label)}" data-special-call-driver="${esc(name)}"`,
-          text:`${name} (${shift.pro_number || 'No PRO'}, ${label}) — call driver; dispatcher must confirm the call`})});
+          text:`${name} (${shift.pro_number || 'No PRO'}, ${label}) — reefer load: call driver and verify they have confirmed the temp`})});
         continue;
       }
       const attrs = !prompt.waitingForMessage && phone
@@ -613,7 +613,24 @@ function installAlertObserver() {
   alertObserver.observe(body, { childList:true });
 }
 
-// Shared server-side acknowledgment. Cancel never writes to Supabase.
+/*
+ * Shared server-side acknowledgment. Cancel never writes to Supabase.
+ *
+ * THE WORDING HERE IS THE ATTESTATION, so it is not free to drift.
+ *
+ * This alert fires only on PA/FA routes (isCallRequiredRoute), and those are
+ * the reefer loads -- the call exists so somebody confirms with the driver
+ * that the reefer temperature is set. Submitting this form writes the
+ * dispatcher's name to loads_trips.dispatch_call_ack_name AND a permanent
+ * line in load_change_history, so what the button claims and what the
+ * database records have to be the same claim.
+ *
+ * They are checked against each other by
+ * scripts/reefer-temp-call-wording.test.mjs, which reads this file and the
+ * migration together. Changing one without the other leaves a dispatcher
+ * attesting to one thing on screen and a different thing in the audit trail,
+ * which is the half nobody looks at until it matters.
+ */
 async function showSpecialRouteCallModal(button) {
   const tripId = Number(button.dataset.specialCallTrip);
   const eventId = button.dataset.specialCallEvent;
@@ -623,15 +640,16 @@ async function showSpecialRouteCallModal(button) {
   overlay.id = 'special-route-call-modal';
   overlay.style.cssText = 'position:fixed;inset:0;z-index:200000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px';
   overlay.innerHTML = `<form style="background:#fff;color:#172542;border-radius:10px;padding:24px;max-width:430px;width:100%;box-shadow:0 16px 48px #0005">
-    <h2 style="margin:0 0 14px;font-size:21px">📞 Call Driver</h2>
+    <h2 style="margin:0 0 14px;font-size:21px">📞 Call Driver — Reefer Temp</h2>
     <p style="margin:0 0 16px"><strong>${esc(driver)}</strong> — Route ${esc(route)}</p>
-    <p>Call the driver before confirming. Enter your name to clear this alert for every dispatcher.</p>
+    <p>This driver is pulling a reefer. Call them and verify the driver has confirmed the temperature on the reefer.</p>
+    <p>Enter your name to clear this alert for every dispatcher.</p>
     <label for="special-route-call-name" style="display:block;font-weight:600;margin:12px 0 5px">Dispatcher name</label>
     <input id="special-route-call-name" maxlength="100" minlength="2" required autocomplete="name" style="width:100%;padding:10px;border:1px solid #8895a7;border-radius:5px;box-sizing:border-box" />
     <div role="alert" class="special-call-error" style="color:#b42318;margin:10px 0;min-height:1em"></div>
     <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px">
       <button type="button" data-special-call-cancel style="padding:9px 16px">Cancel</button>
-      <button type="submit" style="padding:9px 16px;background:#146dc1;color:white;border:0;border-radius:5px">Confirm Call</button>
+      <button type="submit" style="padding:9px 16px;background:#146dc1;color:white;border:0;border-radius:5px">Confirm Temp Verified</button>
     </div>
   </form>`;
   document.body.appendChild(overlay);
