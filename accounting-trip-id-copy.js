@@ -21,10 +21,81 @@
 
    Empty identifier cells still offer Delete from Accounting. Deletion is
    dispatched to accounting.js through a DOM event to avoid an import cycle.
+
+   ADDING DELETE TOOK RIGHT-CLICK COPY AWAY FROM THE REST OF THE SHEET.
+
+   This handler used to open with
+
+       const pill = e.target.closest(PILL_SELECTOR);
+       if (!pill) return; // anywhere else on the sheet keeps the browser's own menu
+
+   so a right-click on Rate Customer, Rate Carrier or Aljex # fell through to
+   the browser and its Cut/Copy/Paste. Offering Delete on every load row meant
+   preventDefault() on every load row, which took that menu away and put
+   nothing in its place: measured on the real page, right-clicking Rate Carrier
+   produced exactly one item, "Delete from Accounting".
+
+   Restoring the browser's menu alone would NOT have fixed it. A right-click
+   leaves no selection -- measured as selectionStart === selectionEnd on both
+   rate inputs, and a zero-length document selection on the Aljex cell -- and
+   Chrome greys Copy out when nothing is selected. "Right-click, Copy" in one
+   gesture has to be an item of our own.
+
+   So both halves:
+
+   - every editable cell in COPYABLE_CELLS offers "Copy <column> <value>",
+     named by the column header the dispatcher is reading;
+   - if text IS selected inside the row, the browser's menu is let through
+     untouched, because its Copy takes exactly what was highlighted -- part of
+     a value, or text in a plain cell such as Driver or MC that has no field of
+     its own. That is the half of the regression nobody had reported yet.
    ================================================================ */
 import { escapeHtml, setDriverSyncStatus } from './loadboard.js';
 
 const MENU_ID = 'acct-context-menu';
+
+/*
+ * The cells whose value the menu offers to copy, keyed by data-action and
+ * named by their column HEADER -- "Rate Carrier", not "carrier pay" -- so the
+ * item reads as the column being pointed at. acct-aljex-number also carries
+ * .acct-load-text, which is what this selector used to match; its label moves
+ * from "Load #" to the column's own name.
+ *
+ * The checkboxes (Highlight, Sent, Released) and the Revenue Rate <select> are
+ * deliberately absent: there is no text on them to copy.
+ */
+const COPYABLE_CELLS = {
+  'acct-aljex-number': 'Aljex #',
+  'acct-customer-rate': 'Rate Customer',
+  'acct-carrier-pay': 'Rate Carrier',
+};
+
+// An <input>'s text is in .value and its textContent is EMPTY; the Aljex cell
+// is a contenteditable <span>, where it is the other way round. Reading the
+// wrong one is a silent blank -- a menu item reading "Copy Rate Carrier" with
+// nothing after it, which copies nothing.
+function cellText(el) {
+  if (!el) return '';
+  const raw = el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' ? el.value : el.textContent;
+  return String(raw ?? '').trim();
+}
+
+/*
+ * Has the dispatcher highlighted something inside this row?
+ *
+ * An <input>'s internal selection is NOT visible to window.getSelection() in
+ * Chrome, so the two cases are genuinely different and both have to be asked.
+ */
+function hasSelectionInside(row, target) {
+  if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')
+      && target.selectionStart != null && target.selectionStart !== target.selectionEnd) return true;
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || !String(selection).trim()) return false;
+  for (let i = 0; i < selection.rangeCount; i += 1) {
+    if (row.contains(selection.getRangeAt(i).commonAncestorContainer)) return true;
+  }
+  return false;
+}
 
 function activeLocation() {
   return document.querySelector('#acct-location-tabs .location-tab.is-active')?.dataset.location || 'atlanta';
@@ -106,11 +177,18 @@ export function initAccountingTripIdCopy() {
     if (!row || !table.contains(row)) return;
     const accountingId = row.id.slice(5);
     if (!/^\d+$/.test(accountingId)) return;
-    const copyTarget = e.target.closest('.acct-load-text, .trip-chip');
-    const value = (copyTarget?.textContent || '').trim();
-    const label = copyTarget?.matches('.acct-load-text') ? 'Load #' : idLabel();
+
+    // Something is highlighted: the browser's Copy is the better answer,
+    // because it takes that and not the whole cell. Delete stays available
+    // from an ordinary right-click anywhere else on the row.
+    if (hasSelectionInside(row, e.target)) { closeAccountingContextMenu(); return; }
+
+    const field = e.target.closest('[data-action]');
+    const column = field ? COPYABLE_CELLS[field.dataset.action] : undefined;
+    const copyTarget = column ? field : e.target.closest('.trip-chip');
+    const value = cellText(copyTarget);
     e.preventDefault();
-    openCopyMenu(value === '—' ? '' : value, e.clientX, e.clientY, accountingId, label);
+    openCopyMenu(value === '—' ? '' : value, e.clientX, e.clientY, accountingId, column || idLabel());
   });
 
   document.addEventListener('click', (e) => {

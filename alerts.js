@@ -1,5 +1,5 @@
 import { boardAlertTextDetails } from './alert-text-history.js';
-import { boardDateKey, offsetDate, shiftRelativeNow, tripTimeline } from './overnight-times.js';
+import { boardDateKey, offsetDate, shiftRelativeNow, tripTimeline, OPERATING_WINDOW_MIN } from './overnight-times.js';
 /* ---------------- board alerts: bottom-right notification panel ---------------- */
 import {state, supabaseClient, SHIFTS_TABLE, TRIPS_TABLE, dateKey, findDriver, parseHHMM, AVG_MPH, minsToClock, escapeHtml, $, openSendTextModal, logAlertTextClick, setDriverSyncStatus, isAccountingUser, isAdminUser, signOut, scrollToAndOutlineShiftRow} from './loadboard.js';
 import './paperwork-load-integration.js';
@@ -11,7 +11,10 @@ import './paperwork-load-integration.js';
   // A shift stops being operationally live 12 hours after it starts. The board
   // already works to this number -- it is the Megaboard's running cap -- and
   // the alert scan needs it because the scan window is now three days wide.
-  export const OPERATING_WINDOW_MIN = 12 * 60;
+  // Declared in overnight-times.js so the extras controller reads the same
+  // number rather than its own copy of it; re-exported because this module is
+  // where callers and tests have always looked for it.
+  export { OPERATING_WINDOW_MIN };
   export const LAST_STOP_RETURN_FOLLOWUP_MIN = 45; // Stage 6 repeat interval: once Return ETA to DC's time has arrived, re-check every 45 min until the trip's marked complete
   export const AT_DC_FOLLOWUP_MIN = 45; // repeat interval for "still waiting at the DC, not yet dispatched on their next load"
   const PAPERWORK_FOLLOWUP_MIN = 15; // reach out within 15 min if a new route starts before the last one's paperwork is in

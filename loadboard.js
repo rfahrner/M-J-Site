@@ -4834,7 +4834,16 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     return `${withCountryCode}@textbetter.com`;
   }
 
-  function formatTextAddresses(rawPhone) {
+  /*
+   * Exported because it is the ONLY correct answer to "can this number be
+   * texted", and every caller that guesses instead gets it wrong in the same
+   * direction. The Delaware BOL alert marks a shift as texted from its own
+   * recipient list; when that list said "has a phone" on truthiness alone, a
+   * driver whose cell is stored as "7208173663 x2" or nine digits was dropped
+   * by openSendTextModal() while their shift was still stamped sent -- so they
+   * were never texted and the alert never asked again.
+   */
+  export function formatTextAddresses(rawPhone) {
     const parts = String(rawPhone == null ? "" : rawPhone).split(/[\\/,;|]+/);
     const addresses = parts.map(formatTextAddress);
     // Reject the entire entry if any listed number is malformed.

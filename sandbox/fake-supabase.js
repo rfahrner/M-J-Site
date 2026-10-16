@@ -75,9 +75,75 @@
   };
   window.__sandboxHandlerCount = () => handlers.length;
 
+  /*
+   * The two additions below are DECORATORS, wrapped around the client after it
+   * is built, and that is deliberate.
+   *
+   * Four specs (accounting-refresh, accounting-clear-rate,
+   * accounting-row-delete, mondelez-row-menu) install their own stubs by
+   * string-replacing exact lines of THIS FILE's source: the `result` function
+   * signature, the `from:` line that calls it, the line inside result() that
+   * assigns the insert/update/upsert/delete methods, and the one-line default
+   * `rpc` in the client literal. Editing any of those in place makes their
+   * .replace() calls match nothing, silently leaves their stubs uninstalled,
+   * and the spec fails thirty seconds later on an unrelated timeout. That is
+   * how it failed the first time this file was extended.
+   *
+   * Those four lines are an API now: wrap, do not edit -- and do not quote any
+   * of them in a comment either, because .replace() takes the FIRST match and
+   * a copy in a comment above the real line steals it.
+   *
+   * Because the wrapping happens after the spec's replacement, a spec's own
+   * rpc becomes the delegate below, which composes correctly.
+   */
+  const writes = [];
+  window.__sandboxWrites = (table) => (table ? writes.filter((w) => w.table === table) : writes.slice());
+  window.__sandboxClearWrites = () => { writes.length = 0; };
+  const rpcs = [];
+  window.__sandboxRpcs = (fn) => (fn ? rpcs.filter((r) => r.fn === fn) : rpcs.slice());
+
+  // Writes are RECORDED. Without this a spec can watch an alert disappear
+  // from the screen and never learn whether the column behind it was written
+  // -- and a forgotten write looks exactly like a cleared alert until the next
+  // dispatcher reloads the board.
+  function recordWrites(builder, table) {
+    ['insert', 'update', 'upsert', 'delete'].forEach((op) => {
+      const inner = builder[op];
+      if (typeof inner !== 'function') return;
+      builder[op] = (values) => { writes.push({ table, op, values }); return inner(values); };
+    });
+    return builder;
+  }
+
+  // log_alert_text_click is answered properly. Every alert Text button in the
+  // app calls logAlertTextClick() before opening the modal, and
+  // writeAlertTextClick() throws "The alert history entry was not confirmed."
+  // unless the RPC returns one row per load id -- which the click handler
+  // catches, so the button showed a status line and opened nothing. A spec saw
+  // a dead button and no error. Anything other than that one function is
+  // passed straight through to whatever rpc the client already had.
+  function decorate(client) {
+    const innerFrom = client.from, innerRpc = client.rpc;
+    client.from = (table) => recordWrites(innerFrom(table), table);
+    client.rpc = (fn, params) => {
+      rpcs.push({ fn, params });
+      if (fn !== 'log_alert_text_click') return innerRpc(fn, params);
+      const ids = (params && params.p_load_ids) || [];
+      return Promise.resolve({
+        data: ids.map((id, i) => ({
+          id: 90000 + i, source: params.p_source, shift_id: id, trip_id: params.p_trip_id,
+          alert_label: params.p_alert_label, message: params.p_message,
+          clicked_at: new Date().toISOString(), note: '',
+        })),
+        error: null,
+      });
+    };
+    return client;
+  }
+
   window.supabase = {
     createClient() {
-      return {
+      return decorate({
         from: (table) => result(rows()[table] || []),
         rpc: async () => ({ data: null, error: null }),
         channel,
@@ -101,7 +167,7 @@
           onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } }),
           signOut: async () => ({ error: null }),
         },
-      };
+      });
     },
   };
 })();

@@ -1,6 +1,6 @@
-import { supabaseClient, openSendTextModal, setDriverSyncStatus, logAlertTextClick } from './loadboard.js';
+import { supabaseClient, openSendTextModal, setDriverSyncStatus, logAlertTextClick, formatTextAddresses } from './loadboard.js';
 import { DISPATCH_ROUTE_MESSAGE, dispatchRoutePrompt, acknowledgeDispatchRouteText, isCallRequiredRoute } from './dispatch-route-text.js';
-import { boardDateKey, offsetDate } from './overnight-times.js';
+import { boardDateKey, offsetDate, shiftRelativeNow, clockMinutes, OPERATING_WINDOW_MIN } from './overnight-times.js';
 
 /*
  * The Carrier Docs link, derived from wherever this page is served rather
@@ -49,13 +49,28 @@ function esc(value) {
   return String(value ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
 }
 function clean(value) { return String(value ?? '').trim(); }
-function parseHHMM(value) {
-  const m = clean(value).match(/^(\d{1,2}):(\d{2})/);
-  if (!m) return null;
-  const h = Number(m[1]), min = Number(m[2]);
-  if (h < 0 || h > 23 || min < 0 || min > 59) return null;
-  return h * 60 + min;
-}
+/*
+ * The shift clock is read by overnight-times.js, not by a copy kept here.
+ *
+ * There used to be a local parseHHMM in this file matching /^(\d{1,2}):(\d{2})/
+ * -- colon only. The board stores BOTH formats, and which one you get depends
+ * on who entered the day, not on the row: Delaware's 2026-10-15 was ten shifts
+ * of "1300"/"1400"/"2000", its 2026-10-13 was eight of "12:00"/"14:00". Over
+ * thirty days, 114 of Delaware's 206 shift_start values and 46 of 46 Houston
+ * times were bare digits.
+ *
+ * So the failure was not a scattered miss. On a bare-digit day every single
+ * shift parsed as null, every timing rule in this file read "no start time",
+ * and the whole day's alerts were silently absent -- with nothing on screen
+ * saying a rule had been skipped rather than satisfied. loadboard.js's
+ * parseHHMM has always had the optional colon; only this private copy drifted,
+ * and it drifted invisibly because the broken form still returns a plausible
+ * null.
+ *
+ * clockMinutes() is the superset (optional colon, optional seconds) and this
+ * module already imported the file it lives in.
+ */
+const parseHHMM = clockMinutes;
 function clockLabel(value) {
   const mins = parseHHMM(value);
   if (mins == null) return clean(value) || 'scheduled time';
@@ -91,6 +106,20 @@ async function driverMap(ids) {
 function preShiftMessage(shiftStart) {
   return `This is D&L, we have you scheduled for ${clockLabel(shiftStart)}. Please reply with your ETA.`;
 }
+/*
+ * Delaware's BOL-photo request. Ron's wording, verbatim and deliberately so:
+ * drivers have been answering this exact text for a while and the phrasing is
+ * what they recognise. Do not "tidy" the punctuation.
+ */
+const DELAWARE_BOL_MESSAGE = 'Please send a photo of your BOL(s)-with the Route number it is for this shift (e.g.: 1st Route, 2nd route, 3rd Load) to this text thread OR text it in, also confirm how many stops, and total miles for the route w/ photo of each BOL.';
+// How many names the alert spells out before it stops; a sixteen-driver
+// Delaware evening would otherwise push the Text button off the widget.
+const BOL_NAMES_SHOWN = 6;
+// The latest a shift whose start time is unreadable could still be running:
+// 23:59 of its own day, plus the board's operating window. Derived rather than
+// chosen, so it moves with OPERATING_WINDOW_MIN instead of drifting from it.
+const UNKNOWN_START_WINDOW_MIN = 1439 + OPERATING_WINDOW_MIN;
+
 function carrierDocsMessage(pro) {
   return `Please submit signed images of your paperwork to the Carrier Docs app: ${CARRIER_DOCS_URL} upon completion of your route, using PRO#${pro}`;
 }
@@ -149,6 +178,89 @@ async function handleBasePreShiftClick(button) {
     { allowDnu: recipients.length === 1 },
   );
   return true;
+}
+
+async function markBolTextSent(shiftIds) {
+  try {
+    const { error } = await supabaseClient
+      .from('loads_shifts')
+      .update({ bol_text_sent_at: new Date().toISOString() })
+      .in('id', shiftIds);
+    if (error) throw error;
+  } catch (error) {
+    // Say so. An unmarked send means the alert comes back and somebody texts
+    // the same drivers twice, which is annoying but visible; a silent failure
+    // here would look exactly like the alert misbehaving again.
+    setDriverSyncStatus(`Text sent, but the BOL request could not be marked sent (${error.message || error}). The alert will ask again.`, 'error');
+  }
+  scheduleRefresh(100);
+}
+
+async function handleDelawareBolClick(button) {
+  const ids = clean(button.dataset.delawareBolShifts).split(',').map(Number).filter(Number.isFinite);
+  if (!ids.length) return;
+  // Re-read before sending. The alert may have been painted a minute ago, and
+  // another dispatcher on another screen may have sent it in the meantime;
+  // `.is(bol_text_sent_at, null)` is what stops the second dispatcher texting
+  // the whole shift again.
+  const { data: rows, error } = await supabaseClient
+    .from('loads_shifts')
+    .select('id,driver_id,driver_name_text,driver_cell_snapshot,bol_text_sent_at')
+    .in('id', ids)
+    .is('bol_text_sent_at', null);
+  if (error) {
+    setDriverSyncStatus(`Could not check the BOL request before sending (${error.message || error}).`, 'error');
+    return;
+  }
+  if (!rows?.length) { scheduleRefresh(100); return; }
+  const drivers = await driverMap(rows.map((row) => row.driver_id));
+  const sendable = rows.map((row) => {
+    const drv = drivers.get(String(row.driver_id)) || {};
+    return {
+      id: Number(row.id),
+      name: drv.name || clean(row.driver_name_text) || 'Driver',
+      phone: drv.phone || clean(row.driver_cell_snapshot),
+    };
+    // formatTextAddresses(), not truthiness. openSendTextModal() drops any
+    // recipient this rejects, and shiftIds below is frozen BEFORE the modal
+    // runs -- so a malformed cell used to mean the driver was never texted and
+    // their shift was marked as though they had been, permanently removing
+    // them from the alert's `.is(bol_text_sent_at, null)` query.
+    //
+    // The modal also de-dupes by normalised number. Two shifts sharing a cell
+    // (the duplicate driver profiles in CLAUDE.md) therefore receive one text
+    // and both get marked, which is right: that number was asked.
+  }).filter((person) => formatTextAddresses(person.phone).length > 0);
+  if (!sendable.length) {
+    setDriverSyncStatus('No usable driver phone number for those shifts, so the BOL request cannot be sent.', 'error');
+    return;
+  }
+  const shiftIds = sendable.map((person) => person.id);
+  /*
+   * History is recorded, but a failure to record it does NOT stop the text.
+   *
+   * Every other alert here awaits logAlertTextClick() ahead of the modal with
+   * nothing around it, so one bad RPC -- or a row-count mismatch, which is how
+   * writeAlertTextClick() reports partial success -- turns the Text button
+   * into a button that shows an error and sends nothing. For a reminder that
+   * can be chased later that is a defensible trade. For this one it is not:
+   * the drivers are already out on their routes, and a missing audit row is
+   * worth less than the BOLs.
+   */
+  try {
+    await logAlertTextClick({ loadIds: shiftIds, label: 'Delaware BOL photo request', message: DELAWARE_BOL_MESSAGE });
+  } catch (error) {
+    setDriverSyncStatus(`Sending the BOL request, but it could not be added to the load history (${error.message || error}).`, 'error');
+  }
+  openSendTextModal(
+    sendable.map(({ name, phone }) => ({ name, phone })),
+    DELAWARE_BOL_MESSAGE,
+    // NOT the third argument: that one writes pre_shift_text_sent, which is
+    // the ETA reminder's marker. Sharing it would make either text silence
+    // the other.
+    null,
+    { allowDnu: true, onSent: () => { void markBolTextSent(shiftIds); } },
+  );
 }
 
 function extraAlertHtml({ icon, text, buttonAttrs, jumpId, buttonLabel = 'Text' }) {
@@ -236,6 +348,162 @@ async function carrierDocsAlerts() {
   });
 }
 
+/*
+ * Delaware: every driver gets asked for BOL photos at the start of their
+ * shift, and the ask stays up until somebody sends it.
+ *
+ * WHY THE SHIFT-RELATIVE CLOCK AND NOT shift_date === today
+ * Delaware runs around the clock -- the last thirty days contain starts at
+ * 0001, 0200, 0300 and 2200. At 02:00 the shift that needs this text was
+ * entered under YESTERDAY's date and is six hours old; under a plain
+ * "today" test the night dispatcher would never be prompted for it. So
+ * eligibility is measured the way the board's own alert scan measures it:
+ * shiftRelativeNow() counts from the shift's own midnight, and the shift is
+ * live from its start until OPERATING_WINDOW_MIN past it. That is also what
+ * stops the ask piling up forever -- "stays until sent" means until sent or
+ * until the shift is over, not until the end of time.
+ *
+ * WHY ONE GROUPED ALERT
+ * The whole shift gets the same text. Ten separate lines with ten Text
+ * buttons is ten modals and ten chances to miss one; one line sends the lot.
+ *
+ * WHY allowDnu
+ * One Delaware shift in five runs on a DNU-rated driver (41 of 206 over
+ * thirty days, eight drivers). A driver who is out on a route tonight has to
+ * send their BOLs whatever their rating says, and the default group block
+ * would drop them from the send while this code marked their shift as texted
+ * -- the text never sent and the alert never asking again. Alert Text buttons
+ * are intentional direct messages, as openTrackedText() says; this is one.
+ */
+async function delawareBolAlerts() {
+  if (currentLocation() !== 'delaware' || !supabaseClient) return [];
+  const now = new Date(), today = boardDateKey(now);
+  const { data: shifts, error } = await supabaseClient
+    .from('loads_shifts')
+    .select('id,shift_date,shift_start,driver_id,driver_name_text,driver_cell_snapshot,shift_complete,called_off,tonu,load_cancelled,bol_text_sent_at')
+    .eq('location', 'delaware')
+    .in('shift_date', [offsetDate(today, -1), today, offsetDate(today, 1)])
+    .is('bol_text_sent_at', null);
+  /*
+   * A failure here must not throw. refreshExtraAlerts() wraps the whole set in
+   * one try/catch, so an exception out of this function removes the PA/FA CALL
+   * alerts from the screen as well -- and the most likely failure is the most
+   * dangerous version of that: code deployed ahead of the migration, so
+   * bol_text_sent_at does not exist yet and every refresh wipes the call
+   * alerts for the whole board. Reported on its own line instead, where it
+   * costs nothing but a dispatcher noticing.
+   */
+  if (error) {
+    console.error('Delaware BOL alert query failed', error);
+    return [{
+      html: extraAlertHtml({
+        icon: '🧾',
+        text: `BOL photos — could not check which shifts still need the request (${error.message || error})`,
+      }),
+    }];
+  }
+  if (!shifts?.length) return [];
+
+  const live = shifts.filter((shift) =>
+    !shift.shift_complete && !shift.called_off && !shift.tonu && !shift.load_cancelled);
+  if (!live.length) return [];
+
+  const started = [], noStartTime = [];
+  for (const shift of live) {
+    const since = shiftRelativeNow(shift.shift_date, now);
+    if (since == null) continue;
+    const start = parseHHMM(shift.shift_start);
+    if (start == null) {
+      /*
+       * An unreadable start time cannot be timed, so it is REPORTED rather
+       * than quietly dropped -- and the window for reporting it is derived
+       * from the same operating window rather than guessed.
+       *
+       * Reading it the most generous way: a shift dated D could have started
+       * as late as 23:59 that day, so it can still be live until
+       * 23:59 + OPERATING_WINDOW_MIN. Below zero means the shift is dated
+       * tomorrow and has not begun, which is why a blank start on a shift
+       * pencilled in for tomorrow does not nag all day.
+       *
+       * The first version of this read `shift.shift_date === today`, which
+       * also excluded YESTERDAY -- the whole population the three-day window
+       * and the shift-relative clock exist for. At 02:00 a yesterday-dated
+       * shift with a blank Shift Start produced nothing at all: no ask, and no
+       * notice that there was nothing to ask with.
+       */
+      if (since >= 0 && since <= UNKNOWN_START_WINDOW_MIN) noStartTime.push(shift);
+      continue;
+    }
+    const elapsed = since - start;
+    if (elapsed >= 0 && elapsed <= OPERATING_WINDOW_MIN) started.push(shift);
+  }
+  if (!started.length && !noStartTime.length) return [];
+
+  const drivers = await driverMap([...started, ...noStartTime].map((shift) => shift.driver_id));
+  const named = (shift) => {
+    const drv = drivers.get(String(shift.driver_id)) || {};
+    return {
+      id: Number(shift.id),
+      name: drv.name || clean(shift.driver_name_text) || 'Driver',
+      phone: drv.phone || clean(shift.driver_cell_snapshot),
+      hasDriver: !!(drv.name || clean(shift.driver_name_text) || clean(shift.driver_cell_snapshot)),
+    };
+  };
+  // "Has a phone" has to mean the number openSendTextModal() will accept, not
+  // merely a non-empty string. A cell stored as "7208173663 x2", as nine
+  // digits, or as two numbers run together is dropped there -- so counting it
+  // here makes the alert promise a driver the modal never addresses.
+  const textable = (person) => formatTextAddresses(person.phone).length > 0;
+  const extras = [];
+
+  if (started.length) {
+    const people = started.map(named).filter((person) => person.hasDriver);
+    const sendable = people.filter(textable);
+    const nophone = people.filter((person) => !textable(person));
+    if (people.length) {
+      const names = sendable.length ? sendable : people;
+      const shown = names.slice(0, BOL_NAMES_SHOWN).map((person) => person.name).join(', ');
+      const more = names.length > BOL_NAMES_SHOWN ? ` +${names.length - BOL_NAMES_SHOWN} more` : '';
+      const skipped = nophone.length
+        ? ` · ${nophone.length} without a usable phone number (${nophone.map((person) => person.name).join(', ')})`
+        : '';
+      extras.push({
+        html: extraAlertHtml({
+          icon: '🧾',
+          jumpId: people.map((person) => person.id).join(','),
+          buttonLabel: 'Text',
+          // De-duped by phone inside the modal, so a driver holding two of
+          // tonight's shifts is texted once and both shifts are marked -- the
+          // message covers every route on the shift, which is the point of it.
+          buttonAttrs: sendable.length
+            ? `data-delaware-bol-shifts="${sendable.map((person) => person.id).join(',')}"`
+            : '',
+          text: sendable.length
+            ? `BOL photos — ${sendable.length} driver${sendable.length === 1 ? '' : 's'} on shift: ${shown}${more}${skipped}`
+            : `BOL photos — no usable phone number for ${shown}${more}; the request cannot be texted`,
+        }),
+      });
+    }
+  }
+
+  if (noStartTime.length) {
+    const people = noStartTime.map(named).filter((person) => person.hasDriver);
+    if (people.length) {
+      const shown = people.slice(0, BOL_NAMES_SHOWN).map((person) => person.name).join(', ');
+      const more = people.length > BOL_NAMES_SHOWN ? ` +${people.length - BOL_NAMES_SHOWN} more` : '';
+      extras.push({
+        html: extraAlertHtml({
+          icon: '⏱️',
+          jumpId: people.map((person) => person.id).join(','),
+          text: `BOL photos — no Shift Start on ${people.length} shift${people.length === 1 ? '' : 's'} (${shown}${more}), so the request is not timed yet`,
+        }),
+      });
+    }
+  }
+
+  return extras;
+}
+
 async function dispatchedRouteAlerts() {
   const loc = currentLocation();
   if (!['atlanta','delaware','buildingc'].includes(loc) || !supabaseClient) return [];
@@ -264,7 +532,7 @@ async function dispatchedRouteAlerts() {
       if (callRequired) {
         extras.push({html:extraAlertHtml({icon:'📞',jumpId:shift.id,buttonLabel:'Call',
           buttonAttrs:`data-special-call-trip="${trip.id}" data-special-call-event="${esc(trip.dispatch_text_event_id)}" data-special-call-route="${esc(label)}" data-special-call-driver="${esc(name)}"`,
-          text:`${name} (${shift.pro_number || 'No PRO'}, ${label}) — call driver; dispatcher must confirm the call`})});
+          text:`${name} (${shift.pro_number || 'No PRO'}, ${label}) — reefer load: call driver and verify they have confirmed the temp`})});
         continue;
       }
       const attrs = !prompt.waitingForMessage && phone
@@ -313,7 +581,7 @@ async function refreshExtraAlerts() {
   // was seeing. By the time we are rendering, the element certainly exists.
   installAlertObserver();
   let extras;
-  try { extras = [...await houstonPreShiftAlerts(), ...await carrierDocsAlerts(), ...await dispatchedRouteAlerts()]; }
+  try { extras = [...await houstonPreShiftAlerts(), ...await carrierDocsAlerts(), ...await delawareBolAlerts(), ...await dispatchedRouteAlerts()]; }
   catch(error) { console.error('Could not refresh dispatch reminders',error);return; }
   lastExtrasHtml = extras.map((extra) => extra.html);
   paintExtras(body, lastExtrasHtml);
@@ -345,7 +613,24 @@ function installAlertObserver() {
   alertObserver.observe(body, { childList:true });
 }
 
-// Shared server-side acknowledgment. Cancel never writes to Supabase.
+/*
+ * Shared server-side acknowledgment. Cancel never writes to Supabase.
+ *
+ * THE WORDING HERE IS THE ATTESTATION, so it is not free to drift.
+ *
+ * This alert fires only on PA/FA routes (isCallRequiredRoute), and those are
+ * the reefer loads -- the call exists so somebody confirms with the driver
+ * that the reefer temperature is set. Submitting this form writes the
+ * dispatcher's name to loads_trips.dispatch_call_ack_name AND a permanent
+ * line in load_change_history, so what the button claims and what the
+ * database records have to be the same claim.
+ *
+ * They are checked against each other by
+ * scripts/reefer-temp-call-wording.test.mjs, which reads this file and the
+ * migration together. Changing one without the other leaves a dispatcher
+ * attesting to one thing on screen and a different thing in the audit trail,
+ * which is the half nobody looks at until it matters.
+ */
 async function showSpecialRouteCallModal(button) {
   const tripId = Number(button.dataset.specialCallTrip);
   const eventId = button.dataset.specialCallEvent;
@@ -355,15 +640,16 @@ async function showSpecialRouteCallModal(button) {
   overlay.id = 'special-route-call-modal';
   overlay.style.cssText = 'position:fixed;inset:0;z-index:200000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px';
   overlay.innerHTML = `<form style="background:#fff;color:#172542;border-radius:10px;padding:24px;max-width:430px;width:100%;box-shadow:0 16px 48px #0005">
-    <h2 style="margin:0 0 14px;font-size:21px">📞 Call Driver</h2>
+    <h2 style="margin:0 0 14px;font-size:21px">📞 Call Driver — Reefer Temp</h2>
     <p style="margin:0 0 16px"><strong>${esc(driver)}</strong> — Route ${esc(route)}</p>
-    <p>Call the driver before confirming. Enter your name to clear this alert for every dispatcher.</p>
+    <p>This driver is pulling a reefer. Call them and verify the driver has confirmed the temperature on the reefer.</p>
+    <p>Enter your name to clear this alert for every dispatcher.</p>
     <label for="special-route-call-name" style="display:block;font-weight:600;margin:12px 0 5px">Dispatcher name</label>
     <input id="special-route-call-name" maxlength="100" minlength="2" required autocomplete="name" style="width:100%;padding:10px;border:1px solid #8895a7;border-radius:5px;box-sizing:border-box" />
     <div role="alert" class="special-call-error" style="color:#b42318;margin:10px 0;min-height:1em"></div>
     <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px">
       <button type="button" data-special-call-cancel style="padding:9px 16px">Cancel</button>
-      <button type="submit" style="padding:9px 16px;background:#146dc1;color:white;border:0;border-radius:5px">Confirm Call</button>
+      <button type="submit" style="padding:9px 16px;background:#146dc1;color:white;border:0;border-radius:5px">Confirm Temp Verified</button>
     </div>
   </form>`;
   document.body.appendChild(overlay);
@@ -408,6 +694,14 @@ document.addEventListener('click', async (event) => {
     event.preventDefault();
     event.stopImmediatePropagation();
     await handleBasePreShiftClick(base);
+    return;
+  }
+
+  const bol = event.target.closest('[data-delaware-bol-shifts]');
+  if (bol) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    await handleDelawareBolClick(bol);
     return;
   }
 

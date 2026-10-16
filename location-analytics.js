@@ -31,6 +31,8 @@ import {
   supabaseClient, escapeHtml, $, on, dateKey, addDays, todayDate,
   SHIFTS_TABLE, TRIPS_TABLE, ACCOUNTING_TABLE, setDriverSyncStatus, isAdminUser,
 } from './loadboard.js';
+import { buildInvoiceData, lastCompletedWeek, weekStart, invoiceFileName, INVOICE_LOCATIONS, addDays as addDaysIso } from './invoice-data.js';
+import { buildInvoicePdf } from './invoice-pdf.js';
 
 const LA_LOCATIONS = [
   { key: 'atlanta', label: 'Atlanta' },
@@ -846,6 +848,118 @@ function openReportInEmail() {
   setReportStatus('Email draft generated — open the downloaded .eml in Outlook. The formatted preview is already included.');
 }
 
+/* ---------------- Generate Invoice ---------------- */
+
+/*
+ * The invoice reads with its own strict fetcher, NOT fetchAllRows().
+ *
+ * fetchAllRows() is built for the analytics tables: on a failed page it logs,
+ * records the failure for the banner, and returns what it already had, so the
+ * sheet shows a number rather than nothing. That is right for a dashboard and
+ * wrong for a bill -- a dropped page there is an invoice that is quietly short
+ * by a day's drivers, sent to a customer, with every total on it internally
+ * consistent. This throws instead.
+ */
+async function fetchInvoiceRows(table, columns, applyFilters) {
+  const PAGE_SIZE = 1000;
+  let all = [];
+  let from = 0;
+  for (;;) {
+    let q = supabaseClient.from(table).select(columns).order('id', { ascending: true }).range(from, from + PAGE_SIZE - 1);
+    if (applyFilters) q = applyFilters(q);
+    const { data, error } = await q;
+    if (error) throw new Error(`Could not read ${table} (${error.message || error.code || 'request failed'}).`);
+    all = all.concat(data || []);
+    if (!data || data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return all;
+}
+
+let invoicePreview = null;
+
+function invoiceError(message) {
+  const box = $('#inv-error');
+  if (box) box.textContent = message || '';
+}
+
+// Reads the chosen week and reports what it would bill, so the PRO is filled
+// in from Accounting and nobody generates a week blind.
+async function refreshInvoicePreview() {
+  const note = $('#inv-week-note');
+  const start = $('#inv-start')?.value || '';
+  const end = $('#inv-end')?.value || '';
+  invoicePreview = null;
+  invoiceError('');
+  if (!start || !end) { if (note) note.textContent = ''; return; }
+  if (note) note.textContent = 'Reading that week…';
+  try {
+    const data = await buildInvoiceData(fetchInvoiceRows, {
+      location: 'atlanta', startDate: start, endDate: end, invoiceDate: dateKey(todayDate()),
+    });
+    invoicePreview = data;
+    const drivers = data.days.reduce((n, d) => n + d.lines.length, 0);
+    if (note) note.textContent = `${data.days.length} operating day${data.days.length === 1 ? '' : 's'}, ${drivers} driver line${drivers === 1 ? '' : 's'}, $${data.total.toFixed(2)}.`;
+    const pro = $('#inv-pro');
+    // Only fill what the dispatcher has not typed over.
+    if (pro && !pro.dataset.touched) pro.value = data.proNumber;
+    if (!data.proNumber) invoiceError('No Aljex # on the first load of that week — enter the PRO # by hand.');
+  } catch (err) {
+    if (note) note.textContent = '';
+    invoiceError(err.message || String(err));
+  }
+}
+
+function openInvoiceModal() {
+  const week = lastCompletedWeek(dateKey(todayDate()));
+  const startEl = $('#inv-start');
+  const endEl = $('#inv-end');
+  if (startEl) startEl.value = week.startDate;
+  if (endEl) endEl.value = week.endDate;
+  const pro = $('#inv-pro');
+  if (pro) { pro.value = ''; delete pro.dataset.touched; }
+  invoiceError('');
+  $('#modal-invoice')?.classList.remove('hidden');
+  void refreshInvoicePreview();
+}
+
+function closeInvoiceModal() { $('#modal-invoice')?.classList.add('hidden'); }
+
+async function downloadInvoice() {
+  const button = $('#inv-build');
+  if (button) button.disabled = true;
+  try {
+    if (!invoicePreview) await refreshInvoicePreview();
+    if (!invoicePreview) return;
+    const pro = ($('#inv-pro')?.value || '').trim();
+    if (!pro) { invoiceError('Enter the PRO # before generating.'); return; }
+    const bytes = buildInvoicePdf({ ...invoicePreview, proNumber: pro });
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = invoiceFileName(invoicePreview.startDate, invoicePreview.endDate);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // Revoked on a timer, not immediately: Safari has not finished reading the
+    // blob when click() returns and saves a zero-byte file if it is revoked.
+    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    closeInvoiceModal();
+    setDriverSyncStatus(`Invoice generated for ${invoicePreview.startDate} to ${invoicePreview.endDate}.`, 'success');
+  } catch (err) {
+    invoiceError(err.message || String(err));
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+// Atlanta is the only board with an invoice format, so the button follows the
+// tab rather than generating an Atlanta invoice from whatever is on screen.
+function syncInvoiceButton() {
+  const button = $('#btn-generate-invoice');
+  if (button) button.classList.toggle('hidden', !INVOICE_LOCATIONS[laState.activeTab]);
+}
+
 export async function initLocationAnalyticsPage() {
   if (!supabaseClient) { setDriverSyncStatus("Supabase didn't load on this page.", 'error'); return; }
   if (!isAdminUser()) return; // page-level redirect in loadboard.js's init() already handles this — this is just a second guard
@@ -878,6 +992,7 @@ export async function initLocationAnalyticsPage() {
     laState.activeTab = btn.dataset.laTab;
     laState.earliestYear = null; // different location, may have a different earliest date on file
     renderTabs();
+    syncInvoiceButton();
     reload();
   });
 
@@ -914,6 +1029,25 @@ export async function initLocationAnalyticsPage() {
   on('rp-close', 'click', closeRangePickerModal);
   on('rp-cancel', 'click', closeRangePickerModal);
   on('rp-apply', 'click', applyRangePickerSelection);
+
+  syncInvoiceButton();
+  on('btn-generate-invoice', 'click', openInvoiceModal);
+  on('inv-close', 'click', closeInvoiceModal);
+  on('inv-cancel', 'click', closeInvoiceModal);
+  on('inv-build', 'click', () => { void downloadInvoice(); });
+  on('inv-start', 'change', () => {
+    // Picking any day snaps to that day's Monday-Sunday week: an invoice is
+    // never a partial week, and a half-week would bill the rest to nobody.
+    const startEl = $('#inv-start');
+    const endEl = $('#inv-end');
+    if (startEl?.value) {
+      startEl.value = weekStart(startEl.value);
+      if (endEl) endEl.value = addDaysIso(startEl.value, 6);
+    }
+    void refreshInvoicePreview();
+  });
+  on('inv-end', 'change', () => { void refreshInvoicePreview(); });
+  on('inv-pro', 'input', (e) => { e.target.dataset.touched = '1'; });
 
   on('btn-send-recap', 'click', async () => {
     laState.reportRange = previousReportWeek();
