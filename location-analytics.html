@@ -22,6 +22,7 @@
         <div class="subtext">Admin only. Every number below is computed live from real shift/trip/accounting data for the selected range.</div>
       </div>
       <div class="toolbar-actions">
+        <button class="btn btn-ghost" id="btn-generate-invoice">Generate Invoice</button>
         <button class="btn" id="btn-send-recap">Generate Report</button>
       </div>
     </div>
@@ -74,6 +75,39 @@
   </div>
 
   <!-- ================= Send Recap modal ================= -->
+  <!--
+    Generate Invoice. The week is picked HERE rather than taken from the
+    page's Annual/Period/Month range: an invoice is always one Monday-Sunday
+    week, and silently billing whatever range happened to be on screen is the
+    mistake worth designing out.
+  -->
+  <div class="overlay hidden" id="modal-invoice">
+    <div class="modal-card" style="max-width:460px;">
+      <div class="modal-head">
+        <h3>Generate Invoice</h3>
+        <button class="modal-close" id="inv-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="subtext" style="margin-bottom:10px;">Kroger/BGDC weekly invoice for Atlanta (Forest Park, GA).</div>
+        <label for="inv-week" style="display:block;font-weight:600;margin-bottom:5px;">Week</label>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <input type="date" class="cell-input" id="inv-start" style="width:auto;">
+          <span class="subtext">to</span>
+          <input type="date" class="cell-input" id="inv-end" style="width:auto;">
+        </div>
+        <div class="calc-note" id="inv-week-note" style="margin-top:8px;"></div>
+        <label for="inv-pro" style="display:block;font-weight:600;margin:12px 0 5px;">PRO #</label>
+        <input class="cell-input" id="inv-pro" style="width:100%;box-sizing:border-box;" placeholder="Loaded from Accounting">
+        <div class="calc-note" style="margin-top:4px;">Taken from the Aljex # of the first load on the invoice. Change it if Aljex billed this week under another number.</div>
+        <div role="alert" id="inv-error" style="color:#9f2720;margin-top:10px;min-height:1em;font-weight:600;font-size:13px;"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" id="inv-cancel">Cancel</button>
+        <button class="btn" id="inv-build">Download PDF</button>
+      </div>
+    </div>
+  </div>
+
   <div class="overlay hidden" id="modal-send-recap">
     <div class="modal modal-large">
       <div class="modal-header">
