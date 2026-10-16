@@ -38,6 +38,7 @@ function harness() {
     currentLocation: () => 'atlanta',
     houstonPreShiftAlerts: async () => [],
     carrierDocsAlerts: async () => [],
+    delawareBolAlerts: async () => [],
     dispatchedRouteAlerts: async () => { renders += 1; return [{html:'<div class="dispatch-extra-alert alert-chat-item">Call driver</div>'}]; },
   });
   w.eval(`

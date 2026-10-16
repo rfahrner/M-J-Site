@@ -13,6 +13,19 @@ export function clockAfter(value, anchor) {
   if (anchor == null) return clock;
   return clock + Math.max(0, Math.ceil((anchor - clock) / DAY)) * DAY;
 }
+/*
+ * A shift stops being operationally live twelve hours after it starts.
+ *
+ * This lives here, next to shiftRelativeNow(), because it is only meaningful
+ * measured against that function's timeline, and because it is now read by
+ * more than one module. It used to be declared inside alerts.js; the moment a
+ * second alert source needed the same cap, a copy of "12 * 60" in the other
+ * file would have been one more constant free to drift -- which is exactly how
+ * this file ended up with the only shift-clock parser that reads both of the
+ * formats the board actually stores (see clockMinutes above).
+ */
+export const OPERATING_WINDOW_MIN = 12 * 60;
+
 export function boardDateKey(at = new Date()) {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(at);
   const part = type => parts.find(p => p.type === type).value;

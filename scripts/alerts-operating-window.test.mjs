@@ -27,6 +27,11 @@ import { readFileSync } from 'node:fs';
 const root = new URL('../', import.meta.url);
 const read = (n) => readFileSync(new URL(n, root), 'utf8');
 const ALERTS = read('alerts.js');
+// The number itself now lives in overnight-times.js, next to the
+// shift-relative clock it is measured against, because the extras controller
+// reads it too. alerts.js re-exports it, so this file keeps asserting against
+// the guard that uses it.
+const TIMES = read('overnight-times.js');
 
 let failures = 0;
 function check(label, actual, expected) {
@@ -35,7 +40,8 @@ function check(label, actual, expected) {
   if (!ok) { console.log(`       expected: ${JSON.stringify(expected)}\n       actual:   ${JSON.stringify(actual)}`); failures++; }
 }
 
-const WINDOW = Number(/OPERATING_WINDOW_MIN = (\d+) \* (\d+)/.exec(ALERTS).slice(1).reduce((a, b) => a * b));
+const WINDOW = Number(/OPERATING_WINDOW_MIN = (\d+) \* (\d+)/.exec(TIMES).slice(1).reduce((a, b) => a * b));
+if (!/export \{ OPERATING_WINDOW_MIN \}/.test(ALERTS)) throw new Error('alerts.js no longer re-exports OPERATING_WINDOW_MIN');
 // The guard, lifted out and run as the shipped expression.
 // The WHOLE condition, null guards included -- they are what stops a shift
 // with no start time being read as infinitely old (nowMin - null is nowMin).
