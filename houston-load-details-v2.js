@@ -55,6 +55,7 @@ function humanField(field) {
     comments: "Comments",
     time_out_remarks: "Time Out / Remarks",
     tonu: "TONU",
+    cancellation: "Cancellation",
     highlighted: "Highlight",
     shift_complete: "Shift Complete",
     image: "Image",

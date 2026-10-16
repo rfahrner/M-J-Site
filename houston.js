@@ -46,6 +46,8 @@ export const HOUSTON_TABLE = "loads_houston";
       id: uid("hrow"), dbId: null, shiftDate: state.activeDate || null, driverId: driverId || null, driverName: driverName || "",
       aljexNumber: "", comments: "", ttc: "", ttt: "", rating: "", time: "",
       driverPhone: "", timeOutRemarks: "", dispatcherPhone: "", carrier: "", mc: "", normalRate: defaultHoustonRate(),
+      calledOff: false, calledOffReason: "", calledOffAt: null,
+      loadCancelled: false, loadCancelledReason: "", loadCancelledAt: null,
       tonu: false, highlighted: false, shiftComplete: false, selected: false,
       routeImagePath: "", routeImageUrl: "",
       createdAt: null, updatedAt: null, addedAt: null,
@@ -61,6 +63,8 @@ export const HOUSTON_TABLE = "loads_houston";
       timeOutRemarks: r.time_out_remarks || "", dispatcherPhone: r.dispatcher_phone || "",
       carrier: r.carrier || "", mc: r.mc || "",
       normalRate: r.normal_rate != null ? String(r.normal_rate) : "",
+      calledOff: !!r.called_off, calledOffReason: r.called_off_reason || "", calledOffAt: r.called_off_at || null,
+      loadCancelled: !!r.load_cancelled, loadCancelledReason: r.load_cancelled_reason || "", loadCancelledAt: r.load_cancelled_at || null,
       tonu: !!r.tonu, highlighted: !!r.highlighted, shiftComplete: !!r.shift_complete, selected: false,
       routeImagePath: r.route_image_path || "",
       routeImageUrl: "", // filled in by batchSignImageUrls after loading — see ensureHoustonSheetLoaded
@@ -77,6 +81,8 @@ export const HOUSTON_TABLE = "loads_houston";
       driver_phone: row.driverPhone || null, time_out_remarks: row.timeOutRemarks || null,
       dispatcher_phone: row.dispatcherPhone || null, carrier: row.carrier || null, mc: row.mc || null,
       normal_rate: row.normalRate === "" || row.normalRate == null ? null : Number(row.normalRate),
+      called_off: !!row.calledOff, called_off_reason: row.calledOffReason || null, called_off_at: row.calledOffAt || null,
+      load_cancelled: !!row.loadCancelled, load_cancelled_reason: row.loadCancelledReason || null, load_cancelled_at: row.loadCancelledAt || null,
       tonu: !!row.tonu, highlighted: !!row.highlighted, shift_complete: !!row.shiftComplete,
       route_image_path: row.routeImagePath || null,
     };
@@ -126,7 +132,7 @@ export const HOUSTON_TABLE = "loads_houston";
     return runScheduledCellSave(`houston:${row.id}`, () => persistHoustonRow(row));
   }
   async function persistHoustonRow(row) {
-    if (!supabaseClient) return null;
+    if (!supabaseClient || row.deleted) return null;
     // The row's own date -- see the note in mondelez.js. A debounced save
     // must not inherit a date the user navigated to after typing.
     const payload = houstonRowToDbRow(row, row.shiftDate || state.activeDate);
@@ -135,8 +141,9 @@ export const HOUSTON_TABLE = "loads_houston";
       if (row.dbId) {
         const updatePayload = dirtyFieldsToDbPatch(payload, sent, { routeImagePaths: "route_image_path" });
         if (!Object.keys(updatePayload).length) return null;
-        const { error } = await supabaseClient.from(HOUSTON_TABLE).update(updatePayload).eq("id", row.dbId);
+        const { data, error } = await supabaseClient.from(HOUSTON_TABLE).update(updatePayload).eq("id", row.dbId).select("id").single();
         if (error) throw error;
+        if (!data?.id) throw new Error("The load was not saved. Reload and try again.");
       } else {
         const { data, error } = await supabaseClient.from(HOUSTON_TABLE).insert(payload).select();
         if (error) throw error;
@@ -161,6 +168,7 @@ export const HOUSTON_TABLE = "loads_houston";
     const drv = row.driverId ? findDriver(row.driverId) : null;
     const displayName = drv ? drv.name : row.driverName;
     const rowClasses = [
+      (row.calledOff || row.loadCancelled) ? "is-load-cancelled" : "",
       row.tonu ? "is-tonu" : "", row.highlighted ? "is-row-pinned" : "",
       row.selected ? "is-row-selected" : "", row.addedAt ? "is-new" : "",
     ].join(" ");
@@ -168,7 +176,7 @@ export const HOUSTON_TABLE = "loads_houston";
       <td class="pin pin-select"><input type="checkbox" class="chk" data-action="toggle-row-select" data-row="${row.id}" ${row.selected ? "checked" : ""} title="Select"></td>
       <td class="pin pin-text"><button class="text-btn" data-action="text-driver" data-row="${row.id}" title="Text this driver">Text</button></td>
       <td class="pin pin-rate">
-        <input class="cell-input small" style="width:46px;" placeholder="Rate" data-row="${row.id}" data-field="normalRate" value="${escapeHtml(row.normalRate)}">
+        ${row.calledOff || row.loadCancelled ? `<span class="static-text">cancelled</span>` : `<input class="cell-input small" style="width:46px;" placeholder="Rate" data-row="${row.id}" data-field="normalRate" value="${escapeHtml(row.normalRate)}">`}
       </td>
       <td class="pin pin-pro${row.shiftComplete ? " shift-complete-tint" : ""}">
         <div class="cell-with-link"><input class="cell-input" placeholder="Aljex#" data-row="${row.id}" data-field="aljexNumber" value="${escapeHtml(row.aljexNumber)}">${row.aljexNumber ? `<button type="button" class="cell-link-btn" data-open-hou-load="${row.id}" title="Open load details">↗</button>` : ""}</div>
@@ -186,7 +194,7 @@ export const HOUSTON_TABLE = "loads_houston";
       <td class="col-shiftStart">${houstonNightShiftActive() ? `<span class="static-text shift-start-date">${shortShiftDate(row.shiftDate || state.activeDate)}</span>` : ""}<input class="cell-input small" style="width:46px;" placeholder="--:--" data-row="${row.id}" data-field="time" value="${escapeHtml(row.time)}"></td>
       <td class="col-hou-ttc"><input class="cell-input small" style="width:46px;" data-row="${row.id}" data-field="ttc" value="${escapeHtml(row.ttc)}"></td>
       <td class="col-hou-ttt"><input class="cell-input small" style="width:46px;" data-row="${row.id}" data-field="ttt" value="${escapeHtml(row.ttt)}"></td>
-      <td class="col-hou-comments"><input class="cell-input" data-row="${row.id}" data-field="comments" value="${escapeHtml(row.comments)}"></td>
+      <td class="col-hou-comments">${row.calledOff || row.loadCancelled ? `<span class="static-text" title="${escapeHtml(row.loadCancelledReason || row.calledOffReason)}">CANCELLED — ${escapeHtml(row.loadCancelledReason || row.calledOffReason)}</span>` : ""}<input class="cell-input" data-row="${row.id}" data-field="comments" value="${escapeHtml(row.comments)}"></td>
       <td class="col-hou-timeout"><input class="cell-input" data-row="${row.id}" data-field="timeOutRemarks" value="${escapeHtml(row.timeOutRemarks)}"></td>
       <td class="col-routeImage">${rowImageDropzoneHtml(row, row.id)}</td>
     </tr>`;
@@ -420,25 +428,28 @@ export const HOUSTON_TABLE = "loads_houston";
     const found = findHoustonRowAnywhere(rowId);
     if (!found) return;
     const row = found.row;
-    const drv = row.driverId ? findDriver(row.driverId) : null;
-    const label = [row.aljexNumber, drv ? drv.name : row.driverName].filter(Boolean).join(" — ") || "this load";
-    if (!confirm(`Delete ${label}? This can't be undone.`)) return;
-
-    // Not necessarily today's sheet: under Night Shift the row on screen may
-    // belong to the next morning.
-    const rows = houstonState.sheets[found.row.shiftDate] || getHoustonSheet(state.activeDate);
-    const idx = rows.findIndex((r) => r.id === rowId);
-    if (idx !== -1) rows.splice(idx, 1);
-    renderHoustonBoardTable();
-
-    if (row.dbId && supabaseClient) {
-      try {
-        const { error } = await supabaseClient.from(HOUSTON_TABLE).delete().eq("id", row.dbId);
-        if (error) throw error;
-      } catch (e) {
-        console.error("deleteHoustonRow failed:", e);
-        setDriverSyncStatus(`Row removed here, but couldn't delete it from the database (${e.message || e}) — it may come back on refresh.`, "error");
-      }
+    const label = [row.aljexNumber, row.driverName].filter(Boolean).join(" — ") || "this load";
+    if (!confirm(`Delete entire load ${label}? This can't be undone.`)) return;
+    clearTimeout(houstonSaveTimers[row.id]);
+    try {
+      // Wait for an in-flight insert/save before deleting the same row.
+      await runScheduledCellSave(`houston:${row.id}`, async () => {
+        if (row.dbId) {
+          if (!supabaseClient) throw new Error("Database connection unavailable");
+          const { data, error } = await supabaseClient.from(HOUSTON_TABLE).delete().eq("id", row.dbId).select("id").single();
+          if (error) throw error;
+          if (!data?.id) throw new Error("The load was not deleted. Reload and try again.");
+        }
+        row.deleted = true;
+        clearTimeout(houstonSaveTimers[row.id]);
+        const rows = getHoustonSheet(found.sheetKey);
+        const idx = rows.findIndex(r => r.id === rowId);
+        if (idx !== -1) rows.splice(idx, 1);
+        dirtyHoustonFields.delete(row.id);
+      });
+      renderHoustonBoardTable();
+    } catch (e) {
+      setDriverSyncStatus(`Couldn't delete this load (${e.message || e}). The row is still on the board.`, "error");
     }
   }
 
@@ -559,34 +570,77 @@ export const HOUSTON_TABLE = "loads_houston";
     `;
   }
 
-  export function openHoustonRowContextMenu(rowId, x, y) {
-    closeContextMenu();
-    const found = findHoustonRowAnywhere(rowId);
-    if (!found) return;
-    const row = found.row;
-    const items = [
-      { label: row.tonu ? "Un-TONU" : "TONU", action: () => toggleHoustonTonu(rowId) },
-      { label: row.highlighted ? "Remove Highlight" : "Highlight", action: () => toggleHoustonRowPin(rowId) },
-      { label: row.shiftComplete ? "Mark Shift Incomplete" : "Shift Complete", action: () => toggleHoustonShiftComplete(rowId) },
-      { label: "Load Details", action: () => openHoustonLoadDetailsModal(rowId) },
-      { label: "Load History", action: () => openHoustonLoadHistoryModal(rowId) },
-      { label: "Text Now", action: () => textHoustonDriverForRow(rowId) },
-      { label: "Delete", action: () => deleteHoustonRow(rowId), danger: true },
-    ];
-    const menu = document.createElement("div");
-    menu.className = "row-context-menu";
-    menu.id = "row-context-menu";
-    menu.innerHTML = items.map((it, i) => `<button class="context-menu-item${it.danger ? " context-menu-item-danger" : ""}" data-idx="${i}">${it.label}</button>`).join("");
-    document.body.appendChild(menu);
-    menu.style.left = x + "px";
-    menu.style.top = y + "px";
-    const rect = menu.getBoundingClientRect();
-    if (rect.right > window.innerWidth) menu.style.left = Math.max(4, window.innerWidth - rect.width - 8) + "px";
-    if (rect.bottom > window.innerHeight) menu.style.top = Math.max(4, window.innerHeight - rect.height - 8) + "px";
-    $all(".context-menu-item", menu).forEach((btn, i) => {
-      btn.addEventListener("click", () => { items[i].action(); closeContextMenu(); });
-    });
+export function openHoustonRowContextMenu(rowId, x, y) {
+  closeContextMenu();
+  const row = findHoustonRowAnywhere(rowId)?.row;
+  if (!row) return;
+  const items = [
+    { label: row.tonu ? "Un-TONU" : "TONU", action: () => toggleHoustonTonu(rowId) },
+    { label: row.calledOff ? "Un-mark driver fall off" : "Cancellation - driver fall off", action: () => openHoustonCancellation(rowId, "calledOff") },
+    { label: row.loadCancelled ? "Un-mark Kroger cancelled shift" : "Kroger cancelled shift - non-TONU", action: () => openHoustonCancellation(rowId, "loadCancelled") },
+    { label: row.shiftComplete ? "Mark Shift Incomplete" : "Shift Complete", action: () => toggleHoustonShiftComplete(rowId), success: true },
+    { label: `Delete entire load ${row.aljexNumber || "(no Aljex#)"}`, action: () => deleteHoustonRow(rowId), danger: true },
+  ];
+  const menu = document.createElement("div");
+  menu.className = "row-context-menu";
+  menu.id = "row-context-menu";
+  menu.innerHTML = items.map((it, i) => `<button class="context-menu-item${it.danger ? " context-menu-item-danger" : ""}${it.success ? " context-menu-item-success" : ""}" data-idx="${i}">${escapeHtml(it.label)}</button>`).join("");
+  document.body.appendChild(menu);
+  menu.style.left = x + "px";
+  menu.style.top = y + "px";
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) menu.style.left = Math.max(4, window.innerWidth - rect.width - 8) + "px";
+  if (rect.bottom > window.innerHeight) menu.style.top = Math.max(4, window.innerHeight - rect.height - 8) + "px";
+  $all(".context-menu-item", menu).forEach((btn, i) => {
+    btn.addEventListener("click", () => { items[i].action(); closeContextMenu(); });
+  });
+}
+async function saveHoustonCancellation(row, field, reason, enabled) {
+  const fields = [field, `${field}Reason`, `${field}At`];
+  const previous = Object.fromEntries(fields.map(key => [key, row[key]]));
+  Object.assign(row, { [field]: enabled, [`${field}Reason`]: enabled ? reason : "", [`${field}At`]: enabled ? new Date().toISOString() : null });
+  fields.forEach(key => markFieldDirty(dirtyHoustonFields, row.id, key));
+  const saved = await saveHoustonRowNow(row);
+  if (!saved) {
+    Object.assign(row, previous);
+    const dirty = dirtyHoustonFields.get(row.id);
+    fields.forEach(key => dirty?.delete(key));
+    if (dirty && !dirty.size) dirtyHoustonFields.delete(row.id);
+    return false;
   }
+  renderHoustonBoardTable();
+  setDriverSyncStatus(enabled ? "Houston load cancelled — reason saved to Accounting with no money applied." : "Houston cancellation removed.", "success");
+  return true;
+}
+async function openHoustonCancellation(rowId, field) {
+  const row = findHoustonRowAnywhere(rowId)?.row;
+  if (!row) return;
+  if (row[field]) { await saveHoustonCancellation(row, field, "", false); return; }
+  document.getElementById("hou-cancellation-overlay")?.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "hou-cancellation-overlay";
+  overlay.className = "overlay";
+  overlay.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="hou-cancellation-title">
+    <div class="modal-header"><h2 id="hou-cancellation-title">${field === "calledOff" ? "Cancellation - driver fall off" : "Kroger cancelled shift - non-TONU"}</h2></div><div class="modal-body">
+    <p>Load ${escapeHtml(row.aljexNumber || "(no Aljex#)")} — ${escapeHtml(row.driverName || "no driver")}</p>
+    <label for="hou-cancellation-reason">Reason</label><textarea id="hou-cancellation-reason" rows="4" class="cell-input" required></textarea>
+    <p class="hou-cancellation-error" role="alert"></p>
+    </div><div class="modal-footer"><button type="button" class="btn btn-ghost" data-cancel>Close</button><button type="button" class="btn" data-save>Save cancellation</button></div>
+  </div>`;
+  document.body.appendChild(overlay);
+  const reason = overlay.querySelector("textarea");
+  const save = overlay.querySelector("[data-save]");
+  const close = overlay.querySelector("[data-cancel]");
+  close.addEventListener("click", () => { if (!save.disabled) overlay.remove(); });
+  save.addEventListener("click", async () => {
+    const text = reason.value.trim();
+    if (!text) { overlay.querySelector("[role=alert]").textContent = "Enter the cancellation reason."; reason.focus(); return; }
+    save.disabled = true; close.disabled = true;
+    if (await saveHoustonCancellation(row, field, text, true)) overlay.remove();
+    else { save.disabled = false; close.disabled = false; overlay.querySelector("[role=alert]").textContent = "Cancellation was not saved. Try again."; }
+  });
+  reason.focus();
+}
 
   export async function openHoustonDateDropdown() {
     resetCalendarViewMonth();

@@ -167,7 +167,7 @@ async function loadHoustonManualFlags() {
 }
 
 function recalcHoustonRow(row) {
-  if (!row || row.__rateManual) return;
+  if (!row || row.__rateManual || row.calledOff || row.loadCancelled) return;
   const synthetic = {
     location: "houston",
     shiftDate: currentDate(),
