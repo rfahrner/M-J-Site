@@ -1,0 +1,252 @@
+-- Production trigger definitions inspected 2026-10-16; no live data.
+CREATE OR REPLACE FUNCTION public.set_updated_at()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO ''
+AS $function$
+begin
+  NEW.updated_at = pg_catalog.now();
+  return NEW;
+end;
+$function$
+;
+drop trigger if exists loads_houston_updated_at on public.loads_houston;
+CREATE TRIGGER loads_houston_updated_at BEFORE UPDATE ON public.loads_houston FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE OR REPLACE FUNCTION public.log_houston_load_change()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+declare
+  actor text := split_part(coalesce(auth.jwt()->>'email', auth.jwt()->>'sub', 'unknown user'), '@', 1);
+  item record;
+begin
+  for item in select * from (values
+    ('driver', old.driver_name::text, new.driver_name::text),
+    ('aljex_number', old.aljex_number::text, new.aljex_number::text),
+    ('time', old.time::text, new.time::text),
+    ('carrier', old.carrier::text, new.carrier::text),
+    ('mc', old.mc::text, new.mc::text),
+    ('rating', old.rating::text, new.rating::text),
+    ('driver_phone', old.driver_phone::text, new.driver_phone::text),
+    ('dispatcher_phone', old.dispatcher_phone::text, new.dispatcher_phone::text),
+    ('rate', old.normal_rate::text, new.normal_rate::text),
+    ('ttc', old.ttc::text, new.ttc::text),
+    ('ttt', old.ttt::text, new.ttt::text),
+    ('comments', old.comments::text, new.comments::text),
+    ('time_out_remarks', old.time_out_remarks::text, new.time_out_remarks::text),
+    ('tonu', old.tonu::text, new.tonu::text),
+    ('highlighted', old.highlighted::text, new.highlighted::text),
+    ('shift_complete', old.shift_complete::text, new.shift_complete::text),
+    ('image', old.route_image_path::text, new.route_image_path::text)
+  ) as v(field_name, old_value, new_value)
+  loop
+    if item.old_value is distinct from item.new_value then
+      insert into public.houston_change_history(houston_load_id, field_name, old_value, new_value, changed_by)
+      values (new.id, item.field_name, item.old_value, item.new_value, actor);
+    end if;
+  end loop;
+  return new;
+end;
+$function$
+;
+drop trigger if exists trg_log_houston_load_change on public.loads_houston;
+CREATE TRIGGER trg_log_houston_load_change AFTER UPDATE ON public.loads_houston FOR EACH ROW EXECUTE FUNCTION log_houston_load_change();
+CREATE OR REPLACE FUNCTION app_private.sync_accounting_carrier_from_houston_v2()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_catalog'
+AS $function$
+begin
+  update public.loads_accounting
+  set total_carrier_pay=new.normal_rate,
+      total_cost=new.normal_rate
+  where source_houston_id=new.id
+    and coalesce(status,'active') <> 'cancelled';
+  return new;
+end;
+$function$
+;
+drop trigger if exists trg_sync_accounting_carrier_from_houston_v2 on public.loads_houston;
+CREATE TRIGGER trg_sync_accounting_carrier_from_houston_v2 AFTER UPDATE OF normal_rate ON public.loads_houston FOR EACH ROW WHEN ((old.normal_rate IS DISTINCT FROM new.normal_rate)) EXECUTE FUNCTION app_private.sync_accounting_carrier_from_houston_v2();
+CREATE OR REPLACE FUNCTION public.mark_accounting_manual_carrier_edit()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_catalog'
+AS $function$
+begin
+  if new.location in ('atlanta','delaware','buildingc')
+     and current_setting('app.accounting_rate_refresh',true) is distinct from 'on' then
+    new.carrier_pay_manual := new.total_carrier_pay is not null;
+  end if;
+  return new;
+end;
+$function$
+;
+drop trigger if exists accounting_manual_carrier_from_edit on public.loads_accounting;
+CREATE TRIGGER accounting_manual_carrier_from_edit BEFORE UPDATE OF total_carrier_pay ON public.loads_accounting FOR EACH ROW EXECUTE FUNCTION mark_accounting_manual_carrier_edit();
+CREATE OR REPLACE FUNCTION public.clear_accounting_manual_carrier_on_push()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_catalog'
+AS $function$
+begin
+  new.carrier_pay_manual := false;
+  return new;
+end;
+$function$
+;
+drop trigger if exists clear_accounting_manual_carrier_on_push on public.loads_accounting;
+CREATE TRIGGER clear_accounting_manual_carrier_on_push BEFORE UPDATE OF pushed_at ON public.loads_accounting FOR EACH ROW EXECUTE FUNCTION clear_accounting_manual_carrier_on_push();
+CREATE OR REPLACE FUNCTION app_private.guard_mondelez_cancelled_accounting()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare m public.mondelez_loads%rowtype;
+begin
+  if new.source_mondelez_id is null then return new; end if;
+  select * into m from public.mondelez_loads where id=new.source_mondelez_id;
+  if m.called_off or m.load_cancelled then
+    new.status := 'cancelled';
+    new.cancelled_reason := case when m.load_cancelled then m.load_cancelled_reason else m.called_off_reason end;
+    new.total_carrier_pay := 0; new.total_cost := 0; new.total_revenue := 0;
+    new.fsc_payment := 0; new.total_miles := 0; new.total_stops := 0;
+  end if;
+  return new;
+end;
+$function$
+;
+drop trigger if exists guard_mondelez_cancelled_accounting on public.loads_accounting;
+CREATE TRIGGER guard_mondelez_cancelled_accounting BEFORE INSERT OR UPDATE ON public.loads_accounting FOR EACH ROW EXECUTE FUNCTION app_private.guard_mondelez_cancelled_accounting();
+CREATE OR REPLACE FUNCTION public.set_updated_at()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO ''
+AS $function$
+begin
+  NEW.updated_at = pg_catalog.now();
+  return NEW;
+end;
+$function$
+;
+drop trigger if exists loads_accounting_updated_at on public.loads_accounting;
+CREATE TRIGGER loads_accounting_updated_at BEFORE UPDATE ON public.loads_accounting FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE OR REPLACE FUNCTION public.seed_accounting_audit_snapshot()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_catalog'
+AS $function$
+begin
+  if new.source_shift_id is not null then
+    perform public.refresh_accounting_audit_snapshot(new.source_shift_id);
+  end if;
+  return new;
+end;
+$function$
+;
+drop trigger if exists trg_accounting_seed_audit_snapshot on public.loads_accounting;
+CREATE TRIGGER trg_accounting_seed_audit_snapshot AFTER INSERT OR UPDATE OF source_shift_id ON public.loads_accounting FOR EACH ROW EXECUTE FUNCTION seed_accounting_audit_snapshot();
+CREATE OR REPLACE FUNCTION public.accounting_use_profile_driver_name()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_catalog'
+AS $function$
+declare
+  v_name text;
+begin
+  if new.driver_id is not null then
+    select nullif(btrim(d."Driver Name"), '') into v_name
+    from public.atlanta_drivers d
+    where d.id = new.driver_id;
+    if v_name is not null then
+      new.driver_name_text := v_name;
+    end if;
+  end if;
+  return new;
+end;
+$function$
+;
+drop trigger if exists trg_accounting_use_profile_driver_name on public.loads_accounting;
+CREATE TRIGGER trg_accounting_use_profile_driver_name BEFORE INSERT OR UPDATE OF driver_id, driver_name_text ON public.loads_accounting FOR EACH ROW EXECUTE FUNCTION accounting_use_profile_driver_name();
+CREATE OR REPLACE FUNCTION app_private.accounting_v2_defaults()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_catalog'
+AS $function$
+declare
+  v_rate numeric;
+begin
+  -- Every accounting row records the fuel rate of its own day, whichever board
+  -- it came from. Never left null: null means "look it up now", and now is the
+  -- wrong day for every row but today's.
+  if new.fsc_rate_snapshot is null then
+    select value into new.fsc_rate_snapshot from public.pricing_settings where key='fsc_rate' limit 1;
+  end if;
+
+  if new.source_shift_id is not null and coalesce(new.status,'active') <> 'cancelled' then
+    new.cost_level := 1;
+    -- 1, not 99. 99 matches no pricing table and bills zero linehaul.
+    new.revenue_level := coalesce(nullif(new.revenue_level, 99), 1);
+    select carrier_rate into v_rate from public.loads_shifts where id=new.source_shift_id;
+    new.total_carrier_pay := v_rate;
+    new.total_cost := v_rate;
+  elsif new.source_houston_id is not null and coalesce(new.status,'active') <> 'cancelled' then
+    select normal_rate into v_rate from public.loads_houston where id=new.source_houston_id;
+    new.total_carrier_pay := v_rate;
+    new.total_cost := v_rate;
+  end if;
+  return new;
+end;
+$function$
+;
+drop trigger if exists trg_accounting_v2_defaults on public.loads_accounting;
+CREATE TRIGGER trg_accounting_v2_defaults BEFORE INSERT ON public.loads_accounting FOR EACH ROW EXECUTE FUNCTION app_private.accounting_v2_defaults();
+CREATE OR REPLACE FUNCTION app_private.sync_accounting_total_cost_from_carrier_edit()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_catalog'
+AS $function$
+begin
+  if new.total_carrier_pay is distinct from old.total_carrier_pay then
+    new.total_cost := new.total_carrier_pay;
+  end if;
+  return new;
+end;
+$function$
+;
+drop trigger if exists trg_sync_accounting_total_cost_from_carrier_edit on public.loads_accounting;
+CREATE TRIGGER trg_sync_accounting_total_cost_from_carrier_edit BEFORE UPDATE OF total_carrier_pay ON public.loads_accounting FOR EACH ROW EXECUTE FUNCTION app_private.sync_accounting_total_cost_from_carrier_edit();
+CREATE OR REPLACE FUNCTION public.keep_removed_accounting_deleted()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO ''
+AS $function$
+begin
+  if new.hidden is true then
+    new.status := 'deleted';
+    new.deleted_at := coalesce(new.deleted_at, now());
+    if tg_op='UPDATE' and old.hidden is true then
+      -- Later board pushes/cancellations may still address the retained row.
+      -- Preserve its money for recovery while allowing foreign-key cleanup.
+      new.deleted_at := coalesce(old.deleted_at,new.deleted_at);
+      new.total_carrier_pay := old.total_carrier_pay;
+      new.total_cost := old.total_cost;
+      new.total_revenue := old.total_revenue;
+      new.carrier_pay_manual := old.carrier_pay_manual;
+      new.revenue_manual := old.revenue_manual;
+      new.fsc_payment := old.fsc_payment;
+      new.fsc_rate_snapshot := old.fsc_rate_snapshot;
+      new.total_miles := old.total_miles;
+      new.total_stops := old.total_stops;
+    end if;
+  end if;
+  return new;
+end;
+$function$
+;
+drop trigger if exists zz_keep_removed_accounting_deleted on public.loads_accounting;
+CREATE TRIGGER zz_keep_removed_accounting_deleted BEFORE INSERT OR UPDATE ON public.loads_accounting FOR EACH ROW EXECUTE FUNCTION keep_removed_accounting_deleted();

@@ -1216,3 +1216,27 @@ Money saves serialize per load, retain newer pending input over realtime echoes,
 and update a reset cell without rebuilding the next editor. Cover with
 `scripts/accounting-clear-rate.test.mjs`, `scripts/accounting-money-queue.test.mjs`
 and `sandbox/accounting-clear-rate.spec.mjs`.
+
+## Houston row-menu parity (2026-10-16)
+
+Houston uses its own `loads_houston` IDs and now has the same load-level
+TONU / driver fall off / Kroger cancelled shift - non-TONU / Shift Complete /
+Delete entire load actions as Atlanta. It has no route-only delete because
+Houston has no child route rows. Cancellation requires a reason, retains source
+rates/comments, writes Houston change history, and zeroes linked Accounting.
+Driver fall offs write a driver cancellation note with `source_shift_id` null.
+Migration `20261016154725_houston_row_cancellations.sql` keeps a private Accounting
+snapshot for exact financial undo; undo before the normal overnight push resets
+`sent_to_accounting` so the regular sweep can collect the load. Sent/released or
+removed Accounting records block cancellation changes. Cancelled Houston loads
+are excluded from pre-shift alerts and automatic source-rate recalculation.
+Deletion waits for pending saves and server confirmation; its trigger retains
+linked Accounting as deleted for audit. Do not route Houston IDs through the
+standard shift cancellation/history functions.
+
+Validation: `scripts/houston-row-menu.test.mjs` runs DOM, save-queue and PGlite
+checks against the migration and inspected production trigger definitions;
+`sandbox/houston-row-menu.spec.mjs` exercises the real page with a fake backend.
+For a UI rollback, revert this frontend change and keep the additive database
+support. Do not drop cancellation flags/backups while cancelled records exist;
+use the cancellation undo action to restore their Accounting amounts first.

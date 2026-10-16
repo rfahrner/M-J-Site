@@ -165,14 +165,14 @@ async function houstonPreShiftAlerts() {
   const now = nowMinutes('America/Chicago');
   const { data, error } = await supabaseClient
     .from('loads_houston')
-    .select('id,time,driver_name,driver_phone,shift_complete,pre_shift_text_sent_at')
+    .select('id,time,driver_name,driver_phone,shift_complete,pre_shift_text_sent_at,called_off,load_cancelled')
     .eq('shift_date', today)
     .eq('shift_complete', false)
     .is('pre_shift_text_sent_at', null);
   if (error) { console.error('Houston pre-shift alert query failed', error); return []; }
   return (data || []).filter((row) => {
     const start = parseHHMM(row.time);
-    if (start == null || !clean(row.driver_phone)) return false;
+    if (row.called_off || row.load_cancelled || start == null || !clean(row.driver_phone)) return false;
     const until = start - now;
     return until <= 60 && until > -180;
   }).map((row) => ({
