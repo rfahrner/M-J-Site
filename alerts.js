@@ -271,7 +271,7 @@ import './paperwork-load-integration.js';
               key: `return-trailer-${t.id}-${missingTrailerLabels.length}`, type: "missing_trailer_number", location: s.location, shiftDbId: s.id,
               message: `${driverName} (${label}, ${tripLabel}) — Return ETA entered, collect ${missingTrailerLabels.join(" and ")}`,
               recipients: driverPhone ? [{ name: driverName, phone: driverPhone }] : [],
-              actionMessage: `This is D&L transportation, ${driverName}. We have your ETA back to the DC, but we still need ${missingTrailerLabels.join(" and ")}. Please text us the number${missingTrailerLabels.length > 1 ? "s" : ""}.`,
+              actionMessage: "Please send in your return trailer number and confirm that you have verified your trailer completely empty and/or you have picked up the assigned salvage or backhaul trailer.",
             });
           }
         }
