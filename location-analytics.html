@@ -82,8 +82,8 @@
     mistake worth designing out.
   -->
   <div class="overlay hidden" id="modal-invoice">
-    <div class="modal-card" style="max-width:460px;">
-      <div class="modal-head">
+    <div class="modal" style="width:460px;">
+      <div class="modal-header">
         <h3>Generate Invoice</h3>
         <button class="modal-close" id="inv-close">&times;</button>
       </div>
@@ -101,7 +101,7 @@
         <div class="calc-note" style="margin-top:4px;">Taken from the Aljex # of the first load on the invoice. Change it if Aljex billed this week under another number.</div>
         <div role="alert" id="inv-error" style="color:#9f2720;margin-top:10px;min-height:1em;font-weight:600;font-size:13px;"></div>
       </div>
-      <div class="modal-foot">
+      <div class="modal-footer">
         <button class="btn btn-ghost" id="inv-cancel">Cancel</button>
         <button class="btn" id="inv-build">Download PDF</button>
       </div>

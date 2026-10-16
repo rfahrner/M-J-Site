@@ -16,7 +16,7 @@
  *
  * Run: node sandbox/invoice-button.spec.mjs    (serves itself)
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -94,6 +94,39 @@ try {
   await button.click();
   await page.waitForTimeout(1200);
   check('the dialog opens', await page.locator('#modal-invoice').isVisible());
+
+  /*
+   * The CARD, not just the overlay.
+   *
+   * This check started life as the isVisible() above and nothing else, which
+   * passed while the dialog was unusable: the markup used .modal-card,
+   * .modal-head and .modal-foot, none of which exist in loadboard.css. The
+   * overlay still showed -- it has its own background and centres its child --
+   * so the assertion was green while the box inside it had no width, no
+   * background and no padding. Reported as "button is there but nothing
+   * happens when i click it".
+   *
+   * An invented class name is invisible to a DOM assertion, so this asks the
+   * browser what it actually computed: a real width, and a background that is
+   * not transparent.
+   */
+  const card = await page.evaluate(() => {
+    const el = document.querySelector('#modal-invoice > div');
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    return { cls: el.className, width: Math.round(rect.width), height: Math.round(rect.height), bg: style.backgroundColor };
+  });
+  check('the dialog card has a real width', card && card.width >= 300, JSON.stringify(card));
+  check('and a solid background, so it is styled by loadboard.css',
+    card && card.bg !== 'rgba(0, 0, 0, 0)' && card.bg !== 'transparent', card?.bg);
+  // Every class the dialog uses has to exist in the stylesheet it relies on.
+  const css = readFileSync(new URL('../loadboard.css', import.meta.url), 'utf8');
+  const onPage = await page.evaluate(() => [...document.querySelectorAll('#modal-invoice, #modal-invoice *')]
+    .flatMap((el) => [...el.classList]));
+  const used = [...new Set(onPage)];
+  const missing = used.filter((c) => !new RegExp(`\\.${c}[\\s,{:.]`).test(css));
+  check('no invented class names', missing.length === 0, missing.join(', '));
 
   // The dialog defaults to the last completed Monday-Sunday week.
   const startValue = await page.locator('#inv-start').inputValue();
