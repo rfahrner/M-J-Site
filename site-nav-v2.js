@@ -237,8 +237,8 @@ export function renderStandaloneSiteNav(role, onLogout) {
   const currentFile = location.pathname.split('/').pop() || 'index.html';
 
   const visible = (item) => {
-    if (item.accountingOnly && !['accounting', 'admin'].includes(role)) return false;
-    if (item.adminOnly && role !== 'admin') return false;
+    if (item.accountingOnly && !['accounting', 'admin', 'visitor'].includes(role)) return false;
+    if (item.adminOnly && role !== 'admin' && role !== 'visitor') return false;
     return true;
   };
 

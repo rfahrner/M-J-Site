@@ -351,8 +351,8 @@ import { allowRateWrite, forgetRateWrites } from './rate-write-limiter.js';
     return true;
   }
 
-  export function isAccountingUser() { return currentUserRole === "accounting" || currentUserRole === "admin"; }
-  export function isAdminUser() { return currentUserRole === "admin"; }
+  export function isAccountingUser() { return currentUserRole === "visitor" || currentUserRole === "accounting" || currentUserRole === "admin"; }
+  export function isAdminUser() { return currentUserRole === "visitor" || currentUserRole === "admin"; }
   // Same value the load_change_history writes use, exposed so other
   // modules can stamp an audit trail without duplicating the lookup.
   export function currentUserName() { return currentUserLabel || "unknown user"; }

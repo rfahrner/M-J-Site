@@ -100,6 +100,8 @@ async function authenticatedUser(admin: ReturnType<typeof createClient>, req: Re
   if (!token) return null;
   const { data, error } = await admin.auth.getUser(token);
   if (error || !data?.user) return null;
+  const { data: access, error: accessError } = await admin.from('user_roles').select('role').eq('user_id', data.user.id).maybeSingle();
+  if (accessError || !['dispatcher', 'accounting', 'admin', 'it'].includes(String(access?.role || ''))) return null;
   return data.user;
 }
 

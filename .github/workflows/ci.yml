@@ -78,6 +78,9 @@ jobs:
       - name: Test driver texts send from the shared mailbox
         run: node scripts/text-send-from-mailbox.test.mjs
 
+      - name: Test visitor data isolation
+        run: node --test scripts/visitor-access.test.mjs
+
       - name: Build site
         run: npm run build
 

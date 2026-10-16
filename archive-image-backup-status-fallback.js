@@ -92,6 +92,7 @@ function render(status) {
 }
 
 async function refreshDirect() {
+  if (window.DLVisitorAccess && await window.DLVisitorAccess.getRole() === 'visitor') return;
   if (!client || !document.getElementById('image-backup-panel')) return;
   const { data, error } = await client.rpc('archive_backup_status');
   if (error) throw error;
