@@ -70,7 +70,7 @@ test('actual alerts open the exact draft, cancellation leaves it pending, and on
   }};
   const strip=s=>s.replace(/^import[^;]+;\n/gm,'').replace(/export /g,'');
   const source=strip(fs.readFileSync('overnight-times.js','utf8'))+'\n'+strip(fs.readFileSync('dispatch-route-text.js','utf8'))+'\n'+strip(fs.readFileSync('preshift-pro-text.js','utf8'));
-  const env={supabaseClient:client,logAlertTextClick:async details=>{audit.push(details);},openSendTextModal:(...args)=>opened.push(args),setDriverSyncStatus:()=>{},document:dom.window.document,
+  const env={setAlertWidgetSource:()=>{},supabaseClient:client,logAlertTextClick:async details=>{audit.push(details);},openSendTextModal:(...args)=>opened.push(args),setDriverSyncStatus:()=>{},document:dom.window.document,
     window:dom.window,location:dom.window.location,MutationObserver:dom.window.MutationObserver,setTimeout:()=>0,clearTimeout:()=>{},setInterval:()=>0};
   const module=new Function(...Object.keys(env),source+';return {refreshExtraAlerts};')(...Object.values(env));
   await module.refreshExtraAlerts();

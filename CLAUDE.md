@@ -1241,6 +1241,29 @@ For a UI rollback, revert this frontend change and keep the additive database
 support. Do not drop cancellation flags/backups while cancelled records exist;
 use the cancellation undo action to restore their Accounting amounts first.
 
+## Minimized alert collection and notification (2026-10-17)
+
+`alert-widget-state.js` owns the combined active count and unread state for the
+main board scanner and the extra dispatch/BOL/pre-shift reminders. It has no
+loadboard imports or module-time DOM reads. Both producers publish their stable
+keys; counts never depend on visible DOM rows. Minimizing changes visibility
+only, and a core redraw cannot erase the extras count or unread indication.
+Opening a visible panel acknowledges the current arrivals; closing an expanded
+panel does not acknowledge alerts arriving while hidden. The small closed bell
+has the same active count and flashing notification as the minimized header.
+Reduced-motion users get a steady red indicator. The header also shows “N new”.
+
+Keep the extras observer's disconnect/reconnect and immediate cached repaint.
+It still owns the reminder rows, but no longer writes the count or blink state
+independently. Unchanged reminders do not become unread on every scan. Failed
+main scans retain the last confirmed result, and overlapping scans in both
+producers cannot publish an older result over a newer one. Alert eligibility,
+text messages, and acknowledgement persistence are unchanged.
+
+Verification: `scripts/alerts-minimized.test.mjs` exercises both real producer
+renderers, minimize/close/reopen, resolution, failures, and out-of-order scans.
+`sandbox/alerts-minimized.spec.mjs` runs real page timers with fake data on
+Atlanta, Delaware and Building C and checks both notification surfaces.
 ## Blank visitor access (2026-10-16)
 
 `visitor` is an existing application role in `public.user_roles`. The visitor

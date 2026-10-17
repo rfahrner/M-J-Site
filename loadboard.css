@@ -133,7 +133,18 @@ button {
   border: none; border-radius: var(--radius-sm, 4px); background: var(--navy-900, #1e293b); color: #fff; cursor: pointer;
 }
 .alert-action-btn:hover { background: var(--navy-800, #334155); }
-#alert-widget.blinking .alert-widget-header { animation: alertBlink 1s ease-in-out infinite; }
+#alert-widget.blinking .alert-widget-header,
+#alert-widget-reopen.blinking { animation: alertBlink 1s ease-in-out infinite; }
+.alert-widget-new { font-size:11px; color:#fde68a; }
+#alert-widget-reopen-count:not(:empty) {
+  position:absolute; top:-5px; right:-5px; min-width:22px; padding:3px 5px;
+  border-radius:999px; background:#dc2626; color:white; font-size:11px; font-weight:700;
+}
+@media (prefers-reduced-motion: reduce) {
+  #alert-widget.blinking .alert-widget-header, #alert-widget-reopen.blinking {
+    animation:none; background:#b91c1c;
+  }
+}
 @keyframes alertBlink {
   0%, 100% { background: var(--navy-950, #0f172a); }
   50% { background: #dc2626; }

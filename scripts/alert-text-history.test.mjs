@@ -40,7 +40,7 @@ test('Houston extra-alert Text uses Houston history and click log persists when 
  const client={rpc:async(name,args)=>{audit.push(args);return {data:[{id:1,houston_load_id:10}],error:null};}};
  const strip=s=>s.replace(/^import[^;]+;\n/gm,'').replace(/export /g,'');
  const src=strip(fs.readFileSync('overnight-times.js','utf8'))+'\n'+strip(fs.readFileSync('dispatch-route-text.js','utf8'))+'\n'+strip(fs.readFileSync('preshift-pro-text.js','utf8'));
- const env={supabaseClient:client,logAlertTextClick:d=>writeAlertTextClick(client,d),openSendTextModal:(...a)=>opened.push(a),setDriverSyncStatus:()=>{},document:dom.window.document,window:dom.window,location:dom.window.location,MutationObserver:dom.window.MutationObserver,setTimeout:()=>0,clearTimeout:()=>{},setInterval:()=>0};
+ const env={setAlertWidgetSource:()=>{},supabaseClient:client,logAlertTextClick:d=>writeAlertTextClick(client,d),openSendTextModal:(...a)=>opened.push(a),setDriverSyncStatus:()=>{},document:dom.window.document,window:dom.window,location:dom.window.location,MutationObserver:dom.window.MutationObserver,setTimeout:()=>0,clearTimeout:()=>{},setInterval:()=>0};
  new Function(...Object.keys(env),src)(...Object.values(env));dom.window.document.querySelector('button').click();await tick();
  assert.equal(audit.length,1);assert.equal(audit[0].p_source,'loads_houston');assert.deepEqual(audit[0].p_load_ids,[10]);assert.equal(opened.length,1);assert.equal(audit[0].p_message,opened[0][1]);
  dom.window.document.querySelector('button').click();await tick();assert.equal(audit.length,2);dom.window.close();
