@@ -128,22 +128,75 @@ try {
   const missing = used.filter((c) => !new RegExp(`\\.${c}[\\s,{:.]`).test(css));
   check('no invented class names', missing.length === 0, missing.join(', '));
 
-  // The dialog defaults to the last completed Monday-Sunday week.
-  const startValue = await page.locator('#inv-start').inputValue();
-  const endValue = await page.locator('#inv-end').inputValue();
-  const startDay = new Date(`${startValue}T00:00:00Z`).getUTCDay();
-  const endDay = new Date(`${endValue}T00:00:00Z`).getUTCDay();
-  check('it defaults to a Monday-Sunday week', startDay === 1 && endDay === 0, `${startValue} (${startDay}) .. ${endValue} (${endDay})`);
+  /*
+   * The calendar selects a WHOLE WEEK.
+   *
+   * Each Monday-Sunday run is one row, so there is no way to click a single
+   * day and no way to express a part-week. That is the point of the control,
+   * so it is what gets asserted: seven cells per row, the row highlights as a
+   * unit on hover, and a click takes all seven days.
+   */
+  const weekRows = page.locator('#inv-cal-weeks .inv-cal-week');
+  check('the calendar draws week rows', await weekRows.count() === 6, `${await weekRows.count()} rows`);
+  check('each row is a full seven days', await weekRows.first().locator('span').count() === 7);
+  check('no day inside a row is separately clickable',
+    await page.locator('#inv-cal-weeks button, #inv-cal-weeks [role="button"] [role="button"]').count() === 0);
 
-  // Ask for the week the fixture covers.
-  await page.locator('#inv-start').fill(WEEK.start);
-  await page.locator('#inv-start').dispatchEvent('change');
-  await page.waitForTimeout(1200);
-  check('picking a Monday fills the Sunday', await page.locator('#inv-end').inputValue() === WEEK.end,
-    await page.locator('#inv-end').inputValue());
+  // It opens on the last completed week, already selected.
+  const selectedStart = await page.locator('#inv-cal-weeks .inv-cal-week.is-selected').getAttribute('data-week-start');
+  const selDay = new Date(`${selectedStart}T00:00:00Z`).getUTCDay();
+  check('it opens on a Monday-started week', selDay === 1, `${selectedStart} (day ${selDay})`);
+  check('and says so in the invoice\'s own date format',
+    /^Week of \d{1,2}\/\d{1,2}\/\d{2} \u2013 \d{1,2}\/\d{1,2}\/\d{2}$/.test(((await page.locator('#inv-week-label').textContent()) || '').trim()),
+    (await page.locator('#inv-week-label').textContent() || '').trim());
 
-  const pro = await page.locator('#inv-pro').inputValue();
-  check('the PRO # is pulled from the Accounting Aljex #', pro === '1958081', pro);
+  // Hovering lights the whole week, not the day under the pointer. Measured
+  // as a computed background on the row, because that is the thing the
+  // dispatcher sees and a class name alone would not prove it is styled.
+  const hoverRow = weekRows.nth(2);
+  const before = await hoverRow.evaluate((el) => getComputedStyle(el).backgroundColor);
+  await hoverRow.hover();
+  await page.waitForTimeout(250);
+  const after = await hoverRow.evaluate((el) => getComputedStyle(el).backgroundColor);
+  check('hovering a week changes the whole row', before !== after, `${before} -> ${after}`);
+
+  // Walk back to the fixture's month and click its week.
+  for (let i = 0; i < 24; i += 1) {
+    if (await page.locator(`#inv-cal-weeks .inv-cal-week[data-week-start="${WEEK.start}"]`).count()) break;
+    await page.locator('#inv-cal-prev').click();
+    await page.waitForTimeout(120);
+  }
+  const target = page.locator(`#inv-cal-weeks .inv-cal-week[data-week-start="${WEEK.start}"]`);
+  check('the fixture week is reachable by paging months', await target.count() === 1);
+  await target.click();
+  await page.waitForTimeout(1500);
+  check('clicking a row selects that whole week',
+    ((await page.locator('#inv-week-label').textContent()) || '').trim() === 'Week of 8/17/26 \u2013 8/23/26',
+    (await page.locator('#inv-week-label').textContent() || '').trim());
+
+  // A week that has not started cannot be chosen -- it could only ever report
+  // "no billable loads", which reads as the feature being broken.
+  for (let i = 0; i < 24; i += 1) {
+    if (await page.locator('#inv-cal-weeks .inv-cal-week.is-disabled').count()) break;
+    await page.locator('#inv-cal-next').click();
+    await page.waitForTimeout(120);
+  }
+  check('future weeks are disabled', await page.locator('#inv-cal-weeks .inv-cal-week.is-disabled').count() > 0);
+  check('and carry no button role',
+    await page.locator('#inv-cal-weeks .inv-cal-week.is-disabled[role="button"]').count() === 0);
+  // Back to the chosen week.
+  for (let i = 0; i < 24; i += 1) {
+    if (await page.locator(`#inv-cal-weeks .inv-cal-week[data-week-start="${WEEK.start}"]`).count()) break;
+    await page.locator('#inv-cal-prev').click();
+    await page.waitForTimeout(120);
+  }
+
+  // The PRO is read, never typed.
+  const proEl = page.locator('#inv-pro');
+  check('the PRO # is read-only text, not an input',
+    await proEl.evaluate((el) => el.tagName.toLowerCase()) === 'div');
+  check('the PRO # is pulled from the Accounting Aljex #',
+    (await proEl.textContent() || '').trim() === '1958081', (await proEl.textContent() || '').trim());
 
   const note = (await page.locator('#inv-week-note').textContent()) || '';
   // 3 billable lines: the $0.00 row is not one of them, and $0.00 is not billed.
