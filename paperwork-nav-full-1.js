@@ -86,7 +86,7 @@ function renderFullNav() {
     { label: 'Driver Analytics', href: 'analytics-drivers.html' },
     { label: 'Volume', href: 'analytics-volume.html' },
   ];
-  if (navRole === 'admin') analytics.push({ label: 'Location Analytics', href: 'location-analytics.html' });
+  if (['admin','visitor'].includes(navRole)) analytics.push({ label: 'Location Analytics', href: 'location-analytics.html' });
 
   tabs.innerHTML = `
     <a class="tab-btn" href="index.html" data-pw-nav-menu="kroger">Kroger</a>
@@ -97,10 +97,10 @@ function renderFullNav() {
     <span class="pw-nav-disabled" title="Coming soon">LTL</span>
     <a class="tab-btn active" href="paperwork.html">Paperwork</a>
     <a class="tab-btn" href="driverlist.html">Driver List</a>
-    ${['accounting','admin','it'].includes(navRole) ? '<a class="tab-btn" href="accounting.html">Accounting</a>' : ''}
+    ${['accounting','admin','it','visitor'].includes(navRole) ? '<a class="tab-btn" href="accounting.html">Accounting</a>' : ''}
     <a class="tab-btn" href="analytics-drivers.html" data-pw-nav-menu="analytics">Analytics</a>
-    ${['admin','it'].includes(navRole) ? '<a class="tab-btn" href="archive.html" style="margin-left:auto;">Archive</a>' : ''}
-    <button type="button" class="tab-btn" id="paperwork-nav-logout" style="margin-left:${['admin','it'].includes(navRole) ? '0' : 'auto'};">Log Out</button>`;
+    ${['admin','it','visitor'].includes(navRole) ? '<a class="tab-btn" href="archive.html" style="margin-left:auto;">Archive</a>' : ''}
+    <button type="button" class="tab-btn" id="paperwork-nav-logout" style="margin-left:${['admin','it','visitor'].includes(navRole) ? '0' : 'auto'};">Log Out</button>`;
 
   const menus = { kroger, mondelez, analytics };
   tabs.querySelectorAll('[data-pw-nav-menu]').forEach((trigger) => {

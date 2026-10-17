@@ -1,7 +1,7 @@
 const SUPABASE_URL = "https://ygsapysqzwrpcimgvaqx.supabase.co";
 const SUPABASE_KEY = "sb_publishable_8b8bSIiYm5TzLTw0WG1pAw_5ZWW5ZPL";
 const PAPERWORK_BUCKET = "paperwork-submissions";
-const INTERNAL_ROLES = new Set(["dispatcher", "accounting", "admin", "it"]);
+const INTERNAL_ROLES = new Set(["dispatcher", "accounting", "admin", "it", "visitor"]);
 const SIGNED_URL_SECONDS = 3600;
 
 const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
@@ -66,7 +66,7 @@ function renderNav() {
     ["houston.html", "Houston"],
     ["mondelez.html", "Mondelez"],
   ];
-  if (["accounting", "admin", "it"].includes(currentRole)) items.push(["accounting.html", "Accounting"]);
+  if (["accounting", "admin", "it", "visitor"].includes(currentRole)) items.push(["accounting.html", "Accounting"]);
   items.push(["paperwork.html", "Paperwork"], ["driverlist.html", "Driver List"]);
   tabs.innerHTML = items.map(([href, label]) =>
     `<a class="tab-btn ${href === "paperwork.html" ? "active" : ""}" href="${href}">${esc(label)}</a>`
