@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Location Analytics</title>
-  <link rel="stylesheet" href="loadboard.css?v=20260927-weekly-recaps">
+  <link rel="stylesheet" href="loadboard.css?v=20261017-invoice-week-picker">
 </head>
 <body>
   <div class="topbar">
@@ -89,16 +89,26 @@
       </div>
       <div class="modal-body">
         <div class="subtext" style="margin-bottom:10px;">Kroger/BGDC weekly invoice for Atlanta (Forest Park, GA).</div>
-        <label for="inv-week" style="display:block;font-weight:600;margin-bottom:5px;">Week</label>
-        <div style="display:flex;gap:6px;align-items:center;">
-          <input type="date" class="cell-input" id="inv-start" style="width:auto;">
-          <span class="subtext">to</span>
-          <input type="date" class="cell-input" id="inv-end" style="width:auto;">
+        <!--
+          A WEEK picker, not two date fields. An invoice is always one
+          Monday-Sunday week, so the calendar highlights and selects a whole
+          row at a time: there is no way to express a part-week, which is the
+          mis-billing worth designing out rather than validating after.
+        -->
+        <div class="inv-cal">
+          <div class="inv-cal-head">
+            <button type="button" class="inv-cal-nav" id="inv-cal-prev" aria-label="Previous month">&lsaquo;</button>
+            <span id="inv-cal-month" aria-live="polite"></span>
+            <button type="button" class="inv-cal-nav" id="inv-cal-next" aria-label="Next month">&rsaquo;</button>
+          </div>
+          <div class="inv-cal-dow"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>
+          <div id="inv-cal-weeks"></div>
         </div>
+        <div class="inv-week-label" id="inv-week-label"></div>
         <div class="calc-note" id="inv-week-note" style="margin-top:8px;"></div>
-        <label for="inv-pro" style="display:block;font-weight:600;margin:12px 0 5px;">PRO #</label>
-        <input class="cell-input" id="inv-pro" style="width:100%;box-sizing:border-box;" placeholder="Loaded from Accounting">
-        <div class="calc-note" style="margin-top:4px;">Taken from the Aljex # of the first load on the invoice. Change it if Aljex billed this week under another number.</div>
+        <div style="font-weight:600;margin:12px 0 5px;">PRO #</div>
+        <div class="inv-pro" id="inv-pro"></div>
+        <div class="calc-note" style="margin-top:4px;">The load number of the first load on the first day of the week, read from Accounting.</div>
         <div role="alert" id="inv-error" style="color:#9f2720;margin-top:10px;min-height:1em;font-weight:600;font-size:13px;"></div>
       </div>
       <div class="modal-footer">

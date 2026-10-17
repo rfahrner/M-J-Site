@@ -2038,3 +2038,42 @@ td[data-driver-cell-selected]:focus {
 }
 
 .houston-sort-btn { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+
+/* ---------------- Invoice week picker ----------------
+   An invoice covers one Monday-Sunday week, so the calendar's unit of
+   selection is a WEEK ROW, never a day. Each row is its own element and the
+   highlight is :hover on that row -- pure CSS, so the whole week lights up on
+   the same frame the pointer enters it, with no mousemove handler to lag or
+   to leave a stale row highlighted when the pointer exits the grid quickly.
+   Days are spans inside the row, not buttons: nothing inside is separately
+   clickable, which is what makes a part-week impossible to express. */
+.inv-cal { border: 1px solid var(--line); border-radius: var(--radius-sm, 6px); overflow: hidden; }
+.inv-cal-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 8px; background: var(--slate-100, #f1f5f9);
+  border-bottom: 1px solid var(--line); font-weight: 700; font-size: 13px;
+}
+.inv-cal-nav {
+  border: 1px solid var(--line); background: #fff; border-radius: 4px;
+  width: 24px; height: 24px; line-height: 1; cursor: pointer; font-size: 15px;
+}
+.inv-cal-nav:hover { background: var(--slate-100, #f1f5f9); }
+.inv-cal-dow, .inv-cal-week { display: grid; grid-template-columns: repeat(7, 1fr); }
+.inv-cal-dow {
+  padding: 4px 0; background: var(--slate-100, #f1f5f9);
+  border-bottom: 1px solid var(--line);
+}
+.inv-cal-dow span { text-align: center; font-size: 10px; font-weight: 700; color: var(--slate-500, #64748b); }
+.inv-cal-week { cursor: pointer; border-bottom: 1px solid var(--line); }
+.inv-cal-week:last-child { border-bottom: none; }
+.inv-cal-week span { text-align: center; padding: 6px 0; font-size: 12px; }
+.inv-cal-week .inv-cal-other { color: var(--slate-400, #94a3b8); }
+.inv-cal-week:hover { background: var(--brand-50, #eff6ff); }
+.inv-cal-week.is-selected { background: var(--brand, #175cd3); }
+.inv-cal-week.is-selected span, .inv-cal-week.is-selected .inv-cal-other { color: #fff; font-weight: 700; }
+.inv-cal-week.is-disabled { cursor: not-allowed; }
+.inv-cal-week.is-disabled span { color: var(--slate-300, #cbd5e1); }
+.inv-cal-week.is-disabled:hover { background: transparent; }
+.inv-cal-week:focus-visible { outline: 2px solid var(--brand, #175cd3); outline-offset: -2px; }
+.inv-week-label { margin-top: 8px; font-weight: 700; font-size: 13px; }
+.inv-pro { font-size: 15px; font-weight: 700; letter-spacing: 0.3px; min-height: 20px; }

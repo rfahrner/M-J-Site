@@ -32,7 +32,7 @@ import {
   SHIFTS_TABLE, TRIPS_TABLE, ACCOUNTING_TABLE, setDriverSyncStatus, isAdminUser,
 } from './loadboard.js';
 import { buildInvoiceData, lastCompletedWeek, weekStart, invoiceFileName, INVOICE_LOCATIONS, addDays as addDaysIso } from './invoice-data.js';
-import { buildInvoicePdf } from './invoice-pdf.js';
+import { buildInvoicePdf, shortDate } from './invoice-pdf.js';
 
 const LA_LOCATIONS = [
   { key: 'atlanta', label: 'Atlanta' },
@@ -877,33 +877,106 @@ async function fetchInvoiceRows(table, columns, applyFilters) {
 }
 
 let invoicePreview = null;
+let invoiceWeek = null;      // { startDate, endDate } -- always a whole week
+let invoiceMonth = null;     // first of the month the calendar is showing
 
 function invoiceError(message) {
   const box = $('#inv-error');
   if (box) box.textContent = message || '';
 }
 
-// Reads the chosen week and reports what it would bill, so the PRO is filled
-// in from Accounting and nobody generates a week blind.
+/*
+ * The calendar selects a WEEK.
+ *
+ * Each Monday-Sunday run is one row element, so hovering it lights the whole
+ * week from CSS alone and clicking it takes all seven days. Days are spans,
+ * not buttons -- nothing inside a row is separately clickable, which is what
+ * makes a part-week impossible to express rather than something to validate
+ * after the fact.
+ *
+ * Weeks that have not started yet are disabled: they can only ever produce
+ * "no billable loads", and a row that looks selectable but always errors
+ * reads as the feature being broken.
+ */
+const MONTH_LABELS = ['January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'];
+
+function renderInvoiceCalendar() {
+  const host = $('#inv-cal-weeks');
+  const label = $('#inv-cal-month');
+  if (!host || !invoiceMonth) return;
+  const [year, month] = invoiceMonth.split('-').map(Number);
+  if (label) label.textContent = `${MONTH_LABELS[month - 1]} ${year}`;
+
+  const today = dateKey(todayDate());
+  const thisWeek = weekStart(today);
+  // Start on the Monday on or before the 1st, and draw six rows, so every
+  // week touching this month is reachable without changing month.
+  let cursor = weekStart(`${invoiceMonth}-01`);
+  const rows = [];
+  for (let w = 0; w < 6; w += 1) {
+    const start = cursor;
+    const days = Array.from({ length: 7 }, (_, i) => addDaysIso(start, i));
+    const future = start > thisWeek;
+    const selected = invoiceWeek && invoiceWeek.startDate === start;
+    rows.push(
+      `<div class="inv-cal-week${selected ? ' is-selected' : ''}${future ? ' is-disabled' : ''}"`
+      + ` data-week-start="${start}"${future ? '' : ' role="button" tabindex="0"'}`
+      + ` aria-label="Week of ${start}"${selected ? ' aria-current="true"' : ''}>`
+      + days.map((d) => {
+        const inMonth = d.slice(0, 7) === invoiceMonth;
+        return `<span class="${inMonth ? '' : 'inv-cal-other'}">${Number(d.slice(8))}</span>`;
+      }).join('')
+      + '</div>',
+    );
+    cursor = addDaysIso(start, 7);
+  }
+  host.innerHTML = rows.join('');
+
+  const weekLabel = $('#inv-week-label');
+  if (weekLabel) {
+    // Shown the way the invoice shows it, so the dialog and the document
+    // cannot read as two different weeks.
+    weekLabel.textContent = invoiceWeek
+      ? `Week of ${shortDate(invoiceWeek.startDate)} \u2013 ${shortDate(invoiceWeek.endDate)}`
+      : 'Pick a week.';
+  }
+}
+
+function selectInvoiceWeek(startDate) {
+  invoiceWeek = { startDate, endDate: addDaysIso(startDate, 6) };
+  renderInvoiceCalendar();
+  void refreshInvoicePreview();
+}
+
+function shiftInvoiceMonth(months) {
+  const [year, month] = invoiceMonth.split('-').map(Number);
+  const at = new Date(Date.UTC(year, month - 1 + months, 1));
+  invoiceMonth = at.toISOString().slice(0, 7);
+  renderInvoiceCalendar();
+}
+
+// Reads the chosen week and reports what it would bill, so the PRO is shown
+// from Accounting and nobody generates a week blind.
 async function refreshInvoicePreview() {
   const note = $('#inv-week-note');
-  const start = $('#inv-start')?.value || '';
-  const end = $('#inv-end')?.value || '';
+  const pro = $('#inv-pro');
   invoicePreview = null;
   invoiceError('');
-  if (!start || !end) { if (note) note.textContent = ''; return; }
+  if (pro) pro.textContent = '';
+  if (!invoiceWeek) { if (note) note.textContent = ''; return; }
   if (note) note.textContent = 'Reading that week…';
   try {
     const data = await buildInvoiceData(fetchInvoiceRows, {
-      location: 'atlanta', startDate: start, endDate: end, invoiceDate: dateKey(todayDate()),
+      location: 'atlanta', startDate: invoiceWeek.startDate, endDate: invoiceWeek.endDate,
+      invoiceDate: dateKey(todayDate()),
     });
     invoicePreview = data;
     const drivers = data.days.reduce((n, d) => n + d.lines.length, 0);
     if (note) note.textContent = `${data.days.length} operating day${data.days.length === 1 ? '' : 's'}, ${drivers} driver line${drivers === 1 ? '' : 's'}, $${data.total.toFixed(2)}.`;
-    const pro = $('#inv-pro');
-    // Only fill what the dispatcher has not typed over.
-    if (pro && !pro.dataset.touched) pro.value = data.proNumber;
-    if (!data.proNumber) invoiceError('No Aljex # on the first load of that week — enter the PRO # by hand.');
+    // Read-only: the PRO is the first load number of the first day, never typed.
+    if (pro) pro.textContent = data.proNumber || '—';
+    if (!data.proNumber) invoiceError('The first load of that week has no load number in Accounting, so the invoice has no PRO #.');
   } catch (err) {
     if (note) note.textContent = '';
     invoiceError(err.message || String(err));
@@ -912,13 +985,10 @@ async function refreshInvoicePreview() {
 
 function openInvoiceModal() {
   const week = lastCompletedWeek(dateKey(todayDate()));
-  const startEl = $('#inv-start');
-  const endEl = $('#inv-end');
-  if (startEl) startEl.value = week.startDate;
-  if (endEl) endEl.value = week.endDate;
-  const pro = $('#inv-pro');
-  if (pro) { pro.value = ''; delete pro.dataset.touched; }
+  invoiceWeek = { startDate: week.startDate, endDate: week.endDate };
+  invoiceMonth = week.startDate.slice(0, 7);
   invoiceError('');
+  renderInvoiceCalendar();
   $('#modal-invoice')?.classList.remove('hidden');
   void refreshInvoicePreview();
 }
@@ -931,9 +1001,11 @@ async function downloadInvoice() {
   try {
     if (!invoicePreview) await refreshInvoicePreview();
     if (!invoicePreview) return;
-    const pro = ($('#inv-pro')?.value || '').trim();
-    if (!pro) { invoiceError('Enter the PRO # before generating.'); return; }
-    const bytes = buildInvoicePdf({ ...invoicePreview, proNumber: pro });
+    if (!invoicePreview.proNumber) {
+      invoiceError('The first load of that week has no load number in Accounting, so the invoice has no PRO #.');
+      return;
+    }
+    const bytes = buildInvoicePdf(invoicePreview);
     const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
     const a = document.createElement('a');
     a.href = url;
@@ -1035,19 +1107,24 @@ export async function initLocationAnalyticsPage() {
   on('inv-close', 'click', closeInvoiceModal);
   on('inv-cancel', 'click', closeInvoiceModal);
   on('inv-build', 'click', () => { void downloadInvoice(); });
-  on('inv-start', 'change', () => {
-    // Picking any day snaps to that day's Monday-Sunday week: an invoice is
-    // never a partial week, and a half-week would bill the rest to nobody.
-    const startEl = $('#inv-start');
-    const endEl = $('#inv-end');
-    if (startEl?.value) {
-      startEl.value = weekStart(startEl.value);
-      if (endEl) endEl.value = addDaysIso(startEl.value, 6);
-    }
-    void refreshInvoicePreview();
-  });
-  on('inv-end', 'change', () => { void refreshInvoicePreview(); });
-  on('inv-pro', 'input', (e) => { e.target.dataset.touched = '1'; });
+  on('inv-cal-prev', 'click', () => shiftInvoiceMonth(-1));
+  on('inv-cal-next', 'click', () => shiftInvoiceMonth(1));
+  // Delegated, because the rows are redrawn on every month change and on
+  // every selection -- a listener bound to a row would go with the old node.
+  const weeksHost = $('#inv-cal-weeks');
+  if (weeksHost) {
+    const pick = (e) => {
+      const row = e.target.closest('.inv-cal-week');
+      if (!row || row.classList.contains('is-disabled')) return;
+      selectInvoiceWeek(row.dataset.weekStart);
+    };
+    weeksHost.addEventListener('click', pick);
+    weeksHost.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      pick(e);
+    });
+  }
 
   on('btn-send-recap', 'click', async () => {
     laState.reportRange = previousReportWeek();
