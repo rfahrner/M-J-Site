@@ -35,6 +35,7 @@ function harness() {
   let renders = 0;
   // document/MutationObserver/setTimeout are already the window's own.
   Object.assign(w, {
+    setAlertWidgetSource: () => {},
     currentLocation: () => 'atlanta',
     houstonPreShiftAlerts: async () => [],
     carrierDocsAlerts: async () => [],
@@ -42,7 +43,7 @@ function harness() {
     dispatchedRouteAlerts: async () => { renders += 1; return [{html:'<div class="dispatch-extra-alert alert-chat-item">Call driver</div>'}]; },
   });
   w.eval(`
-    let alertObserver = null, observedAlertBody = null, refreshTimer = null, lastExtrasHtml = [];
+    let alertObserver = null, observedAlertBody = null, refreshTimer = null, lastExtrasHtml = [], extraRefreshVersion = 0;
     ${lift('paintExtras')}
     ${lift('restoreExtrasNow')}
     ${lift('refreshExtraAlerts')}

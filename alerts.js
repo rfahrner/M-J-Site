@@ -1,3 +1,4 @@
+import { setAlertWidgetSource, setAlertWidgetView } from './alert-widget-state.js';
 import { boardAlertTextDetails } from './alert-text-history.js';
 import { boardDateKey, offsetDate, shiftRelativeNow, tripTimeline, OPERATING_WINDOW_MIN } from './overnight-times.js';
 /* ---------------- board alerts: bottom-right notification panel ---------------- */
@@ -23,7 +24,7 @@ import './paperwork-load-integration.js';
   let alertScanTimer = null;
   let alertUpdateListenerInstalled = false;
   let alertPanelExpanded = false;
-  let alertPanelHasUnread = false;
+  let alertRefreshVersion = 0;
   // Alerts are derived from board state, not stored, so "I've handled this"
   // has to be remembered separately or the next 60-second scan brings the same
   // alert straight back. Keys are scoped to today: every key is built from a
@@ -120,9 +121,11 @@ import './paperwork-load-integration.js';
     const scanDates = [offsetDate(todayKey, -1), todayKey, offsetDate(todayKey, 1)];
     const { data: shifts, error: shiftErr } = await supabaseClient
       .from(SHIFTS_TABLE).select("*").in("location", thisLocation).in("shift_date", scanDates);
-    if (shiftErr || !shifts || !shifts.length) return [];
+    if (shiftErr) throw shiftErr;
+    if (!shifts || !shifts.length) return [];
     const shiftIds = shifts.map((s) => s.id);
-    const { data: trips } = await supabaseClient.from(TRIPS_TABLE).select("*").in("shift_id", shiftIds);
+    const { data: trips, error: tripErr } = await supabaseClient.from(TRIPS_TABLE).select("*").in("shift_id", shiftIds);
+    if (tripErr) throw tripErr;
     const tripsByShift = {};
     (trips || []).forEach((t) => { (tripsByShift[t.shift_id] = tripsByShift[t.shift_id] || []).push(t); });
     // trip_stops -- used by the missing-paperwork rule below to tell
@@ -133,7 +136,8 @@ import './paperwork-load-integration.js';
     const allTripIds = (trips || []).map((t) => t.id);
     let stopsByTrip = {};
     if (allTripIds.length) {
-      const { data: stopRows } = await supabaseClient.from("trip_stops").select("trip_id, time_in, time_out").in("trip_id", allTripIds);
+      const { data: stopRows, error: stopErr } = await supabaseClient.from("trip_stops").select("trip_id, time_in, time_out").in("trip_id", allTripIds);
+      if (stopErr) throw stopErr;
       (stopRows || []).forEach((s) => { if (s.time_in || s.time_out) stopsByTrip[s.trip_id] = (stopsByTrip[s.trip_id] || 0) + 1; });
     }
 
@@ -411,12 +415,11 @@ import './paperwork-load-integration.js';
   export function renderAlertPanel() {
     const widget = $("#alert-widget");
     if (!widget) return;
-    const headerCount = $("#alert-widget-count");
     const body = $("#alert-widget-body");
     const count = boardAlerts.length;
-    headerCount.textContent = count ? `(${count})` : "";
+    setAlertWidgetView({expanded:alertPanelExpanded});
+    setAlertWidgetSource("board", boardAlerts.map(a => a.key));
     widget.classList.toggle("expanded", alertPanelExpanded);
-    widget.classList.toggle("blinking", alertPanelHasUnread && !alertPanelExpanded);
     if (!count) {
       body.innerHTML = `<div class="alert-empty">Nothing needs attention right now.</div>`;
       return;
@@ -442,44 +445,46 @@ import './paperwork-load-integration.js';
     }).join("");
   }
   export async function refreshBoardAlerts() {
+    const version = ++alertRefreshVersion;
+    const location = state.activeLocation;
     let fresh = [];
     try {
       fresh = await scanForBoardAlerts();
     } catch (e) {
       console.error("scanForBoardAlerts failed:", e);
+      return; // A failed scan is not an empty board; keep the last confirmed alerts.
     }
+    if (version !== alertRefreshVersion || location !== state.activeLocation) return;
     const dismissed = getDismissedAlertKeys();
     if (dismissed.size) fresh = fresh.filter((a) => !dismissed.has(a.key));
     const now = new Date();
-    let sawNew = false;
     const nextFirstSeen = {};
     fresh.forEach((a) => {
       if (alertFirstSeenAt[a.key]) {
         nextFirstSeen[a.key] = alertFirstSeenAt[a.key]; // keep original timestamp
       } else {
         nextFirstSeen[a.key] = now; // genuinely new — timestamp it now, trigger the blink
-        sawNew = true;
       }
     });
     alertFirstSeenAt = nextFirstSeen;
     boardAlerts = fresh;
-    if (sawNew && !alertPanelExpanded) alertPanelHasUnread = true;
     renderAlertPanel();
   }
   export function toggleAlertPanel() {
     alertPanelExpanded = !alertPanelExpanded;
-    if (alertPanelExpanded) alertPanelHasUnread = false;
     saveAlertWidgetPrefs({ expanded: alertPanelExpanded });
     renderAlertPanel();
   }
   export function closeAlertWidget() {
     $("#alert-widget").classList.add("hidden");
     $("#alert-widget-reopen").classList.remove("hidden");
+    setAlertWidgetView({closed:true});
     saveAlertWidgetPrefs({ closed: true });
   }
   export function reopenAlertWidget() {
     $("#alert-widget").classList.remove("hidden");
     $("#alert-widget-reopen").classList.add("hidden");
+    setAlertWidgetView({closed:false});
     saveAlertWidgetPrefs({ closed: false });
   }
   export function applyAlertWidgetPosition(widget, pos) {
@@ -538,12 +543,13 @@ import './paperwork-load-integration.js';
   export function injectAlertWidget() {
     const prefs = loadAlertWidgetPrefs();
     alertPanelExpanded = !!prefs.expanded;
+    setAlertWidgetView({expanded:alertPanelExpanded,closed:!!prefs.closed});
     const el = document.createElement("div");
     el.id = "alert-widget";
     if (prefs.closed) el.classList.add("hidden");
     el.innerHTML = `
       <div class="alert-widget-header" id="alert-widget-header">
-        <span>🔔 Alerts <span id="alert-widget-count"></span></span>
+        <span>🔔 Alerts <span id="alert-widget-count" aria-live="polite"></span> <span id="alert-widget-new" class="alert-widget-new" aria-live="polite"></span></span>
         <span class="alert-widget-controls">
           <button type="button" class="alert-widget-btn" id="alert-widget-minimize" title="Minimize">&minus;</button>
           <button type="button" class="alert-widget-btn" id="alert-widget-close" title="Close">&times;</button>
@@ -558,13 +564,14 @@ import './paperwork-load-integration.js';
     reopenBtn.className = "hidden";
     reopenBtn.type = "button";
     reopenBtn.title = "Show alerts";
-    reopenBtn.textContent = "🔔";
+    reopenBtn.innerHTML = '🔔<span id="alert-widget-reopen-count" aria-live="polite"></span>';
     document.body.appendChild(reopenBtn);
     if (prefs.closed) reopenBtn.classList.remove("hidden");
     $("#alert-widget-minimize").addEventListener("click", (e) => { e.stopPropagation(); toggleAlertPanel(); });
     $("#alert-widget-close").addEventListener("click", (e) => { e.stopPropagation(); closeAlertWidget(); });
     reopenBtn.addEventListener("click", reopenAlertWidget);
     wireAlertWidgetDrag(el, $("#alert-widget-header"));
+    renderAlertPanel();
     // Delegated -- alert items are re-rendered wholesale on every scan, so
     // listeners attached directly to them would be lost each time.
     el.addEventListener("click", async (e) => {

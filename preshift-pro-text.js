@@ -1,3 +1,4 @@
+import { setAlertWidgetSource } from './alert-widget-state.js';
 import { supabaseClient, openSendTextModal, setDriverSyncStatus, logAlertTextClick, formatTextAddresses } from './loadboard.js';
 import { DISPATCH_ROUTE_MESSAGE, dispatchRoutePrompt, acknowledgeDispatchRouteText, isCallRequiredRoute } from './dispatch-route-text.js';
 import { boardDateKey, offsetDate, shiftRelativeNow, clockMinutes, OPERATING_WINDOW_MIN } from './overnight-times.js';
@@ -32,6 +33,7 @@ const BOARD_FILE_TO_LOCATION = {
 
 let pendingTrackedMarker = null;
 let refreshTimer = null;
+let extraRefreshVersion = 0;
 // The observer is DISCONNECTED while we write, never time-gated. See
 // installAlertObserver().
 let alertObserver = null;
@@ -554,9 +556,9 @@ function paintExtras(body, htmlList) {
   } finally {
     if (alertObserver && observedAlertBody === body) alertObserver.observe(body, { childList: true });
   }
-  const count = body.querySelectorAll('.alert-chat-item').length;
-  const countEl = document.getElementById('alert-widget-count');
-  if (countEl) countEl.textContent = count ? `(${count})` : '';
+  // Count source identities, never visible rows: the body may be collapsed
+  // or briefly redrawn by the main scanner while these reminders persist.
+  setAlertWidgetSource('extras', htmlList);
 }
 
 // Synchronous, inside the observer callback: no await, no debounce, so the
@@ -569,6 +571,8 @@ function restoreExtrasNow() {
 }
 
 async function refreshExtraAlerts() {
+  const version = ++extraRefreshVersion;
+  const location = currentLocation();
   clearTimeout(refreshTimer);
   const body = document.getElementById('alert-widget-body');
   const widget = document.getElementById('alert-widget');
@@ -583,9 +587,9 @@ async function refreshExtraAlerts() {
   let extras;
   try { extras = [...await houstonPreShiftAlerts(), ...await carrierDocsAlerts(), ...await delawareBolAlerts(), ...await dispatchedRouteAlerts()]; }
   catch(error) { console.error('Could not refresh dispatch reminders',error);return; }
+  if (version !== extraRefreshVersion || location !== currentLocation() || body !== document.getElementById('alert-widget-body')) return;
   lastExtrasHtml = extras.map((extra) => extra.html);
   paintExtras(body, lastExtrasHtml);
-  if (extras.length && !widget.classList.contains('expanded')) widget.classList.add('blinking');
 }
 
 function scheduleRefresh(delay = 250) {
