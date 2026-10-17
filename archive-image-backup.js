@@ -354,6 +354,13 @@ async function runBackupUntilDone() {
 }
 
 async function loadStatus() {
+  if (window.DLVisitorAccess && await window.DLVisitorAccess.getRole() === 'visitor') {
+    renderStatus({});
+    setState('Visitor preview', 'wait');
+    setError('');
+    setProgress('Backup records and actions are unavailable in visitor access.');
+    return;
+  }
   if (!client) throw new Error('Supabase client is unavailable.');
   const { data } = await client.auth.getSession();
   const token = data?.session?.access_token;

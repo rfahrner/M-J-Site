@@ -219,6 +219,9 @@ async function getEligibleRecords(cutoff) {
 // The full records are still needed to write the files, but they are fetched
 // only once Export is actually pressed.
 async function countEligible(cutoff) {
+  if (window.DLVisitorAccess && await window.DLVisitorAccess.getRole() === 'visitor') {
+    return {cutoff,loads:0,kroger:0,mondelez:0,routes:0,attachments:0,accounting:0};
+  }
   const { data, error } = await client.rpc("archive_eligible_counts", { p_cutoff: cutoff });
   if (error) throw new Error(`Archive counts: ${error.message}`);
   const row = Array.isArray(data) ? data[0] : data;
@@ -817,7 +820,7 @@ async function runExport() {
 
 async function init() {
   const role = await getCurrentRole();
-  if (role !== "admin" && role !== "it") {
+  if (role !== "admin" && role !== "it" && role !== "visitor") {
     window.location.href = role ? "index.html" : "login.html";
     return;
   }

@@ -1240,3 +1240,38 @@ checks against the migration and inspected production trigger definitions;
 For a UI rollback, revert this frontend change and keep the additive database
 support. Do not drop cancellation flags/backups while cancelled records exist;
 use the cancellation undo action to restore their Accounting amounts first.
+
+## Blank visitor access (2026-10-16)
+
+`visitor` is an existing application role in `public.user_roles`. The visitor
+login has no business-data access. `visitor-access.js` installs synchronously
+immediately after the SDK on every internal HTML page. It resolves the trusted
+role once via `current_app_role`, returns empty query results for visitors, and
+blocks mutations, RPCs, Storage, Edge Function calls, outbound messages, and
+Realtime subscriptions. Navigation includes Accounting, Analytics and Archive;
+`isAdminUser()`/`isAccountingUser()` are UI visibility helpers, NOT authorization.
+The role remains `visitor` in the database. Never grant this account a staff role
+or add it to business-table policies. No fake records are added.
+
+Server boundaries: `check_visitor_request` is the PostgREST pre-request hook;
+visitors may call only `current_app_role`. Anonymous requests pass through to
+existing grants/RLS. Existing RLS denies visitor reads/writes and Storage access.
+The two owner-backed analytics views explicitly require a staff role (or a
+server role), and three legacy privileged RPCs deny visitors and revoke anonymous
+execution. `image-archive-onedrive` checks trusted staff roles before status or
+signed-document access, as well as its existing admin-only run check. Keep these
+checks: frontend hiding alone is not authorization. Any future pre-request hook
+must compose this hook rather than overwrite it.
+
+Migrations: `20261016210034_visitor_access_boundary.sql` and
+`20261016211001_visitor_guard_anonymous_passthrough.sql`. Both are applied, along
+with the archive Edge Function update. Login `visitor@dltransport.local` was
+created through the Auth Admin API, assigned only `visitor`, and tested. No
+password or token belongs in source control. The one-time provisioning function
+was replaced immediately with a 410 response and has no administrative logic.
+
+Tests: `scripts/visitor-access.test.mjs` (SDK guards, staff behavior, failed role
+lookup, database boundary, archive role checks) and
+`sandbox/visitor-access.spec.mjs` (all 14 internal pages with sentinel live data
+that must never be fetched). Retain server restrictions even if reverting the
+visitor UI; disable the visitor account before removing its server boundary.
